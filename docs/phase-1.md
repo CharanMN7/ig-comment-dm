@@ -76,10 +76,7 @@ name = "ig-comment-dm"
 main = "src/index.ts"
 compatibility_date = "2026-08-14"
 # Do not enable nodejs_compat. Web Crypto (crypto.subtle) only.
-
-[limits]
-# PBKDF2-HMAC-SHA256 at 600,000 iterations on admin login needs headroom.
-cpu_ms = 30000
+# Do not set [limits] cpu_ms — that is paid Workers only and deploy fails on Free.
 
 [[d1_databases]]
 binding = "DB"

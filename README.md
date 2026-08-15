@@ -112,6 +112,8 @@ npx wrangler deploy
 
 Wrangler prints a URL like `https://ig-comment-dm.YOURNAME.workers.dev`. That is the program.
 
+Do not add a `[limits]` / `cpu_ms` block to `wrangler.toml`. That setting is only for paid Workers; on the Free plan deploy fails with an error that CPU limits are not supported.
+
 Set the real public URL and deploy once more:
 
 ```bash
