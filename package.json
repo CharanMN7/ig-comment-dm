@@ -1,0 +1,22 @@
+{
+  "name": "ig-comment-dm",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8787",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 execute ig-comment-dm --local --file=migrations/001_init.sql",
+    "db:migrate": "wrangler d1 execute ig-comment-dm --remote --file=migrations/001_init.sql",
+    "test": "node --experimental-strip-types --test scripts/test-unit.ts",
+    "selftest": "node --experimental-strip-types scripts/selftest.ts"
+  },
+  "dependencies": {
+    "hono": "^4.9.2"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260811.1",
+    "typescript": "^5.9.2",
+    "wrangler": "^4.28.0"
+  }
+}
