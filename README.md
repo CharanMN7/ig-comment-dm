@@ -230,3 +230,9 @@ ADMIN_URL_SECRET=... WEBHOOK_VERIFY_TOKEN=... META_APP_SECRET=... ADMIN_PASSWORD
 ## Schema note
 
 `accounts.needs_reconnect` is in `migrations/001_init.sql` even though it was not in the original column list. The nightly job sets it when a refresh fails and fewer than 14 days remain, and the home page uses it for the red banner.
+
+---
+
+## Changing the Worker
+
+Operator setup is this file. Bindings, schema dump, CLI contract, pipeline, and crypto notes are in [docs/](docs/).
