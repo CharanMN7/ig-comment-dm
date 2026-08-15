@@ -38,9 +38,22 @@ Still under **Instagram → API setup with Instagram login → Business login se
 
 These are not your Instagram password. They identify this app to Instagram.
 
-### Add yourself as a tester if needed
+### Add every Instagram account as a tester (required in Development mode)
 
-**App roles → Roles**: your Facebook user should be Admin. Under Instagram testers, add the Instagram username you will connect, if the screen asks for it.
+A Facebook **Admin** role on the app is not enough. Each Instagram username you will Connect must be an **Instagram Tester**, even if that IG account is yours and even if you already connected a different one.
+
+For **each** creator account:
+
+1. In the Meta app: **App roles → Roles → Add people**.
+2. Choose **Instagram Tester** (not Developer, not Tester).
+3. Type that account’s Instagram **username**, select it, Add.
+4. On a phone or browser **logged into that same Instagram account**, open [instagram.com/accounts/manage_access](https://www.instagram.com/accounts/manage_access/) → **Tester invites** → **Accept**.
+
+If you skip step 4, Connect fails with **Insufficient developer role**. Repeat for every extra creator account.
+
+When you click Connect, Instagram must be logged in as the account you just invited. A different account in that browser is the usual reason one profile works and another does not — use a private window if needed.
+
+If Meta refuses to add the username because it already has a role on the business that owns the app, that is a different block. Say so and we can walk through it.
 
 ---
 
