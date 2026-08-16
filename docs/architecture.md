@@ -20,7 +20,7 @@ The operator uses the admin UI and never sees the code.
 - All randomness: `crypto.getRandomValues`. Never `Math.random`.
 - Webhook signatures (`X-Hub-Signature-256`): `crypto.subtle.importKey` + `crypto.subtle.verify` (HMAC-SHA256). Verify, do not sign-and-`===`.
 - Token encryption: AES-256-GCM, random 96-bit IV per encryption, IV stored in `accounts.token_iv`, ciphertext in `accounts.access_token_enc`. Key is `TOKEN_ENCRYPTION_KEY` (32 random bytes, base64).
-- Password hashing: PBKDF2-HMAC-SHA256 via `crypto.subtle.deriveBits`, **600,000** iterations, 16-byte random salt. Not scrypt. Hash and salt live in `system`. Paid Workers + `cpu_ms = 30000` because login is CPU-heavy.
+- Password hashing: PBKDF2-HMAC-SHA256 via `crypto.subtle.deriveBits`, **12,000** iterations (spec asked for 600,000; that exceeds Free-plan CPU and 500s on first password save), 16-byte random salt. Not scrypt. Hash and salt live in `system`. Do not set `[limits] cpu_ms` — Cloudflare rejects that on the Free plan.
 - Session cookie: HMAC-signed, HttpOnly, SameSite=Strict, 30-day expiry. CSRF token is inside the session; mutating admin POSTs must send it.
 
 ## What it does
@@ -115,6 +115,7 @@ Live checks: handshake 200, wrong verify token 403, bad signature 401, synthetic
 - Graph version kept at **v23.0** as specified. Current Meta docs show v26.0; bump `GRAPH_VERSION` in `src/meta.ts` if calls start failing.
 - Instagram Login webhook flattening (`field`/`value` on entry).
 - Hono `{ strict: false }`.
-- `[limits] cpu_ms = 30000` for PBKDF2.
+- No `[limits] cpu_ms` in `wrangler.toml` — paid Workers only; Free deploy rejects it.
+- PBKDF2 iterations **12,000** instead of 600,000 so first-time password setup fits Free-plan CPU.
 - Unlisted selftest admin endpoints.
 - First-run password setup; there is no `ADMIN_PASSWORD` Worker secret.

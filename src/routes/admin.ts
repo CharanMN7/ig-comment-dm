@@ -26,7 +26,7 @@ import {
   updateRule,
   upsertAccount,
 } from '../db.ts';
-import { csrfField, daysUntil, fmtWhen, layout, statusWords } from '../html.ts';
+import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
 import { KEYWORD_TOO_SHORT_MESSAGE, findMatchingRule, parseKeywords } from '../match.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
 import type { Env, SessionData } from '../types.ts';
@@ -38,6 +38,19 @@ type Vars = {
 };
 
 export const adminRoutes = new Hono<{ Bindings: Env; Variables: Vars }>({ strict: false });
+
+adminRoutes.onError((err, c) => {
+  console.error(err);
+  const detail = err instanceof Error ? err.message : String(err);
+  const d1 = /no such table|D1/i.test(detail);
+  const key = /SESSION_SIGNING_KEY|TOKEN_ENCRYPTION_KEY|32 random bytes/i.test(detail);
+  const plain = d1
+    ? 'The database tables are missing. Run the D1 migration, then try again.'
+    : key
+      ? 'A Worker secret is the wrong size. TOKEN_ENCRYPTION_KEY and SESSION_SIGNING_KEY must each be 32 random bytes, base64 — openssl rand -base64 32.'
+      : 'That failed. Try once more. If it keeps happening, tell whoever set this up to check the Worker logs.';
+  return c.html(layout({ title: 'Something went wrong', body: pageError(plain, detail) }), 500);
+});
 
 function secretFromPath(pathname: string): string | null {
   const parts = pathname.split('/');
@@ -156,13 +169,28 @@ adminRoutes.post('/setup', async (c) => {
       400,
     );
   }
-  const { hash, salt } = await hashPassword(password);
-  await systemSet(c.env.DB, 'admin_password_hash', hash);
-  await systemSet(c.env.DB, 'admin_password_salt', salt);
+  try {
+    const { hash, salt } = await hashPassword(password);
+    await systemSet(c.env.DB, 'admin_password_hash', hash);
+    await systemSet(c.env.DB, 'admin_password_salt', salt);
 
-  const made = await makeSession(c.env.SESSION_SIGNING_KEY, true);
-  c.header('Set-Cookie', serializeSessionCookie(made.token, c.env.PUBLIC_BASE_URL, 30 * 24 * 60 * 60));
-  return c.redirect(`${base}/`, 302);
+    const made = await makeSession(c.env.SESSION_SIGNING_KEY, true);
+    c.header('Set-Cookie', serializeSessionCookie(made.token, c.env.PUBLIC_BASE_URL, 30 * 24 * 60 * 60));
+    return c.redirect(`${base}/`, 302);
+  } catch (err) {
+    console.error(err);
+    const detail = err instanceof Error ? err.message : String(err);
+    return c.html(
+      layout({
+        title: 'Could not save password',
+        body: pageError(
+          'Could not save the password. If this keeps happening, a Worker secret may be wrong, or the database migration was skipped.',
+          detail,
+        ),
+      }),
+      500,
+    );
+  }
 });
 
 adminRoutes.get('/login', async (c) => {
