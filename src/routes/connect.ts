@@ -32,10 +32,10 @@ connectRoutes.get('/', (c) => {
         <h1>Before you continue</h1>
         <p>
           Instagram will only return here if this address is saved in your Meta app.
-          Open
-          <b>Instagram → API setup with Instagram login → 3. Set up Instagram business login →
-          Business login settings → OAuth redirect URIs</b>
-          and paste both lines, then Save.
+          Open <b>Instagram → API setup with Instagram login</b>. Click <b>Set up</b> under
+          <b>3. Set up Instagram business login</b> (not Facebook Login). Paste the first line into
+          <b>Redirect URL</b>, Save, then open <b>Business login settings</b> and add both lines under
+          <b>OAuth redirect URIs</b> if they are not already there.
         </p>
         <pre class="raw">${redir}
 ${withSlash}</pre>

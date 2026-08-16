@@ -3,6 +3,7 @@ import { html } from 'hono/html';
 import {
   CRON_STALE_SECONDS,
   DM_TEXT_MAX,
+  decryptAesGcm,
   encryptAesGcm,
   hashPassword,
   nowSeconds,
@@ -28,7 +29,7 @@ import {
 } from '../db.ts';
 import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
 import { KEYWORD_TOO_SHORT_MESSAGE, findMatchingRule, parseKeywords } from '../match.ts';
-import { oauthRedirectUri } from '../meta.ts';
+import { listRecentMedia, oauthRedirectUri } from '../meta.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
 import type { Env, SessionData } from '../types.ts';
 
@@ -327,7 +328,12 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
 
         <h2>Last 20 sends</h2>
         ${sends.length === 0
-          ? html`<p class="muted">Nothing sent yet.</p>`
+          ? html`<p class="muted">
+              Nothing sent yet. If a friend already commented: leave the rule on
+              <b>All posts and reels</b> (do not paste a reel link), open this page once, then comment again
+              from their phone. Their comment does not need to be a tester. The private message may sit in
+              <b>Message requests</b> on their Instagram.
+            </p>`
           : html`
               <table>
                 <thead>
@@ -375,6 +381,32 @@ adminRoutes.post('/run-cron', async (c) => {
   return c.redirect(`${c.get('adminBase')}/`, 302);
 });
 
+function looksLikePostUrl(s: string): boolean {
+  return /^https?:\/\//i.test(s) || /instagram\.com|\/reel\/|\/p\/|\/tv\//i.test(s);
+}
+
+async function recentMediaOptions(
+  env: Env,
+): Promise<Array<{ id: string; label: string }>> {
+  const accounts = await listAccounts(env.DB);
+  const out: Array<{ id: string; label: string }> = [];
+  for (const a of accounts) {
+    try {
+      const token = await decryptAesGcm(env.TOKEN_ENCRYPTION_KEY, a.token_iv, a.access_token_enc);
+      const items = await listRecentMedia(token);
+      for (const m of items) {
+        out.push({
+          id: m.id,
+          label: `@${a.username} · ${m.kind === 'reel' ? 'Reel' : 'Post'} · ${m.caption}`,
+        });
+      }
+    } catch {
+      // Token or Graph failure — operator can still leave the field blank.
+    }
+  }
+  return out;
+}
+
 function parseKeywordLines(raw: string): { ok: true; keywords: string[] } | { ok: false; error: string } {
   const keywords = raw
     .split(/\r?\n/)
@@ -398,10 +430,12 @@ function ruleForm(opts: {
     dm_text: string;
     public_reply_text: string;
   };
+  posts: Array<{ id: string; label: string }>;
   error?: string;
 }) {
   const v = opts.values;
   const dmLen = v.dm_text.length;
+  const known = new Set(opts.posts.map((p) => p.id));
   return html`
     ${opts.error ? html`<p class="err">${opts.error}</p>` : html``}
     <form method="post" action="${opts.action}">
@@ -420,11 +454,21 @@ function ruleForm(opts: {
       <label for="keywords">Keywords (one per line)</label>
       <textarea id="keywords" name="keywords" required placeholder="guide&#10;freebie">${v.keywords}</textarea>
       <p class="muted">A comment matches if it contains any of these as whole words.</p>
-      <label for="media_id">Only this post (optional)</label>
-      <input id="media_id" name="media_id" type="text" value="${v.media_id}" />
+      <label for="media_id">Which posts</label>
+      <select id="media_id" name="media_id">
+        <option value="" ${!v.media_id ? 'selected' : ''}>All posts and reels (recommended)</option>
+        ${opts.posts.map(
+          (p) =>
+            html`<option value="${p.id}" ${p.id === v.media_id ? 'selected' : ''}>${p.label}</option>`,
+        )}
+        ${v.media_id && !known.has(v.media_id)
+          ? html`<option value="${v.media_id}" selected>Saved ID · ${v.media_id}</option>`
+          : html``}
+      </select>
       <p class="muted">
-        Leave blank for all your posts. To limit to one post, paste that post’s ID from Instagram professional
-        dashboard → Content → the post → ID.
+        Leave this on <b>All posts and reels</b> unless you want one reel only. A reel’s ID is a long number
+        from Instagram, not the share link (<code>instagram.com/reel/…</code>). If the list is empty, leave it
+        on all posts — that still covers reels.
       </p>
       <label for="dm_text">Private message to send</label>
       <textarea
@@ -535,6 +579,7 @@ adminRoutes.get('/rules/new', async (c) => {
           dm_text: '',
           public_reply_text: '',
         },
+        posts: await recentMediaOptions(c.env),
       })}`,
     }),
   );
@@ -552,6 +597,12 @@ function readRuleFields(form: Record<string, string>) {
   if (!parsed.ok) return { error: parsed.error };
   if (!dm) return { error: 'Write the private message to send.' };
   if (dm.length > DM_TEXT_MAX) return { error: 'The private message must be 1,000 characters or fewer.' };
+  if (media && looksLikePostUrl(media)) {
+    return {
+      error:
+        'That looks like a link, not a post ID. Leave “Which posts” on All posts and reels, or pick a reel from the list.',
+    };
+  }
   return {
     row: {
       ig_user_id: ig,
@@ -588,6 +639,7 @@ adminRoutes.post('/rules', async (c) => {
             dm_text: f.dm_text ?? '',
             public_reply_text: f.public_reply_text ?? '',
           },
+          posts: await recentMediaOptions(c.env),
           error: fields.error,
         })}`,
       }),
@@ -622,6 +674,7 @@ adminRoutes.get('/rules/:id/edit', async (c) => {
           dm_text: rule.dm_text,
           public_reply_text: rule.public_reply_text ?? '',
         },
+        posts: await recentMediaOptions(c.env),
       })}`,
     }),
   );
@@ -654,6 +707,7 @@ adminRoutes.post('/rules/:id', async (c) => {
             dm_text: f.dm_text ?? '',
             public_reply_text: f.public_reply_text ?? '',
           },
+          posts: await recentMediaOptions(c.env),
           error: fields.error,
         })}`,
       }),
@@ -677,6 +731,7 @@ adminRoutes.post('/rules/:id/delete', async (c) => {
 adminRoutes.get('/test', async (c) => {
   const accounts = await listAccounts(c.env.DB);
   const base = c.get('adminBase');
+  const posts = accounts.length ? await recentMediaOptions(c.env) : [];
   return c.html(
     layout({
       title: 'Test',
@@ -696,9 +751,12 @@ adminRoutes.get('/test', async (c) => {
                 </select>
                 <label for="text">Comment text</label>
                 <textarea id="text" name="text" required placeholder="Guide please!"></textarea>
-                <label for="media_id">Post ID (optional)</label>
-                <input id="media_id" name="media_id" type="text" />
-                <p class="muted">Only needed if you have rules limited to one post.</p>
+                <label for="media_id">Which posts</label>
+                <select id="media_id" name="media_id">
+                  <option value="">All posts and reels</option>
+                  ${posts.map((p) => html`<option value="${p.id}">${p.label}</option>`)}
+                </select>
+                <p class="muted">Leave on all posts unless you limited a rule to one reel.</p>
                 <div class="row"><button type="submit">See what would happen</button></div>
               </form>
             `}
@@ -755,8 +813,9 @@ adminRoutes.get('/accounts', async (c) => {
         <h1>Accounts</h1>
         <p>Connect the Instagram account you post from. You can connect more than one if they are all yours.</p>
         <p class="muted">
-          Instagram rejects Connect unless both of these are in Meta → Instagram → Business login
-          settings → OAuth redirect URIs (the dashboard often adds a slash). Use the Instagram App ID
+          In Meta: Instagram → API setup with Instagram login → click <b>Set up</b> under
+          “3. Set up Instagram business login”. Paste the first line as <b>Redirect URL</b>. Then
+          Business login settings → OAuth redirect URIs (add both lines). Use the Instagram App ID
           from that same page, not the Facebook app id at the top of the dashboard.
         </p>
         <pre class="raw">${callback}
