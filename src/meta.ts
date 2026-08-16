@@ -190,6 +190,54 @@ export async function fetchMe(
   };
 }
 
+export type IgMediaItem = {
+  id: string;
+  caption: string;
+  permalink: string;
+  kind: 'reel' | 'post';
+};
+
+export async function listRecentMedia(token: string): Promise<IgMediaItem[]> {
+  const url = new URL(`${GRAPH}/me/media`);
+  url.searchParams.set('fields', 'id,caption,permalink,media_type,media_product_type');
+  url.searchParams.set('limit', '25');
+  const res = await fetchWithRetry(url.toString(), {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const text = await res.text();
+  let json: {
+    data?: Array<{
+      id?: string | number;
+      caption?: string;
+      permalink?: string;
+      media_product_type?: string;
+    }>;
+    error?: { message?: string };
+  };
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error(text || `could not list posts (${res.status})`);
+  }
+  if (!res.ok) throw new Error(json.error?.message || text || 'could not list posts');
+  const items: IgMediaItem[] = [];
+  for (const row of json.data ?? []) {
+    if (row.id == null) continue;
+    const permalink = row.permalink ?? '';
+    const kind: 'reel' | 'post' =
+      row.media_product_type === 'REELS' || /\/reel\//i.test(permalink) ? 'reel' : 'post';
+    const cap = (row.caption ?? '').replace(/\s+/g, ' ').trim();
+    items.push({
+      id: String(row.id),
+      caption: cap.slice(0, 48) || permalink || String(row.id),
+      permalink,
+      kind,
+    });
+  }
+  return items;
+}
+
 export function oauthRedirectUri(requestUrl: string, publicBaseUrl?: string): string {
   let origin = '';
   try {

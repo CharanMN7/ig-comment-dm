@@ -144,14 +144,25 @@ Back in the Meta app dashboard.
 
 ### Login return address
 
-**Instagram → API setup with Instagram login → Business login settings → OAuth redirect URIs**
+Meta does not show a field named just “oauth”. Do this:
 
-Paste **both** lines shown on the admin **Accounts** page (or on Connect). For this Worker they look like:
+1. Left menu: **Instagram → API setup with Instagram login** (wording may be “API setup with Instagram business login”).
+2. Find **3. Set up Instagram business login** and click **Set up**. A popup asks for a **Redirect URL**.
+3. Paste:
+
+   ```
+   https://ig-comment-dm.YOURNAME.workers.dev/connect/callback
+   ```
+
+4. Save. Then click **Business login settings**.
+5. Under **OAuth redirect URIs**, paste **both** lines shown on the admin **Accounts** page (or on Connect):
 
 ```
 https://ig-comment-dm.YOURNAME.workers.dev/connect/callback
 https://ig-comment-dm.YOURNAME.workers.dev/connect/callback/
 ```
+
+If you only see Facebook Login → Valid OAuth Redirect URIs, that is the wrong screen. Stay on the Instagram product.
 
 Meta’s docs require an exact match to a listed “base URI”, and the dashboard often adds a trailing slash. Save, then click Connect and continue to Instagram.
 
@@ -159,17 +170,16 @@ If you still see **Invalid redirect_uri**, the usual cause is the Facebook App I
 
 ### Webhook (the comment notifications)
 
-**Instagram → Webhooks** (sometimes under “API setup with Instagram login → Webhooks”).
+**Instagram → API setup with Instagram login → Configure webhooks** (sometimes a **Webhooks** item in the left menu).
 
-1. Callback URL:
+1. Click **Configure**. Callback URL:
 
    ```
    https://ig-comment-dm.YOURNAME.workers.dev/webhook
    ```
 
 2. Verify token: paste the `WEBHOOK_VERIFY_TOKEN` you generated.
-3. Click **Verify and save**.
-4. Subscribe to the **comments** field. Leave the others off.
+3. Click **Save**. Subscribe to **comments** (leave **Include values** on). You can turn the other fields off.
 
 If verify fails, the Worker is not deployed or `WEBHOOK_VERIFY_TOKEN` does not match what you typed.
 
@@ -184,9 +194,10 @@ If verify fails, the Worker is not deployed or `WEBHOOK_VERIFY_TOKEN` does not m
    - Keywords, one per line, at least 3 letters each (`guide`, not `AI`).
    - The private message (the DM). Keep it under 1,000 characters. Put everything they need in this one message — Instagram will not let you send a follow-up unless they reply first.
    - Optional public reply under the comment.
+   - **Which posts:** leave on **All posts and reels**. That includes Reels. A reel ID is a long number (from the dropdown after you connect), not the share link `instagram.com/reel/…`.
 4. Go to **Test**. Paste a sample comment. Confirm the right rule lights up. This sends nothing to real people.
 
-Open **Home** once after connecting (that turns on Instagram’s comment notifications for your account). Then comment on your own post from a **different** Instagram account (a friend’s phone is fine). Your own comments on your own posts are ignored on purpose.
+Open **Home** once after connecting (that turns on Instagram’s comment notifications for your account). Then comment on your own post or reel from a **different** Instagram account (a friend’s phone is fine). The friend does **not** need to be an Instagram Tester. Your own comments on your own posts are ignored on purpose.
 
 The private message lands in that other account’s Instagram **inbox**, or in **Message requests** if they do not follow you. Check **Home → Last 20 sends**: if that list stays empty, Instagram never told this program about the comment.
 
