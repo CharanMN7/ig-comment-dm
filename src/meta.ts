@@ -185,7 +185,10 @@ export function oauthRedirectUri(requestUrl: string, publicBaseUrl?: string): st
   let origin = '';
   try {
     const u = new URL(requestUrl);
-    if (u.protocol && u.host) origin = `${u.protocol}//${u.host}`;
+    if (u.protocol && u.host) {
+      const local = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
+      origin = `${local ? u.protocol : 'https:'}//${u.host}`;
+    }
   } catch {
     origin = '';
   }
@@ -210,7 +213,8 @@ export function authorizeUrl(opts: {
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('scope', OAUTH_SCOPES);
   url.searchParams.set('state', opts.state);
-  url.searchParams.set('enable_fb_login', '0');
+  // Meta docs: boolean. Instagram's authorize page treats false as hide Facebook Login.
+  url.searchParams.set('enable_fb_login', 'false');
   if (opts.forceReauth) url.searchParams.set('force_reauth', 'true');
   return url.toString();
 }

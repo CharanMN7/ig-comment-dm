@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { hmacSha256Hex, verifyHmacSha256Hex, verifyMetaSignature } from '../src/crypto.ts';
+import { authorizeUrl, oauthRedirectUri } from '../src/meta.ts';
 import { isSelfComment } from '../src/guard.ts';
 import {
   escapeRegex,
@@ -99,6 +100,51 @@ describe('findMatchingRule', () => {
 
   it('returns null when nothing matches', () => {
     assert.equal(findMatchingRule([global], 'nice photo', undefined), null);
+  });
+});
+
+describe('oauthRedirectUri', () => {
+  it('uses the request host, not PUBLIC_BASE_URL', () => {
+    assert.equal(
+      oauthRedirectUri(
+        'https://ig-comment-dm.ig-comment-dm.workers.dev/connect',
+        'https://example.com',
+      ),
+      'https://ig-comment-dm.ig-comment-dm.workers.dev/connect/callback',
+    );
+  });
+
+  it('forces https except localhost', () => {
+    assert.equal(
+      oauthRedirectUri('http://ig-comment-dm.ig-comment-dm.workers.dev/a/secret/accounts'),
+      'https://ig-comment-dm.ig-comment-dm.workers.dev/connect/callback',
+    );
+    assert.equal(
+      oauthRedirectUri('http://localhost:8787/connect'),
+      'http://localhost:8787/connect/callback',
+    );
+  });
+});
+
+describe('authorizeUrl', () => {
+  it('matches Instagram Business Login required params', () => {
+    const url = new URL(
+      authorizeUrl({
+        clientId: '990602627938098',
+        redirectUri: 'https://ig-comment-dm.ig-comment-dm.workers.dev/connect/callback',
+        state: 'abc',
+        forceReauth: false,
+      }),
+    );
+    assert.equal(url.origin + url.pathname, 'https://www.instagram.com/oauth/authorize');
+    assert.equal(url.searchParams.get('client_id'), '990602627938098');
+    assert.equal(
+      url.searchParams.get('redirect_uri'),
+      'https://ig-comment-dm.ig-comment-dm.workers.dev/connect/callback',
+    );
+    assert.equal(url.searchParams.get('response_type'), 'code');
+    assert.equal(url.searchParams.get('enable_fb_login'), 'false');
+    assert.equal(url.searchParams.get('force_reauth'), null);
   });
 });
 

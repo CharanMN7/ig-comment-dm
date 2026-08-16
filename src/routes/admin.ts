@@ -754,10 +754,12 @@ adminRoutes.get('/accounts', async (c) => {
         <h1>Accounts</h1>
         <p>Connect the Instagram account you post from. You can connect more than one if they are all yours.</p>
         <p class="muted">
-          Before Connect: in Meta → Instagram → Business login settings → OAuth redirect URIs, paste this
-          <b>exactly</b> (no extra slash). Instagram rejects anything else as “Invalid redirect_uri”.
+          Instagram rejects Connect unless both of these are in Meta → Instagram → Business login
+          settings → OAuth redirect URIs (the dashboard often adds a slash). Use the Instagram App ID
+          from that same page, not the Facebook app id at the top of the dashboard.
         </p>
-        <p><code>${callback}</code></p>
+        <pre class="raw">${callback}
+${callback}/</pre>
         <p><a class="btn" href="/connect">Connect a new account</a></p>
         ${accounts.length === 0
           ? html`<p class="muted">None connected yet.</p>`

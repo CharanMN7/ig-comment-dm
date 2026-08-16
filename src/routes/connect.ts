@@ -15,7 +15,46 @@ import { layout, pageError } from '../html.ts';
 
 export const connectRoutes = new Hono<{ Bindings: Env }>();
 
-connectRoutes.get('/', async (c) => {
+function startHref(reconnect: boolean): string {
+  return reconnect ? '/connect/start?reconnect=1' : '/connect/start';
+}
+
+connectRoutes.get('/', (c) => {
+  const redir = oauthRedirectUri(c.req.url, c.env.PUBLIC_BASE_URL);
+  const withSlash = `${redir}/`;
+  const reconnect = c.req.query('reconnect') === '1';
+  const appId = (c.env.META_APP_ID ?? '').trim();
+  return c.html(
+    layout({
+      title: 'Connect Instagram',
+      body: html`
+        <h1>Before you continue</h1>
+        <p>
+          Instagram will only return here if this address is saved in your Meta app.
+          Open
+          <b>Instagram → API setup with Instagram login → 3. Set up Instagram business login →
+          Business login settings → OAuth redirect URIs</b>
+          and paste both lines, then Save.
+        </p>
+        <pre class="raw">${redir}
+${withSlash}</pre>
+        <p>
+          Use the <b>Instagram App ID</b> from that same Business login settings page — not the
+          number at the top of the Meta dashboard. This program is sending:
+        </p>
+        <p><code>${appId}</code></p>
+        <p class="muted">
+          If that number does not match Instagram App ID, run
+          <code>npx wrangler secret put META_APP_ID</code>, paste the Instagram App ID, then
+          <code>npx wrangler deploy</code> before connecting.
+        </p>
+        <p><a class="btn" href="${startHref(reconnect)}">I’ve saved those URLs — continue to Instagram</a></p>
+      `,
+    }),
+  );
+});
+
+connectRoutes.get('/start', async (c) => {
   const redir = oauthRedirectUri(c.req.url, c.env.PUBLIC_BASE_URL);
   const state = await makeOauthState(c.env.SESSION_SIGNING_KEY);
   const url = authorizeUrl({
