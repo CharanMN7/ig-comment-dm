@@ -329,10 +329,11 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
         <h2>Last 20 sends</h2>
         ${sends.length === 0
           ? html`<p class="muted">
-              Nothing sent yet. If a friend already commented: leave the rule on
-              <b>All posts and reels</b> (do not paste a reel link), open this page once, then comment again
-              from their phone. Their comment does not need to be a tester. The private message may sit in
-              <b>Message requests</b> on their Instagram.
+              Nothing sent yet. In Meta → Instagram → API setup with Instagram login →
+              <b>Generate access tokens</b>, set <b>Webhook subscription</b> to <b>On</b> for each
+              connected account (you do not need the Generate token button). Leave the rule on
+              <b>All posts and reels</b>. Then a friend comments from their phone. Check their
+              <b>Message requests</b> as well as inbox.
             </p>`
           : html`
               <table>
