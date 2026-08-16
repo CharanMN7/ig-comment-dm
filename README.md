@@ -38,6 +38,8 @@ Still under **Instagram → API setup with Instagram login → Business login se
 
 These are not your Instagram password. They identify this app to Instagram.
 
+The number at the **top** of the Meta dashboard is a different Facebook App ID. If you put that in `META_APP_ID`, Connect fails with **Invalid redirect_uri**.
+
 ### Add every Instagram account as a tester (required in Development mode)
 
 A Facebook **Admin** role on the app is not enough. Each Instagram username you will Connect must be an **Instagram Tester**, even if that IG account is yours and even if you already connected a different one.
@@ -144,15 +146,16 @@ Back in the Meta app dashboard.
 
 **Instagram → API setup with Instagram login → Business login settings → OAuth redirect URIs**
 
-Paste **exactly** the address shown on the admin **Accounts** page (it looks like this, with *your* Worker name):
+Paste **both** lines shown on the admin **Accounts** page (or on Connect). For this Worker they look like:
 
 ```
 https://ig-comment-dm.YOURNAME.workers.dev/connect/callback
+https://ig-comment-dm.YOURNAME.workers.dev/connect/callback/
 ```
 
-Character-for-character. No extra slash at the end. If the dashboard adds a slash when you save, add a **second** line that is the same URL *without* that slash. Click **Save**.
+Meta’s docs require an exact match to a listed “base URI”, and the dashboard often adds a trailing slash. Save, then click Connect and continue to Instagram.
 
-Connect sends that same address to Instagram. If Meta still has `example.com` or a different host, you get **Invalid redirect_uri**. After you first deploy, copy the URL from Accounts — do not guess.
+If you still see **Invalid redirect_uri**, the usual cause is the Facebook App ID instead of **Instagram App ID** (same Business login settings page).
 
 ### Webhook (the comment notifications)
 

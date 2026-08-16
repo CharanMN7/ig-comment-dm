@@ -49,7 +49,8 @@ Follow-up DMs are out of scope. They need the person to reply first (24h window)
 | GET | `/` | `ok` — deploy smoke check |
 | GET | `/webhook` | Meta verify handshake. Right `hub.verify_token` → echo `hub.challenge`. Wrong → 403. |
 | POST | `/webhook` | Verify signature, return **200 immediately**, process in `waitUntil`. |
-| GET | `/connect` | Instagram Business Login. Also the reconnect path (`?reconnect=1` forces re-auth). |
+| GET | `/connect` | Checklist: exact OAuth redirect URIs + Instagram App ID, then continue. `?reconnect=1` is passed through. |
+| GET | `/connect/start` | 302 to Instagram Business Login (`force_reauth` when `?reconnect=1`). |
 | GET | `/connect/callback` | Code → short-lived → long-lived token, fetch `user_id`/`username`, encrypt, **upsert** account. |
 | GET/POST | `/a/:secret/*` | Admin. `:secret` is `ADMIN_URL_SECRET` (32-char). Wrong secret → 404. |
 
@@ -119,4 +120,4 @@ Live checks: handshake 200, wrong verify token 403, bad signature 401, synthetic
 - PBKDF2 iterations **12,000** instead of 600,000 so first-time password setup fits Free-plan CPU.
 - Unlisted selftest admin endpoints.
 - First-run password setup; there is no `ADMIN_PASSWORD` Worker secret.
-- OAuth `redirect_uri` is built from the request host (`/connect/callback`), not `PUBLIC_BASE_URL`, so a leftover `example.com` secret cannot cause Instagram’s Invalid redirect_uri. That string is shown on Accounts for pasting into Meta.
+- OAuth `redirect_uri` is built from the request host (`/connect/callback`), HTTPS except localhost, not `PUBLIC_BASE_URL`. Accounts and `/connect` show that URI plus a trailing-slash variant for Meta’s dashboard. `/connect/start` sends the no-slash URI (same string as token exchange).
