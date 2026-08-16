@@ -40,6 +40,20 @@ These are not your Instagram password. They identify this app to Instagram.
 
 The number at the **top** of the Meta dashboard is a different Facebook App ID. If you put that in `META_APP_ID`, Connect fails with **Invalid redirect_uri**.
 
+Do **not** paste the token from **Generate access tokens** into Cloudflare. Connect already stores a token. That screen is for turning **Webhook subscription** on (see below).
+
+### Where every secret comes from
+
+| Secret | Where it comes from |
+|---|---|
+| `META_APP_ID` | Instagram → API setup with Instagram login → **3. Set up Instagram business login** → **Business login settings** → **Instagram App ID**. Not the id at the top of the dashboard. |
+| `META_APP_SECRET` | Same page → **Instagram App Secret** → Show. Not the App Secret under **App settings → Basic**. Not the Generate token. |
+| `WEBHOOK_VERIFY_TOKEN` | You make it: `openssl rand -hex 16`. Then type the **same** value into Meta’s webhook **Verify token** box. |
+| `TOKEN_ENCRYPTION_KEY` | You make it: `openssl rand -base64 32`. Never from Meta. |
+| `SESSION_SIGNING_KEY` | You make it: another `openssl rand -base64 32`. Never from Meta. |
+| `ADMIN_URL_SECRET` | You make it: `openssl rand -hex 16`. Goes in the admin URL. |
+| `PUBLIC_BASE_URL` | Your Worker URL, no trailing slash, e.g. `https://ig-comment-dm.ig-comment-dm.workers.dev`. |
+
 ### Add every Instagram account as a tester (required in Development mode)
 
 A Facebook **Admin** role on the app is not enough. Each Instagram username you will Connect must be an **Instagram Tester**, even if that IG account is yours and even if you already connected a different one.
@@ -183,6 +197,18 @@ If you still see **Invalid redirect_uri**, the usual cause is the Facebook App I
 
 If verify fails, the Worker is not deployed or `WEBHOOK_VERIFY_TOKEN` does not match what you typed.
 
+### Turn on webhook subscription per Instagram account (required)
+
+Callback URL setup is not enough. On the same **API setup with Instagram login** page, find **Generate access tokens**.
+
+For **each** account you connected (`iam.charan.dev`, `hardware.charan.dev`, …):
+
+1. If the username is missing, click **Add Instagram account**, log in as that account, finish.
+2. On that row, set **Webhook subscription** to **On**. Leave it Off and Instagram will never tell this program about comments.
+3. You do **not** have to click **Generate token** for this program, and you must **not** paste that token into Cloudflare. Connect already saved a token. If Meta will not let you flip the webhook switch until you generate a token, generate it, then flip the switch, and ignore the token string.
+
+The person who **comments** (a friend) does not need to be in this list. The account that **owns the reel** does.
+
 ---
 
 ## 4. Connect Instagram and write a rule
@@ -197,7 +223,7 @@ If verify fails, the Worker is not deployed or `WEBHOOK_VERIFY_TOKEN` does not m
    - **Which posts:** leave on **All posts and reels**. That includes Reels. A reel ID is a long number (from the dropdown after you connect), not the share link `instagram.com/reel/…`.
 4. Go to **Test**. Paste a sample comment. Confirm the right rule lights up. This sends nothing to real people.
 
-Open **Home** once after connecting (that turns on Instagram’s comment notifications for your account). Then comment on your own post or reel from a **different** Instagram account (a friend’s phone is fine). The friend does **not** need to be an Instagram Tester. Your own comments on your own posts are ignored on purpose.
+Open **Home** once after connecting. In Meta, **Generate access tokens** → **Webhook subscription** must be **On** for each connected account. Then comment on your own post or reel from a **different** Instagram account (a friend’s phone is fine). The friend does **not** need to be an Instagram Tester. Your own comments on your own posts are ignored on purpose.
 
 The private message lands in that other account’s Instagram **inbox**, or in **Message requests** if they do not follow you. Check **Home → Last 20 sends**: if that list stays empty, Instagram never told this program about the comment.
 

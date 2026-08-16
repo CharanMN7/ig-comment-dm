@@ -26,7 +26,7 @@ The operator uses the admin UI and never sees the code.
 ## What it does
 
 1. Meta POSTs a signed webhook when someone comments on a connected post.
-2. After Connect (and again on Home / daily cron) the Worker POSTs `/me/subscribed_apps?subscribed_fields=comments`. App Dashboard field subscription alone does not enable Instagram Login comment notifications.
+2. After Connect (and again on Home / daily cron) the Worker POSTs `/me/subscribed_apps?subscribed_fields=comments`. The Meta dashboard **Generate access tokens → Webhook subscription** toggle must also be **On** per Instagram account or live comments never arrive.
 3. The Worker verifies the signature, routes on `entry.id` to an account, matches comment text against that account’s rules.
 4. On a match it sends **one** DM via Private Replies (`recipient.comment_id`, not the commenter’s user id) and optionally a public reply on the comment.
 5. Everything is logged. The operator manages accounts and rules in `/a/:secret`.
