@@ -63,6 +63,15 @@ export async function sendPrivateReply(
   return readResult(res);
 }
 
+/** Required after Connect. Dashboard field subscription is not enough for Instagram Login. */
+export async function subscribeCommentWebhooks(token: string): Promise<MetaCallResult> {
+  const url = new URL(`${GRAPH}/me/subscribed_apps`);
+  url.searchParams.set('subscribed_fields', 'comments');
+  url.searchParams.set('access_token', token);
+  const res = await fetchWithRetry(url.toString(), { method: 'POST' });
+  return readResult(res);
+}
+
 export async function sendPublicReply(commentId: string, token: string, message: string): Promise<MetaCallResult> {
   const url = `${GRAPH}/${encodeURIComponent(commentId)}/replies`;
   const res = await fetchWithRetry(url, {

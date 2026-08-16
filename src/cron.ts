@@ -6,9 +6,23 @@ import {
   encryptAesGcm,
   nowSeconds,
 } from './crypto.ts';
-import { accountsNeedingRefresh, flagNeedsReconnect, systemSet, updateAccountToken } from './db.ts';
-import { refreshLongLived } from './meta.ts';
+import { accountsNeedingRefresh, flagNeedsReconnect, listAccounts, systemSet, updateAccountToken } from './db.ts';
+import { refreshLongLived, subscribeCommentWebhooks } from './meta.ts';
 import type { Env } from './types.ts';
+
+export async function ensureCommentSubscriptions(env: Env): Promise<void> {
+  const accounts = await listAccounts(env.DB);
+  for (const account of accounts) {
+    if (account.active !== 1) continue;
+    try {
+      const token = await decryptAesGcm(env.TOKEN_ENCRYPTION_KEY, account.token_iv, account.access_token_enc);
+      const res = await subscribeCommentWebhooks(token);
+      if (!res.ok) console.error('subscribed_apps failed', account.ig_user_id, res.status, res.body);
+    } catch (err) {
+      console.error('subscribed_apps failed', account.ig_user_id, err instanceof Error ? err.message : err);
+    }
+  }
+}
 
 /**
  * Daily token refresh. Idempotent: running it five times in a day is harmless.
@@ -16,6 +30,7 @@ import type { Env } from './types.ts';
  * (about ten chances) and skip anything refreshed in the last 24 hours.
  */
 export async function runCron(env: Env): Promise<void> {
+  await ensureCommentSubscriptions(env);
   const now = nowSeconds();
   const accounts = await accountsNeedingRefresh(env.DB, now + TOKEN_LOOKAHEAD_SECONDS);
 

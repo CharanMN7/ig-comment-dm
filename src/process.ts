@@ -15,17 +15,17 @@ import { sendPrivateReply, sendPublicReply } from './meta.ts';
 import type { Env } from './types.ts';
 
 type CommentValue = {
-  id?: string;
-  comment_id?: string;
+  id?: string | number;
+  comment_id?: string | number;
   text?: string;
-  from?: { id?: string; username?: string };
-  media?: { id?: string };
+  from?: { id?: string | number; username?: string };
+  media?: { id?: string | number };
 };
 
 type Change = { field?: string; value?: CommentValue };
 
 type Entry = {
-  id?: string;
+  id?: string | number;
   time?: number;
   field?: string;
   value?: CommentValue;
@@ -41,8 +41,23 @@ function asUnixSeconds(t: number): number {
   return t > 1e12 ? Math.floor(t / 1000) : t;
 }
 
+function asId(value: unknown): string | undefined {
+  if (value == null || value === '') return undefined;
+  return String(value);
+}
+
+/** Meta often sends 17-digit IDs as JSON numbers, which JS cannot represent exactly. */
+export function parseWebhookPayload(raw: string): unknown {
+  const quoted = raw.replace(/:\s*(-?\d{15,})([,}\s])/g, ':"$1"$2');
+  try {
+    return JSON.parse(quoted);
+  } catch {
+    return JSON.parse(raw);
+  }
+}
+
 function commentIdOf(value: CommentValue): string | undefined {
-  return value.id || value.comment_id;
+  return asId(value.id) || asId(value.comment_id);
 }
 
 function changesOf(entry: Entry): Change[] {
@@ -59,9 +74,10 @@ export async function processWebhook(env: Env, payload: unknown): Promise<void> 
     for (const entry of entries) {
       for (const change of changesOf(entry)) {
         if (change.field !== 'comments') continue;
-        if (!change.value || !entry.id) continue;
+        const entryId = asId(entry.id);
+        if (!change.value || !entryId) continue;
         try {
-          await processComment(env, entry.id, entry.time, change.value);
+          await processComment(env, entryId, entry.time, change.value);
         } catch (err) {
           console.error('comment processing failed', err instanceof Error ? err.message : err);
         }
@@ -77,17 +93,23 @@ export async function processComment(
   value: CommentValue,
 ): Promise<void> {
   const account = await getAccount(env.DB, entryId);
-  if (!account || account.active !== 1) return;
+  if (!account || account.active !== 1) {
+    console.error('no active account for webhook entry', entryId);
+    return;
+  }
 
-  if (isSelfComment(value.from?.id, account.ig_user_id)) return;
+  const commenterId = asId(value.from?.id) ?? null;
+  if (isSelfComment(commenterId, account.ig_user_id)) {
+    console.log('ignored self-comment', commentIdOf(value));
+    return;
+  }
 
   const commentId = commentIdOf(value);
   if (!commentId) return;
 
   const now = nowSeconds();
-  const commenterId = value.from?.id ?? null;
   const text = value.text ?? '';
-  const mediaId = value.media?.id;
+  const mediaId = asId(value.media?.id);
 
   if (entryTime != null) {
     const ts = asUnixSeconds(entryTime);

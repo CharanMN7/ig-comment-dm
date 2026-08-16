@@ -8,6 +8,7 @@ import {
   exchangeLongLived,
   fetchMe,
   oauthRedirectUri,
+  subscribeCommentWebhooks,
 } from '../meta.ts';
 import { makeOauthState, verifyOauthState } from '../session.ts';
 import type { Env } from '../types.ts';
@@ -120,6 +121,7 @@ connectRoutes.get('/callback', async (c) => {
       last_refreshed_at: now,
     });
 
+    const subscribed = await subscribeCommentWebhooks(longLived.access_token);
     const admin = `/a/${c.env.ADMIN_URL_SECRET}/accounts`;
     return c.html(
       layout({
@@ -127,6 +129,12 @@ connectRoutes.get('/callback', async (c) => {
         body: html`
           <h1>Connected @${me.username}</h1>
           <p>Instagram is linked. You can close this tab and go back to the admin page.</p>
+          ${subscribed.ok
+            ? html``
+            : html`<p class="err">
+                Comment notifications may not be on yet. Open Home in admin once, then try a test comment
+                from a different Instagram account.
+              </p>`}
           <p><a href="${admin}">Open accounts</a></p>
         `,
       }),

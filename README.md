@@ -186,7 +186,11 @@ If verify fails, the Worker is not deployed or `WEBHOOK_VERIFY_TOKEN` does not m
    - Optional public reply under the comment.
 4. Go to **Test**. Paste a sample comment. Confirm the right rule lights up. This sends nothing to real people.
 
-Then comment on your own post from a **different** Instagram account (a friend’s phone is fine). Your own comments on your own posts are ignored on purpose.
+Open **Home** once after connecting (that turns on Instagram’s comment notifications for your account). Then comment on your own post from a **different** Instagram account (a friend’s phone is fine). Your own comments on your own posts are ignored on purpose.
+
+The private message lands in that other account’s Instagram **inbox**, or in **Message requests** if they do not follow you. Check **Home → Last 20 sends**: if that list stays empty, Instagram never told this program about the comment.
+
+In the Meta app, the webhook must be subscribed to **comments** with **Include values** on. Use **Test** next to that field — if that does not show up on Home either, the callback URL or verify token is wrong.
 
 ---
 

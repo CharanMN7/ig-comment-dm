@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import { hmacSha256Hex, verifyHmacSha256Hex, verifyMetaSignature } from '../src/crypto.ts';
 import { authorizeUrl, oauthRedirectUri } from '../src/meta.ts';
 import { isSelfComment } from '../src/guard.ts';
+import { parseWebhookPayload } from '../src/process.ts';
 import {
   escapeRegex,
   findMatchingRule,
@@ -145,6 +146,16 @@ describe('authorizeUrl', () => {
     assert.equal(url.searchParams.get('response_type'), 'code');
     assert.equal(url.searchParams.get('enable_fb_login'), 'false');
     assert.equal(url.searchParams.get('force_reauth'), null);
+  });
+});
+
+describe('parseWebhookPayload', () => {
+  it('quotes oversized numeric ids so they stay exact', () => {
+    const parsed = parseWebhookPayload(
+      '{"entry":[{"id":17841464780021342,"changes":[{"value":{"id":18074865634493149}}]}]}',
+    ) as { entry: Array<{ id: string; changes: Array<{ value: { id: string } }> }> };
+    assert.equal(parsed.entry[0]?.id, '17841464780021342');
+    assert.equal(parsed.entry[0]?.changes[0]?.value.id, '18074865634493149');
   });
 });
 
