@@ -28,6 +28,7 @@ import {
 } from '../db.ts';
 import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
 import { KEYWORD_TOO_SHORT_MESSAGE, findMatchingRule, parseKeywords } from '../match.ts';
+import { oauthRedirectUri } from '../meta.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
 import type { Env, SessionData } from '../types.ts';
 
@@ -743,6 +744,7 @@ adminRoutes.get('/accounts', async (c) => {
   const base = c.get('adminBase');
   const session = c.get('session');
   const now = nowSeconds();
+  const callback = oauthRedirectUri(c.req.url, c.env.PUBLIC_BASE_URL);
   return c.html(
     layout({
       title: 'Accounts',
@@ -751,6 +753,11 @@ adminRoutes.get('/accounts', async (c) => {
       body: html`
         <h1>Accounts</h1>
         <p>Connect the Instagram account you post from. You can connect more than one if they are all yours.</p>
+        <p class="muted">
+          Before Connect: in Meta → Instagram → Business login settings → OAuth redirect URIs, paste this
+          <b>exactly</b> (no extra slash). Instagram rejects anything else as “Invalid redirect_uri”.
+        </p>
+        <p><code>${callback}</code></p>
         <p><a class="btn" href="/connect">Connect a new account</a></p>
         ${accounts.length === 0
           ? html`<p class="muted">None connected yet.</p>`

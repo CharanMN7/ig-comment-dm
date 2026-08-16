@@ -119,3 +119,4 @@ Live checks: handshake 200, wrong verify token 403, bad signature 401, synthetic
 - PBKDF2 iterations **12,000** instead of 600,000 so first-time password setup fits Free-plan CPU.
 - Unlisted selftest admin endpoints.
 - First-run password setup; there is no `ADMIN_PASSWORD` Worker secret.
+- OAuth `redirect_uri` is built from the request host (`/connect/callback`), not `PUBLIC_BASE_URL`, so a leftover `example.com` secret cannot cause Instagram’s Invalid redirect_uri. That string is shown on Accounts for pasting into Meta.

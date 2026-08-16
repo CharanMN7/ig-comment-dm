@@ -181,8 +181,21 @@ export async function fetchMe(
   };
 }
 
+export function oauthRedirectUri(requestUrl: string, publicBaseUrl?: string): string {
+  let origin = '';
+  try {
+    const u = new URL(requestUrl);
+    if (u.protocol && u.host) origin = `${u.protocol}//${u.host}`;
+  } catch {
+    origin = '';
+  }
+  if (!origin) origin = (publicBaseUrl ?? '').replace(/\/+$/, '');
+  return `${origin.replace(/\/+$/, '')}/connect/callback`;
+}
+
+/** @deprecated prefer oauthRedirectUri(requestUrl) so Connect matches the live host */
 export function redirectUri(publicBaseUrl: string): string {
-  return `${publicBaseUrl.replace(/\/+$/, '')}/connect/callback`;
+  return oauthRedirectUri('', publicBaseUrl);
 }
 
 export function authorizeUrl(opts: {
