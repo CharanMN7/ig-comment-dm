@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { verifyMetaSignature } from '../crypto.ts';
-import { processWebhook } from '../process.ts';
+import { parseWebhookPayload, processWebhook } from '../process.ts';
 import type { Env } from '../types.ts';
 
 export const webhookRoutes = new Hono<{ Bindings: Env }>();
@@ -21,7 +21,7 @@ webhookRoutes.post('/', async (c) => {
 
   c.executionCtx.waitUntil(
     (async () => {
-      const payload: unknown = JSON.parse(raw);
+      const payload: unknown = parseWebhookPayload(raw);
       await processWebhook(c.env, payload);
     })().catch((err) => {
       console.error('webhook waitUntil', err instanceof Error ? err.message : err);

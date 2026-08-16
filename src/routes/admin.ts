@@ -8,7 +8,7 @@ import {
   nowSeconds,
   verifyPassword,
 } from '../crypto.ts';
-import { runCron } from '../cron.ts';
+import { ensureCommentSubscriptions, runCron } from '../cron.ts';
 import {
   countSentByComment,
   deleteRule,
@@ -255,6 +255,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   const session = c.get('session');
   const now = nowSeconds();
   const accounts = await listAccounts(c.env.DB);
+  c.executionCtx.waitUntil(ensureCommentSubscriptions(c.env));
   const sends = await recentSent(c.env.DB, 20);
   const dayStart = Math.floor(now / 86400) * 86400;
   const counts = await todayCounters(c.env.DB, dayStart);

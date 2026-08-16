@@ -26,9 +26,10 @@ The operator uses the admin UI and never sees the code.
 ## What it does
 
 1. Meta POSTs a signed webhook when someone comments on a connected post.
-2. The Worker verifies the signature, routes on `entry.id` to an account, matches comment text against that account’s rules.
-3. On a match it sends **one** DM via Private Replies (`recipient.comment_id`, not the commenter’s user id) and optionally a public reply on the comment.
-4. Everything is logged. The operator manages accounts and rules in `/a/:secret`.
+2. After Connect (and again on Home / daily cron) the Worker POSTs `/me/subscribed_apps?subscribed_fields=comments`. App Dashboard field subscription alone does not enable Instagram Login comment notifications.
+3. The Worker verifies the signature, routes on `entry.id` to an account, matches comment text against that account’s rules.
+4. On a match it sends **one** DM via Private Replies (`recipient.comment_id`, not the commenter’s user id) and optionally a public reply on the comment.
+5. Everything is logged. The operator manages accounts and rules in `/a/:secret`.
 
 Follow-up DMs are out of scope. They need the person to reply first (24h window) or App Review for the 7-day human-agent extension. One DM, everything in it.
 
@@ -63,7 +64,7 @@ Unlisted, session-gated, used by `scripts/selftest.ts`:
 
 ## Processing pipeline (each comment change)
 
-`field === "comments"` only. Instagram Login sometimes puts `field`/`value` on the entry instead of `changes[]`; both shapes are handled.
+`field === "comments"` only. Instagram Login sometimes puts `field`/`value` on the entry instead of `changes[]`; both shapes are handled. Oversized numeric IDs in the JSON are quoted before `JSON.parse`.
 
 1. Look up account by `entry.id`. Unknown or inactive → drop silently.
 2. Self-comment guard. Stop, no `sent` row.
