@@ -20,6 +20,7 @@ type CommentValue = {
   text?: string;
   from?: { id?: string | number; username?: string };
   media?: { id?: string | number };
+  media_id?: string | number;
 };
 
 type Change = { field?: string; value?: CommentValue };
@@ -109,7 +110,7 @@ export async function processComment(
 
   const now = nowSeconds();
   const text = value.text ?? '';
-  const mediaId = asId(value.media?.id);
+  const mediaId = asId(value.media?.id) ?? asId(value.media_id);
 
   if (entryTime != null) {
     const ts = asUnixSeconds(entryTime);

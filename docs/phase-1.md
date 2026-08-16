@@ -60,6 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_rules_account_active ON rules(ig_user_id, active)
 ```
 META_APP_ID
 META_APP_SECRET
+FACEBOOK_APP_SECRET
 WEBHOOK_VERIFY_TOKEN
 TOKEN_ENCRYPTION_KEY
 ADMIN_URL_SECRET
@@ -68,6 +69,8 @@ PUBLIC_BASE_URL
 ```
 
 Never put these in `wrangler.toml`. Local copies go in `.dev.vars` (gitignored). See `.dev.vars.example`.
+
+`FACEBOOK_APP_SECRET` is optional at the type level so an existing deploy still boots; live comment POSTs often 401 until it is set.
 
 ## 3. Complete `wrangler.toml`
 
@@ -84,7 +87,7 @@ database_name = "ig-comment-dm"
 database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
 
 [triggers]
-crons = ["0 3 * * *"]
+crons = ["0 3 * * *", "*/5 * * * *"]
 ```
 
 ## 4. Every environment variable or binding referenced anywhere
@@ -96,6 +99,7 @@ crons = ["0 3 * * *"]
 | `DB` | D1 binding |
 | `META_APP_ID` | Worker secret |
 | `META_APP_SECRET` | Worker secret |
+| `FACEBOOK_APP_SECRET` | Worker secret (optional; needed for live webhook HMAC) |
 | `WEBHOOK_VERIFY_TOKEN` | Worker secret |
 | `TOKEN_ENCRYPTION_KEY` | Worker secret |
 | `ADMIN_URL_SECRET` | Worker secret |

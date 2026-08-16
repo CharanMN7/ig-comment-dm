@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { hmacSha256Hex, verifyHmacSha256Hex, verifyMetaSignature } from '../src/crypto.ts';
+import {
+  hmacSha256Hex,
+  verifyHmacSha256Hex,
+  verifyMetaSignature,
+  verifyMetaSignatureAny,
+} from '../src/crypto.ts';
 import { authorizeUrl, oauthRedirectUri } from '../src/meta.ts';
 import { isSelfComment } from '../src/guard.ts';
 import { parseWebhookPayload } from '../src/process.ts';
@@ -170,5 +175,21 @@ describe('webhook HMAC', () => {
     assert.equal(await verifyMetaSignature(secret, body, `sha256=${'aa'.repeat(32)}`), false);
     assert.equal(await verifyMetaSignature(secret, body, null), false);
     assert.equal(await verifyMetaSignature(secret, body, hex), false);
+  });
+
+  it('accepts a signature from either of two secrets', async () => {
+    const instagram = 'instagram-secret';
+    const facebook = 'facebook-secret';
+    const body = '{"object":"instagram"}';
+    const fbHex = await hmacSha256Hex(facebook, body);
+    assert.equal(
+      await verifyMetaSignatureAny([facebook, instagram], body, `sha256=${fbHex}`),
+      true,
+    );
+    assert.equal(
+      await verifyMetaSignatureAny([facebook, instagram], body, `sha256=${'aa'.repeat(32)}`),
+      false,
+    );
+    assert.equal(await verifyMetaSignatureAny([instagram], body, `sha256=${fbHex}`), false);
   });
 });
