@@ -19,6 +19,7 @@ import {
   listAccounts,
   listRules,
   recentSent,
+  recentWebhookEvents,
   setAccountActive,
   systemGet,
   systemSet,
@@ -258,12 +259,22 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   const accounts = await listAccounts(c.env.DB);
   c.executionCtx.waitUntil(ensureCommentSubscriptions(c.env));
   const sends = await recentSent(c.env.DB, 20);
+  let events: Awaited<ReturnType<typeof recentWebhookEvents>> = [];
+  try {
+    events = await recentWebhookEvents(c.env.DB, 8);
+  } catch {
+    events = [];
+  }
   const dayStart = Math.floor(now / 86400) * 86400;
   const counts = await todayCounters(c.env.DB, dayStart);
   const lastCron = await systemGet(c.env.DB, 'last_cron_ok_at');
   const lastCronN = lastCron ? parseInt(lastCron, 10) : NaN;
+  const lastPoll = await systemGet(c.env.DB, 'last_poll_ok_at');
+  const lastPollN = lastPoll ? parseInt(lastPoll, 10) : NaN;
   const cronStale = !Number.isFinite(lastCronN) || now - lastCronN > CRON_STALE_SECONDS;
   const reconnect = accounts.filter((a) => a.needs_reconnect === 1 || a.token_expires_at <= now);
+  const latestEvent = events[0];
+  const missingFbSecret = !(c.env.FACEBOOK_APP_SECRET ?? '').trim();
 
   const banners = [];
   if (reconnect.length) {
@@ -280,6 +291,23 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
       <div class="banner">
         The daily Instagram check hasn’t run in over 3 days. Message whoever set this up — the automatic
         refresh job isn’t running.
+      </div>
+    `);
+  }
+  if (missingFbSecret) {
+    banners.push(html`
+      <div class="banner">
+        The Facebook App Secret is not set. Instagram often signs comment notifications with that secret,
+        not the Instagram one. Whoever set this up needs to add
+        <code>FACEBOOK_APP_SECRET</code> from Meta → App settings → Basic, then deploy again.
+      </div>
+    `);
+  }
+  if (latestEvent?.status === 'bad_sig') {
+    banners.push(html`
+      <div class="banner">
+        Instagram reached this program but the signing secret did not match. Add
+        <code>FACEBOOK_APP_SECRET</code> from App settings → Basic (click Show next to App secret).
       </div>
     `);
   }
@@ -329,11 +357,12 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
         <h2>Last 20 sends</h2>
         ${sends.length === 0
           ? html`<p class="muted">
-              Nothing sent yet. In Meta → Instagram → API setup with Instagram login →
-              <b>Generate access tokens</b>, set <b>Webhook subscription</b> to <b>On</b> for each
-              connected account (you do not need the Generate token button). Leave the rule on
-              <b>All posts and reels</b>. Then a friend comments from their phone. Check their
-              <b>Message requests</b> as well as inbox.
+              Nothing sent yet. The Meta app must be <b>Live</b> (Publish in the left sidebar) for
+              real comments to arrive instantly. In Development, only Meta’s webhook <b>Test</b> button
+              is delivered. A comment checker also runs every 5 minutes. Leave the rule on
+              <b>All posts and reels</b>. A friend comments from a different account. Check their
+              <b>Message requests</b> as well as inbox. If Hidden Words is on, turn it off for test
+              comments or Instagram may hide them from this program.
             </p>`
           : html`
               <table>
@@ -363,10 +392,45 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
               </table>
             `}
 
+        <h2>Did Instagram reach us?</h2>
+        ${events.length === 0
+          ? html`<p class="muted">
+              No notification has arrived yet. If the app is still in Development, that is expected
+              for real comments. Publish the app, or wait up to 5 minutes for the comment checker.
+              Meta’s webhook Test → Send to My Server should appear here immediately if the callback
+              URL is correct.
+            </p>`
+          : html`
+              <table>
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Status</th>
+                    <th>Detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${events.map(
+                    (e) => html`<tr>
+                      <td>${fmtWhen(e.received_at)}</td>
+                      <td>${e.status === 'received'
+                        ? 'Reached us'
+                        : e.status === 'bad_sig'
+                          ? 'Wrong secret'
+                          : e.status}</td>
+                      <td class="muted">${e.error ?? e.object ?? ''}</td>
+                    </tr>`,
+                  )}
+                </tbody>
+              </table>
+            `}
+
         <h2>Daily check</h2>
         <p class="muted">
-          Last automatic check:
-          ${Number.isFinite(lastCronN) ? fmtWhen(lastCronN) : 'never'}
+          Last token refresh:
+          ${Number.isFinite(lastCronN) ? fmtWhen(lastCronN) : 'never'}.
+          Last comment checker:
+          ${Number.isFinite(lastPollN) ? fmtWhen(lastPollN) : 'not yet'}.
         </p>
         <form method="post" action="${base}/run-cron">
           ${csrfField(session.csrf)}

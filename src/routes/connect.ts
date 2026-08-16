@@ -121,7 +121,7 @@ connectRoutes.get('/callback', async (c) => {
       last_refreshed_at: now,
     });
 
-    const subscribed = await subscribeCommentWebhooks(longLived.access_token);
+    const subscribed = await subscribeCommentWebhooks(igUserId, longLived.access_token);
     const admin = `/a/${c.env.ADMIN_URL_SECRET}/accounts`;
     return c.html(
       layout({

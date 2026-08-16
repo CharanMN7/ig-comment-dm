@@ -1,6 +1,6 @@
 # Architecture
 
-Single-tenant per deployment. Each customer gets their own Cloudflare account, Worker, D1 database, and Meta app in development mode with themselves as admin. No signup, no multi-user model, no billing. One deployment may manage several Instagram accounts; they all belong to the same person.
+Single-tenant per deployment. Each customer gets their own Cloudflare account, Worker, D1 database, and Meta app. The app must be **Live** (Publish) for real comment webhooks; Development only delivers the dashboard Test button. Tester accounts can usually go Live without App Review. No signup, no multi-user model, no billing. One deployment may manage several Instagram accounts; they all belong to the same person.
 
 The operator uses the admin UI and never sees the code.
 
@@ -10,7 +10,7 @@ The operator uses the admin UI and never sees the code.
 - Hono, default Workers export (`fetch` + `scheduled`). Not `hono/vercel`.
 - Hono `{ strict: false }` so `/a/:secret` and `/a/:secret/` both work
 - D1 via the `DB` binding. Raw parameterized SQL (`.prepare().bind()`). No ORM.
-- Schema in `migrations/001_init.sql`, applied by the Wrangler CLI
+- Schema in `migrations/001_init.sql` and `migrations/002_webhook_events.sql`, applied by the Wrangler CLI
 - Server-rendered HTML via `hono/html`. No React, no Tailwind, no bundler, no client framework. One `<style>` block in the layout.
 - Runtime dependency: `hono` only. `wrangler` / `typescript` / `@cloudflare/workers-types` are devDependencies.
 - Do **not** enable `nodejs_compat`. Do **not** import `node:crypto`.
@@ -18,18 +18,19 @@ The operator uses the admin UI and never sees the code.
 ## Crypto (Web Crypto only)
 
 - All randomness: `crypto.getRandomValues`. Never `Math.random`.
-- Webhook signatures (`X-Hub-Signature-256`): `crypto.subtle.importKey` + `crypto.subtle.verify` (HMAC-SHA256). Verify, do not sign-and-`===`.
+- Webhook signatures (`X-Hub-Signature-256`): `crypto.subtle.importKey` + `crypto.subtle.verify` (HMAC-SHA256). Verify, do not sign-and-`===`. Try `FACEBOOK_APP_SECRET` (App settings → Basic) then `META_APP_SECRET` (Instagram App Secret). Meta often signs with the Facebook one.
 - Token encryption: AES-256-GCM, random 96-bit IV per encryption, IV stored in `accounts.token_iv`, ciphertext in `accounts.access_token_enc`. Key is `TOKEN_ENCRYPTION_KEY` (32 random bytes, base64).
 - Password hashing: PBKDF2-HMAC-SHA256 via `crypto.subtle.deriveBits`, **12,000** iterations (spec asked for 600,000; that exceeds Free-plan CPU and 500s on first password save), 16-byte random salt. Not scrypt. Hash and salt live in `system`. Do not set `[limits] cpu_ms` — Cloudflare rejects that on the Free plan.
 - Session cookie: HMAC-signed, HttpOnly, SameSite=Strict, 30-day expiry. CSRF token is inside the session; mutating admin POSTs must send it.
 
 ## What it does
 
-1. Meta POSTs a signed webhook when someone comments on a connected post.
-2. After Connect (and again on Home / daily cron) the Worker POSTs `/me/subscribed_apps?subscribed_fields=comments`. The Meta dashboard **Generate access tokens → Webhook subscription** toggle must also be **On** per Instagram account or live comments never arrive.
-3. The Worker verifies the signature, routes on `entry.id` to an account, matches comment text against that account’s rules.
+1. Meta POSTs a signed webhook when someone comments on a connected post. In Development this often never happens except for the Test button.
+2. After Connect (and again on Home / daily cron) the Worker POSTs `/{ig_user_id}/subscribed_apps` with JSON `{ subscribed_fields: ["comments"] }`. The Meta dashboard **Generate access tokens → Webhook subscription** toggle must also be **On** per Instagram account.
+3. The Worker verifies the signature against both app secrets, logs a `webhook_events` row, routes on `entry.id` to an account, matches comment text against that account’s rules.
 4. On a match it sends **one** DM via Private Replies (`recipient.comment_id`, not the commenter’s user id) and optionally a public reply on the comment.
-5. Everything is logged. The operator manages accounts and rules in `/a/:secret`.
+5. A 5-minute cron polls recent comments on recent media (and rule-scoped media) and reuses the same send path. That covers missed webhooks and Development mode.
+6. Everything is logged. The operator manages accounts and rules in `/a/:secret`. Legal pages at `/privacy`, `/terms`, `/data-deletion` exist so Meta will allow Publish.
 
 Follow-up DMs are out of scope. They need the person to reply first (24h window) or App Review for the 7-day human-agent extension. One DM, everything in it.
 
@@ -39,7 +40,7 @@ Follow-up DMs are out of scope. They need the person to reply first (24h window)
 - **One private reply per comment, ever.** Meta rejects the second attempt. Dedupe anyway.
 - **At-least-once delivery.** Duplicate POSTs are normal. Dedupe is `INSERT … ON CONFLICT DO NOTHING` on `sent.comment_id`; if `meta.changes` is 0, stop. Claim a `pending` row first, then `UPDATE` the outcome. No SELECT-then-INSERT.
 - **Private reply only works for comments ≤ 7 days old.** Skip older; do not call Meta.
-- **Verify every POST** against `X-Hub-Signature-256` using the **raw body text**, before `JSON.parse`. Re-serializing breaks HMAC. 401 on mismatch.
+- **Verify every POST** against `X-Hub-Signature-256` using the **raw body text**, before `JSON.parse`. Re-serializing breaks HMAC. Accept either Facebook or Instagram app secret. 401 on mismatch; still insert a `webhook_events` row so Home is not silent.
 - **Long-lived tokens expire in 60 days.** Unrefreshed tokens die permanently. Refresh requires the token to be ≥ 24h old and not yet expired.
 - **~200 calls per account per hour.** No tight retry loops. 5xx and 429: exponential backoff, 3 attempts, jittered. Other 4xx: never retry; log the body verbatim.
 
@@ -48,8 +49,9 @@ Follow-up DMs are out of scope. They need the person to reply first (24h window)
 | Method | Path | Role |
 |---|---|---|
 | GET | `/` | `ok` — deploy smoke check |
+| GET | `/privacy`, `/terms`, `/data-deletion` | Static HTML for Meta Publish. |
 | GET | `/webhook` | Meta verify handshake. Right `hub.verify_token` → echo `hub.challenge`. Wrong → 403. |
-| POST | `/webhook` | Verify signature, return **200 immediately**, process in `waitUntil`. |
+| POST | `/webhook` | Verify signature (either secret), log event, return **200 immediately**, process in `waitUntil`. |
 | GET | `/connect` | Checklist: exact OAuth redirect URIs + Instagram App ID, then continue. `?reconnect=1` is passed through. |
 | GET | `/connect/start` | 302 to Instagram Business Login (`force_reauth` when `?reconnect=1`). |
 | GET | `/connect/callback` | Code → short-lived → long-lived token, fetch `user_id`/`username`, encrypt, **upsert** account. |
@@ -78,7 +80,7 @@ Unlisted, session-gated, used by `scripts/selftest.ts`:
 10. If `public_reply_text`, `POST /{comment-id}/replies`.
 11. `UPDATE sent` with both outcomes (`ok` / `failed` / `skipped`).
 
-## Token refresh (cron `0 3 * * *`)
+## Token refresh (cron `0 3 * * *`) and comment poll (cron `*/5 * * * *`)
 
 Cloudflare cron has **no retries**. A missed tick is gone until tomorrow.
 
@@ -90,6 +92,8 @@ Cloudflare cron has **no retries**. A missed tick is gone until tomorrow.
 6. On a clean run (whether or not there was work), write `last_cron_ok_at`. Admin banners if that is > 72h stale.
 
 Idempotent: running five times in a day is harmless.
+
+The 5-minute handler (`src/reconcile.ts`) lists a few recent media per active account, fetches newest comments, and calls `processComment` for keyword matches not already in `sent`. Caps: 3 media / account, 10 sends / sweep, 72-hour lookback. Free-plan CPU is tight; keep those caps.
 
 ## Admin auth
 
@@ -122,3 +126,5 @@ Live checks: handshake 200, wrong verify token 403, bad signature 401, synthetic
 - Unlisted selftest admin endpoints.
 - First-run password setup; there is no `ADMIN_PASSWORD` Worker secret.
 - OAuth `redirect_uri` is built from the request host (`/connect/callback`), HTTPS except localhost, not `PUBLIC_BASE_URL`. Accounts and `/connect` show that URI plus a trailing-slash variant for Meta’s dashboard. `/connect/start` sends the no-slash URI (same string as token exchange).
+- Optional `FACEBOOK_APP_SECRET` plus Instagram `META_APP_SECRET` for webhook HMAC.
+- `webhook_events` table and 5-minute comment poll.

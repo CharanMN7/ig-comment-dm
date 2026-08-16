@@ -27,18 +27,24 @@ Keep a notes file open. You will paste several secret values into it. Do not pos
 4. Give the app a name you will recognize, for example `Comment to DM`. Click **Create app**.
 5. On the app dashboard, find **Add products** (or **Add use case**) and add **Instagram**.
 6. Open **Instagram → API setup with Instagram login** (wording may be “Business login”).
-7. Stay in **Development** mode. Do not submit the app for review. You are the only person who will use it, and in development mode that is enough as long as your Instagram account is an admin or tester on this app.
+7. You will **Publish** this app later (section 5). Staying in Development is why live comments never arrive: Meta only delivers the dashboard **Test** button until the app is Live. Testers can usually go Live without App Review. Do not submit App Review unless strangers will connect their Instagram.
 
-### Copy two values
+### Copy three values
 
 Still under **Instagram → API setup with Instagram login → Business login settings**:
 
 - Copy **Instagram App ID** → save as `META_APP_ID`
 - Click **Show** next to **Instagram App Secret** → save as `META_APP_SECRET`
 
+Then open **App settings → Basic** (left sidebar):
+
+- Click **Show** next to **App secret** → save as `FACEBOOK_APP_SECRET`
+
 These are not your Instagram password. They identify this app to Instagram.
 
 The number at the **top** of the Meta dashboard is a different Facebook App ID. If you put that in `META_APP_ID`, Connect fails with **Invalid redirect_uri**.
+
+`META_APP_SECRET` and `FACEBOOK_APP_SECRET` are **two different secrets**. Comment notifications are often signed with the Facebook one. If only the Instagram secret is stored, Home stays empty even when Meta POSTs.
 
 Do **not** paste the token from **Generate access tokens** into Cloudflare. Connect already stores a token. That screen is for turning **Webhook subscription** on (see below).
 
@@ -47,7 +53,8 @@ Do **not** paste the token from **Generate access tokens** into Cloudflare. Conn
 | Secret | Where it comes from |
 |---|---|
 | `META_APP_ID` | Instagram → API setup with Instagram login → **3. Set up Instagram business login** → **Business login settings** → **Instagram App ID**. Not the id at the top of the dashboard. |
-| `META_APP_SECRET` | Same page → **Instagram App Secret** → Show. Not the App Secret under **App settings → Basic**. Not the Generate token. |
+| `META_APP_SECRET` | Same page → **Instagram App Secret** → Show. Not the Generate token. |
+| `FACEBOOK_APP_SECRET` | **App settings → Basic → App secret** → Show. Different from the Instagram App Secret. Required so live comment notifications are accepted. |
 | `WEBHOOK_VERIFY_TOKEN` | You make it: `openssl rand -hex 16`. Then type the **same** value into Meta’s webhook **Verify token** box. |
 | `TOKEN_ENCRYPTION_KEY` | You make it: `openssl rand -base64 32`. Never from Meta. |
 | `SESSION_SIGNING_KEY` | You make it: another `openssl rand -base64 32`. Never from Meta. |
@@ -95,6 +102,7 @@ Create the tables:
 
 ```bash
 npx wrangler d1 execute ig-comment-dm --remote --file=migrations/001_init.sql
+npx wrangler d1 execute ig-comment-dm --remote --file=migrations/002_webhook_events.sql
 ```
 
 ### Generate secrets
@@ -113,6 +121,7 @@ Put each secret into Cloudflare. Paste when prompted, then press Enter. Do this 
 ```bash
 npx wrangler secret put META_APP_ID
 npx wrangler secret put META_APP_SECRET
+npx wrangler secret put FACEBOOK_APP_SECRET
 npx wrangler secret put WEBHOOK_VERIFY_TOKEN
 npx wrangler secret put TOKEN_ENCRYPTION_KEY
 npx wrangler secret put ADMIN_URL_SECRET
@@ -223,11 +232,42 @@ The person who **comments** (a friend) does not need to be in this list. The acc
    - **Which posts:** leave on **All posts and reels**. That includes Reels. A reel ID is a long number (from the dropdown after you connect), not the share link `instagram.com/reel/…`.
 4. Go to **Test**. Paste a sample comment. Confirm the right rule lights up. This sends nothing to real people.
 
-Open **Home** once after connecting. In Meta, **Generate access tokens** → **Webhook subscription** must be **On** for each connected account. Then comment on your own post or reel from a **different** Instagram account (a friend’s phone is fine). The friend does **not** need to be an Instagram Tester. Your own comments on your own posts are ignored on purpose.
+Open **Home** once after connecting. In Meta, **Generate access tokens** → **Webhook subscription** must be **On** for each connected account.
 
-The private message lands in that other account’s Instagram **inbox**, or in **Message requests** if they do not follow you. Check **Home → Last 20 sends**: if that list stays empty, Instagram never told this program about the comment.
+Finish **section 5 (Publish)** before expecting a friend’s comment to fire instantly. Until the app is Live, Meta only delivers the webhook **Test** button. This program also checks recent comments every 5 minutes, so a real comment can still get a DM while you are waiting to Publish.
 
-In the Meta app, the webhook must be subscribed to **comments** with **Include values** on. Use **Test** next to that field — if that does not show up on Home either, the callback URL or verify token is wrong.
+Then comment on your own post or reel from a **different** Instagram account (a friend’s phone is fine). The friend does **not** need to be an Instagram Tester. Your own comments on your own posts are ignored on purpose.
+
+The private message lands in that other account’s Instagram **inbox**, or in **Message requests** if they do not follow you.
+
+On **Home**, look at two lists:
+
+- **Did Instagram reach us?** A row here means Meta POSTed. **Wrong secret** means add `FACEBOOK_APP_SECRET`. Empty while a friend already commented usually means the app is still in Development, or Hidden Words hid the comment.
+- **Last 20 sends** is the DM / skip / fail log.
+
+In the Meta app, the webhook must be subscribed to **comments** with **Include values** on. Use **Test** next to that field, then **Send to My Server** — clicking Test alone only previews the sample. That test should show up under **Did Instagram reach us?** immediately.
+
+Turn off Instagram **Hidden Words** / comment filters on the creator account while testing. Filtered comments never reach this program, even when everything else is correct.
+
+---
+
+## 5. Publish the Meta app (required for live comments)
+
+Real comment notifications are only delivered when the app is **Live**. Development mode is the usual reason “I set everything up and nothing happens.”
+
+1. After you deploy, these pages exist on your Worker:
+
+   ```
+   https://ig-comment-dm.YOURNAME.workers.dev/privacy
+   https://ig-comment-dm.YOURNAME.workers.dev/terms
+   https://ig-comment-dm.YOURNAME.workers.dev/data-deletion
+   ```
+
+2. In the Meta app, open **Publish** in the left sidebar. Paste those three URLs into privacy policy, terms of service, and data deletion.
+3. Click **Publish** so the app is Live.
+4. Keep your Instagram accounts as **Instagram Testers** and keep **Webhook subscription** On.
+
+You do **not** need App Review if only tester accounts connect. App Review is for other people’s Instagram accounts.
 
 ---
 
@@ -238,6 +278,7 @@ Copy `.dev.vars.example` to `.dev.vars` and fill in the same secrets. Use `PUBLI
 ```bash
 npm install
 npx wrangler d1 execute ig-comment-dm --local --file=migrations/001_init.sql
+npx wrangler d1 execute ig-comment-dm --local --file=migrations/002_webhook_events.sql
 npm run dev
 ```
 
@@ -277,6 +318,7 @@ ADMIN_URL_SECRET=... WEBHOOK_VERIFY_TOKEN=... META_APP_SECRET=... ADMIN_PASSWORD
 - **Your own comments are ignored.** Instagram notifies us when you comment on your own post. We drop those.
 - **Comments older than 7 days** cannot get a private reply. They are skipped.
 - **Instagram tokens last 60 days.** A job runs every night at 03:00 UTC to refresh them. If a token is not refreshed in time it dies permanently and you must click **Reconnect** (about 20 seconds). The home page turns red if that is needed, or if the nightly job has not run in 3 days.
+- **Missed comments.** A second job runs every 5 minutes and looks at recent comments on your posts, in case Instagram never sent a notification. There can be a delay of a few minutes.
 - **Forgot admin password:** the person with Cloudflare access can run:
 
   ```bash
@@ -291,6 +333,8 @@ ADMIN_URL_SECRET=... WEBHOOK_VERIFY_TOKEN=... META_APP_SECRET=... ADMIN_PASSWORD
 ## Schema note
 
 `accounts.needs_reconnect` is in `migrations/001_init.sql` even though it was not in the original column list. The nightly job sets it when a refresh fails and fewer than 14 days remain, and the home page uses it for the red banner.
+
+`webhook_events` is in `migrations/002_webhook_events.sql`. Home uses it to show whether Instagram POSTed, including failed signatures.
 
 ---
 

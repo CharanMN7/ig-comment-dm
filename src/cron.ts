@@ -6,7 +6,7 @@ import {
   encryptAesGcm,
   nowSeconds,
 } from './crypto.ts';
-import { accountsNeedingRefresh, flagNeedsReconnect, listAccounts, systemSet, updateAccountToken } from './db.ts';
+import { accountsNeedingRefresh, flagNeedsReconnect, listAccounts, pruneWebhookEvents, systemSet, updateAccountToken } from './db.ts';
 import { refreshLongLived, subscribeCommentWebhooks } from './meta.ts';
 import type { Env } from './types.ts';
 
@@ -16,7 +16,7 @@ export async function ensureCommentSubscriptions(env: Env): Promise<void> {
     if (account.active !== 1) continue;
     try {
       const token = await decryptAesGcm(env.TOKEN_ENCRYPTION_KEY, account.token_iv, account.access_token_enc);
-      const res = await subscribeCommentWebhooks(token);
+      const res = await subscribeCommentWebhooks(account.ig_user_id, token);
       if (!res.ok) console.error('subscribed_apps failed', account.ig_user_id, res.status, res.body);
     } catch (err) {
       console.error('subscribed_apps failed', account.ig_user_id, err instanceof Error ? err.message : err);
@@ -69,5 +69,10 @@ export async function runCron(env: Env): Promise<void> {
     }
   }
 
+  try {
+    await pruneWebhookEvents(env.DB, nowSeconds() - 7 * 24 * 60 * 60);
+  } catch (err) {
+    console.error('prune webhook_events failed', err instanceof Error ? err.message : err);
+  }
   await systemSet(env.DB, 'last_cron_ok_at', String(nowSeconds()));
 }

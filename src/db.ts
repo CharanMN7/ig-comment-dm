@@ -1,4 +1,4 @@
-import type { Account, Rule, Sent } from './types.ts';
+import type { Account, Rule, Sent, WebhookEvent } from './types.ts';
 
 export async function systemGet(db: D1Database, key: string): Promise<string | null> {
   const row = await db.prepare('SELECT value FROM system WHERE key = ?').bind(key).first<{ value: string | null }>();
@@ -284,6 +284,42 @@ export async function todayCounters(
     sends: row?.sends ?? 0,
     failures: row?.failures ?? 0,
   };
+}
+
+export async function insertWebhookEvent(
+  db: D1Database,
+  row: {
+    received_at: number;
+    status: string;
+    object: string | null;
+    preview: string | null;
+    error: string | null;
+  },
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO webhook_events (received_at, status, object, preview, error)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .bind(row.received_at, row.status, row.object, row.preview, row.error)
+    .run();
+}
+
+export async function recentWebhookEvents(db: D1Database, limit: number): Promise<WebhookEvent[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT id, received_at, status, object, preview, error
+       FROM webhook_events
+       ORDER BY received_at DESC, id DESC
+       LIMIT ?`,
+    )
+    .bind(limit)
+    .all<WebhookEvent>();
+  return results ?? [];
+}
+
+export async function pruneWebhookEvents(db: D1Database, olderThan: number): Promise<void> {
+  await db.prepare('DELETE FROM webhook_events WHERE received_at < ?').bind(olderThan).run();
 }
 
 export async function countSentByComment(db: D1Database, commentId: string): Promise<number> {

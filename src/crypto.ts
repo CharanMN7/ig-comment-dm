@@ -117,6 +117,27 @@ export async function verifyMetaSignature(
   return verifyHmacSha256Hex(appSecret, rawBody, match[1]);
 }
 
+/**
+ * Instagram Login apps sometimes sign with the Instagram App Secret, sometimes
+ * with the Facebook App Secret from App settings → Basic. Accept either.
+ */
+export async function verifyMetaSignatureAny(
+  secrets: Array<string | undefined | null>,
+  rawBody: string,
+  header: string | null | undefined,
+): Promise<boolean> {
+  const unique: string[] = [];
+  for (const secret of secrets) {
+    const trimmed = (secret ?? '').trim();
+    if (!trimmed || unique.includes(trimmed)) continue;
+    unique.push(trimmed);
+  }
+  for (const secret of unique) {
+    if (await verifyMetaSignature(secret, rawBody, header)) return true;
+  }
+  return false;
+}
+
 /** Used by selftest and session cookies — not by webhook verification. */
 export async function hmacSha256Hex(secret: string, payload: string): Promise<string> {
   const key = await crypto.subtle.importKey(

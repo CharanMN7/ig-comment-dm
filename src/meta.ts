@@ -63,13 +63,69 @@ export async function sendPrivateReply(
   return readResult(res);
 }
 
-/** Required after Connect. Dashboard field subscription is not enough for Instagram Login. */
-export async function subscribeCommentWebhooks(token: string): Promise<MetaCallResult> {
-  const url = new URL(`${GRAPH}/me/subscribed_apps`);
-  url.searchParams.set('subscribed_fields', 'comments');
-  url.searchParams.set('access_token', token);
-  const res = await fetchWithRetry(url.toString(), { method: 'POST' });
+/**
+ * Required after Connect. Dashboard field subscription is not enough for Instagram Login.
+ * POST JSON to /{ig-user-id}/subscribed_apps — `/me` + query-string is unreliable.
+ */
+export async function subscribeCommentWebhooks(igUserId: string, token: string): Promise<MetaCallResult> {
+  const url = `${GRAPH}/${encodeURIComponent(igUserId)}/subscribed_apps`;
+  const res = await fetchWithRetry(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ subscribed_fields: ['comments'] }),
+  });
   return readResult(res);
+}
+
+export type IgComment = {
+  id: string;
+  text: string;
+  timestamp?: string;
+  from?: { id?: string; username?: string };
+};
+
+/** One page of newest comments. Used by the 5-minute poll when webhooks miss. */
+export async function listMediaComments(token: string, mediaId: string): Promise<IgComment[]> {
+  const url = new URL(`${GRAPH}/${encodeURIComponent(mediaId)}/comments`);
+  url.searchParams.set('fields', 'id,text,timestamp,from');
+  url.searchParams.set('order', 'reverse_chronological');
+  url.searchParams.set('limit', '25');
+  const res = await fetchWithRetry(url.toString(), {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const text = await res.text();
+  let json: {
+    data?: Array<{
+      id?: string | number;
+      text?: string;
+      timestamp?: string;
+      from?: { id?: string | number; username?: string };
+    }>;
+    error?: { message?: string };
+  };
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error(text || `could not list comments (${res.status})`);
+  }
+  if (!res.ok) throw new Error(json.error?.message || text || 'could not list comments');
+  const items: IgComment[] = [];
+  for (const row of json.data ?? []) {
+    if (row.id == null) continue;
+    items.push({
+      id: String(row.id),
+      text: row.text ?? '',
+      timestamp: row.timestamp,
+      from: row.from
+        ? { id: row.from.id != null ? String(row.from.id) : undefined, username: row.from.username }
+        : undefined,
+    });
+  }
+  return items;
 }
 
 export async function sendPublicReply(commentId: string, token: string, message: string): Promise<MetaCallResult> {

@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "wrangler dev --port 8787",
     "deploy": "wrangler deploy",
-    "db:migrate:local": "wrangler d1 execute ig-comment-dm --local --file=migrations/001_init.sql",
-    "db:migrate": "wrangler d1 execute ig-comment-dm --remote --file=migrations/001_init.sql",
+    "db:migrate:local": "wrangler d1 execute ig-comment-dm --local --file=migrations/001_init.sql && wrangler d1 execute ig-comment-dm --local --file=migrations/002_webhook_events.sql",
+    "db:migrate": "wrangler d1 execute ig-comment-dm --remote --file=migrations/001_init.sql && wrangler d1 execute ig-comment-dm --remote --file=migrations/002_webhook_events.sql",
     "test": "node --experimental-strip-types --test scripts/test-unit.ts",
     "selftest": "node --experimental-strip-types scripts/selftest.ts"
   },

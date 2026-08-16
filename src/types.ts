@@ -2,11 +2,22 @@ export type Env = {
   DB: D1Database;
   META_APP_ID: string;
   META_APP_SECRET: string;
+  /** Facebook App Secret from App settings → Basic. Meta often HMAC-signs webhooks with this, not the Instagram secret. */
+  FACEBOOK_APP_SECRET?: string;
   WEBHOOK_VERIFY_TOKEN: string;
   TOKEN_ENCRYPTION_KEY: string;
   ADMIN_URL_SECRET: string;
   SESSION_SIGNING_KEY: string;
   PUBLIC_BASE_URL: string;
+};
+
+export type WebhookEvent = {
+  id: number;
+  received_at: number;
+  status: string;
+  object: string | null;
+  preview: string | null;
+  error: string | null;
 };
 
 export type Account = {
