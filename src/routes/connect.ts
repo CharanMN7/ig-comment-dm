@@ -7,7 +7,7 @@ import {
   exchangeCodeForShortLived,
   exchangeLongLived,
   fetchMe,
-  redirectUri,
+  oauthRedirectUri,
 } from '../meta.ts';
 import { makeOauthState, verifyOauthState } from '../session.ts';
 import type { Env } from '../types.ts';
@@ -16,10 +16,11 @@ import { layout, pageError } from '../html.ts';
 export const connectRoutes = new Hono<{ Bindings: Env }>();
 
 connectRoutes.get('/', async (c) => {
+  const redir = oauthRedirectUri(c.req.url, c.env.PUBLIC_BASE_URL);
   const state = await makeOauthState(c.env.SESSION_SIGNING_KEY);
   const url = authorizeUrl({
     clientId: c.env.META_APP_ID,
-    redirectUri: redirectUri(c.env.PUBLIC_BASE_URL),
+    redirectUri: redir,
     state,
     forceReauth: c.req.query('reconnect') === '1',
   });
@@ -56,7 +57,7 @@ connectRoutes.get('/callback', async (c) => {
   }
 
   try {
-    const redir = redirectUri(c.env.PUBLIC_BASE_URL);
+    const redir = oauthRedirectUri(c.req.url, c.env.PUBLIC_BASE_URL);
     const shortLived = await exchangeCodeForShortLived({
       clientId: c.env.META_APP_ID,
       clientSecret: c.env.META_APP_SECRET,

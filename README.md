@@ -104,7 +104,7 @@ npx wrangler secret put SESSION_SIGNING_KEY
 npx wrangler secret put PUBLIC_BASE_URL
 ```
 
-For `PUBLIC_BASE_URL`, you do not have the live URL yet. Use a placeholder like `https://example.com` for now, deploy once, then set it to the real URL and deploy again.
+For `PUBLIC_BASE_URL`, you do not have the live URL yet. Use a placeholder like `https://example.com` for now, deploy once, then set it to the real URL and deploy again. Connect no longer uses this secret for the Instagram return address (it uses the host you actually opened), but cookies still look at it.
 
 ```bash
 npx wrangler deploy
@@ -144,13 +144,15 @@ Back in the Meta app dashboard.
 
 **Instagram → API setup with Instagram login → Business login settings → OAuth redirect URIs**
 
-Click **Add** (or paste into the list) **exactly**:
+Paste **exactly** the address shown on the admin **Accounts** page (it looks like this, with *your* Worker name):
 
 ```
 https://ig-comment-dm.YOURNAME.workers.dev/connect/callback
 ```
 
-No extra slash at the end. Click **Save**.
+Character-for-character. No extra slash at the end. If the dashboard adds a slash when you save, add a **second** line that is the same URL *without* that slash. Click **Save**.
+
+Connect sends that same address to Instagram. If Meta still has `example.com` or a different host, you get **Invalid redirect_uri**. After you first deploy, copy the URL from Accounts — do not guess.
 
 ### Webhook (the comment notifications)
 
