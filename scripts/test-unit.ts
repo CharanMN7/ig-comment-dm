@@ -57,6 +57,11 @@ describe('normalizeCommentText', () => {
   it('lowercases, strips emoji and punctuation, collapses whitespace', () => {
     assert.equal(normalizeCommentText('  Guide PLEASE!!! 🙌  '), 'guide please');
   });
+
+  it('folds Latin diacritics but preserves non-Latin combining marks', () => {
+    assert.equal(normalizeCommentText('PREÇO café über'), 'preco cafe uber');
+    assert.equal(normalizeCommentText('й が क़ ไทย'), 'й が क़ ไทย');
+  });
 });
 
 describe('keyword matching', () => {
