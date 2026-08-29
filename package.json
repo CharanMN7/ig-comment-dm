@@ -3,6 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "setup": "node --experimental-strip-types scripts/setup.ts",
+    "doctor": "node --experimental-strip-types scripts/doctor.ts",
     "dev": "wrangler dev --port 8787",
     "deploy": "wrangler deploy",
     "db:migrate:local": "wrangler d1 execute ig-comment-dm --local --file=migrations/001_init.sql && wrangler d1 execute ig-comment-dm --local --file=migrations/002_webhook_events.sql",
