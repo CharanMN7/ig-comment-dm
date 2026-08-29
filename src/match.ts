@@ -1,7 +1,32 @@
 import type { Rule } from './types.ts';
 
+/**
+ * Drop diacritics from Latin letters only, leaving every other script alone.
+ *
+ * A blanket `NFD` + strip-every-`\p{Diacritic}` corrupts more than it fixes:
+ * Cyrillic `й` becomes `и` and Japanese `が` becomes `か` — different letters,
+ * not accented ones — while in Devanagari, Thai and Arabic the combining marks
+ * are load-bearing vowels rather than decoration.
+ *
+ * So the mark is only dropped when the base character it attaches to is a
+ * Basic Latin letter. `NFD` puts that base immediately before the mark, which
+ * is what makes the test a single lookbehind.
+ */
+function foldLatinDiacritics(text: string): string {
+  return (
+    text
+      .normalize('NFD')
+      .replace(/(?<=[A-Za-z])\p{Diacritic}/gu, '')
+      // Back to composed form, so what leaves here is canonical rather than
+      // half-decomposed. Matching would work either way — both sides run
+      // through this — but the untouched scripts should come out exactly as
+      // they went in.
+      .normalize('NFC')
+  );
+}
+
 export function normalizeCommentText(text: string): string {
-  return text
+  return foldLatinDiacritics(text)
     .toLowerCase()
     .replace(/\p{Extended_Pictographic}/gu, ' ')
     .replace(/[\uFE0F\u200D]/g, ' ')

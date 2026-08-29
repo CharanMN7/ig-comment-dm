@@ -80,6 +80,49 @@ describe('keyword matching', () => {
   });
 });
 
+describe('Latin diacritic folding', () => {
+  // A creator writing a `preco` rule and testing it with their own accented
+  // comment used to conclude the tool was broken.
+  const shouldMatch: Array<[string, string]> = [
+    ['preco', 'qual o PREÇO?'],
+    ['preco', 'qual o preço'],
+    ['preco', 'QUAL O PRECO'],
+    ['preço', 'qual o preco'],
+    ['cafe', 'vamos ao café'],
+    ['uber', 'über alles'],
+    ['nino', 'el niño'],
+    ['istanbul', 'İstanbul please'],
+  ];
+
+  for (const [keyword, comment] of shouldMatch) {
+    it(`matches ${JSON.stringify(keyword)} in ${JSON.stringify(comment)}`, () => {
+      assert.equal(keywordMatches(normalizeCommentText(comment), keyword), true);
+    });
+  }
+
+  it('does not fold a Cyrillic breve — й is a different letter from и', () => {
+    assert.notEqual(normalizeCommentText('й'), normalizeCommentText('и'));
+    assert.equal(keywordMatches(normalizeCommentText('и'), 'й'), false);
+  });
+
+  it('does not fold a Japanese dakuten — が is a different kana from か', () => {
+    assert.notEqual(normalizeCommentText('が'), normalizeCommentText('か'));
+    assert.equal(keywordMatches(normalizeCommentText('か'), 'が'), false);
+  });
+
+  it('leaves scripts whose marks are load-bearing exactly as they were', () => {
+    // Devanagari, Thai and Arabic vowel marks are letters, not decoration.
+    for (const text of ['नमस्ते', 'สวัสดี', 'العربية', 'й', 'が', '한국어']) {
+      assert.equal(normalizeCommentText(text), text.toLowerCase());
+    }
+  });
+
+  it('still refuses an unrelated word that shares a folded prefix', () => {
+    // Folding widens what counts as equal, not what counts as a boundary.
+    assert.equal(keywordMatches(normalizeCommentText('cafeteria aqui'), 'cafe'), false);
+  });
+});
+
 describe('findMatchingRule', () => {
   const global = rule({ id: 1, label: 'global', keywords: JSON.stringify(['guide']), dm_text: 'global-dm' });
   const scoped = rule({
