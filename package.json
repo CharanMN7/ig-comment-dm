@@ -1,6 +1,5 @@
 {
   "name": "ig-comment-dm",
-  "private": true,
   "version": "1.0.0",
   "type": "module",
   "scripts": {
@@ -9,7 +8,9 @@
     "db:migrate:local": "wrangler d1 execute ig-comment-dm --local --file=migrations/001_init.sql && wrangler d1 execute ig-comment-dm --local --file=migrations/002_webhook_events.sql",
     "db:migrate": "wrangler d1 execute ig-comment-dm --remote --file=migrations/001_init.sql && wrangler d1 execute ig-comment-dm --remote --file=migrations/002_webhook_events.sql",
     "test": "node --experimental-strip-types --test scripts/test-unit.ts",
-    "selftest": "node --experimental-strip-types scripts/selftest.ts"
+    "typecheck": "tsc --noEmit",
+    "selftest": "node --experimental-strip-types scripts/selftest.ts",
+    "keys": "node --experimental-strip-types scripts/keys.ts"
   },
   "dependencies": {
     "hono": "^4.9.2"
@@ -18,5 +19,18 @@
     "@cloudflare/workers-types": "^5.20260811.1",
     "typescript": "^5.9.2",
     "wrangler": "^4.28.0"
+  },
+  "description": "Self-hosted Instagram comment-to-DM automation on a single Cloudflare Worker.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CharanMN7/ig-comment-dm.git"
+  },
+  "bugs": {
+    "url": "https://github.com/CharanMN7/ig-comment-dm/issues"
+  },
+  "homepage": "https://github.com/CharanMN7/ig-comment-dm#readme",
+  "engines": {
+    "node": ">=20"
   }
 }

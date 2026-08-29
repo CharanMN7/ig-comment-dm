@@ -1,0 +1,85 @@
+name: Bug report
+description: Something behaves differently than the README says it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste your admin URL, an access token, or the contents of `.dev.vars`.**
+        Redact the `/a/…` secret as `/a/REDACTED` in anything you copy here.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you expect, and what happened instead?
+      placeholder: |
+        I commented "guide" from a second account on my own reel.
+        I expected a DM. Nothing arrived and the Sends list stayed empty.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Where it breaks
+      options:
+        - Setup — deploying the Worker
+        - Setup — the Meta app dashboard
+        - Connect — the Instagram OAuth flow
+        - Rules — creating or matching a rule
+        - Delivery — the DM or the public reply
+        - The 5-minute poll or the nightly token refresh
+        - The admin panel itself
+        - Somewhere else
+    validations:
+      required: true
+
+  - type: textarea
+    id: home
+    attributes:
+      label: What the Home page shows
+      description: >
+        Copy the "Did Instagram reach us?" rows and the "Last 20 sends" rows for
+        the attempt that failed. Redact usernames if you want to.
+      render: text
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Worker logs
+      description: >
+        Run `npx wrangler tail` in one terminal, reproduce the problem, and paste
+        what appears. Check it for secrets before pasting.
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: Commit you are running
+      description: "`git rev-parse --short HEAD`"
+      placeholder: 5190bbe
+
+  - type: checkboxes
+    id: prechecks
+    attributes:
+      label: Things the README says to check first
+      description: These account for most reports. Tick what you have confirmed.
+      options:
+        - label: The Meta app is **Live**, not in Development
+        - label: "**Webhook subscription** is On for this account under Generate access tokens"
+        - label: The webhook is subscribed to **comments** with Include values on
+        - label: The commenting account is not the same account that owns the post
+        - label: Instagram **Hidden Words** / comment filters are off on the creator account
+        - label: The comment is less than 7 days old

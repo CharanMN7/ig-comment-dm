@@ -1,8 +1,43 @@
+# Local development secrets. Copy to `.dev.vars` and fill in.
+# `.dev.vars` is gitignored and must stay that way — see SECURITY.md.
+#
+# Run `npm run keys` to generate the four values marked "you generate".
+# For a real deploy these go into Cloudflare instead:
+#   npx wrangler secret put <NAME>
+
+# --- From the Meta dashboard ---------------------------------------------
+# Instagram → API setup with Instagram login → Business login settings.
+# NOT the app id printed at the top of the dashboard — that one fails with
+# "Invalid redirect_uri".
 META_APP_ID=
+
+# Same page → Instagram App Secret → Show.
 META_APP_SECRET=
+
+# App settings → Basic → App secret → Show. A *different* value to the one
+# above. Meta signs live comment webhooks with this one, so without it the
+# webhook is rejected as "Wrong secret" and no DM is ever sent.
 FACEBOOK_APP_SECRET=
+
+# --- You generate these ---------------------------------------------------
+# `openssl rand -hex 16`, or `npm run keys`.
+# Type this same value into Meta's webhook "Verify token" box.
 WEBHOOK_VERIFY_TOKEN=
+
+# `openssl rand -base64 32`, or `npm run keys`. Must decode to exactly 32 bytes.
+# Encrypts Instagram access tokens at rest (AES-256-GCM).
+# Lose it and every account has to reconnect. Leak it and every token is exposed.
 TOKEN_ENCRYPTION_KEY=
-ADMIN_URL_SECRET=
+
+# `openssl rand -base64 32`, or `npm run keys`. Must decode to exactly 32 bytes.
+# Signs admin session cookies. Generate a second time — do not reuse the key above.
 SESSION_SIGNING_KEY=
+
+# `openssl rand -hex 16`, or `npm run keys`.
+# The admin panel lives at /a/<this value>. Everything else 404s.
+ADMIN_URL_SECRET=
+
+# --- Your deployment ------------------------------------------------------
+# No trailing slash. In production this is your Worker URL,
+# e.g. https://ig-comment-dm.YOURNAME.workers.dev
 PUBLIC_BASE_URL=http://localhost:8787

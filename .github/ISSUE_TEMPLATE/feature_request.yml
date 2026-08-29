@@ -1,0 +1,54 @@
+name: Feature request
+description: Something this should do and does not.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [roadmap](https://github.com/CharanMN7/ig-comment-dm#roadmap) first —
+        it may already be planned, in which case add your use case to that issue instead.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that you cannot do today?
+      placeholder: >
+        I run three product launches at once and I cannot tell which keyword is
+        actually converting, because every send looks the same in the log.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would build
+      description: Rough is fine. A screenshot of another tool doing it is fine too.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Automation — triggers, keywords, DM content
+        - Analytics — metrics and reporting
+        - Instagram / Meta API coverage
+        - Admin panel and UX
+        - Setup and deployment
+        - Reliability and infrastructure
+        - Documentation
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Does it fit the project?
+      description: See [CONTRIBUTING.md](../blob/master/CONTRIBUTING.md#deciding-what-belongs-here).
+      options:
+        - label: It works on Cloudflare's free tier
+        - label: It does not require a database other than D1
+        - label: It does not turn this into a hosted, multi-tenant service
+        - label: I would be willing to help build it

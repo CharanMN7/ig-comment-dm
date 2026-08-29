@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Worker builds and starts
+        run: npx wrangler deploy --dry-run --outdir /tmp/worker-build
+        env:
+          CLOUDFLARE_API_TOKEN: ""
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: No secrets file committed
+        run: |
+          if git ls-files --error-unmatch .dev.vars >/dev/null 2>&1; then
+            echo "::error file=.dev.vars::.dev.vars is committed. Remove it and rotate every value in it."
+            exit 1
+          fi
+          echo "No .dev.vars in the index."
+
+      - name: No real D1 database id committed
+        run: |
+          if grep -qE '^\s*database_id\s*=\s*"[0-9a-f]{8}-[0-9a-f]{4}' wrangler.toml; then
+            echo "::error file=wrangler.toml::A real database_id is committed. Restore the placeholder."
+            exit 1
+          fi
+          echo "wrangler.toml still has the placeholder database_id."

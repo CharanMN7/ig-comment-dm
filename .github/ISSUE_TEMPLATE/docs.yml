@@ -1,0 +1,35 @@
+name: Documentation problem
+description: The instructions were wrong, missing, or led you somewhere bad.
+labels: [documentation]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Setup for this project runs through Meta's developer dashboard, and Meta
+        renames and moves things without notice. If a step no longer matches what
+        you see, that is a real bug in this repository, not your mistake.
+
+  - type: input
+    id: where
+    attributes:
+      label: Which page and section
+      placeholder: "README.md — section 3, Webhook (the comment notifications)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: says
+    attributes:
+      label: What the docs say
+      validations:
+        required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What you actually saw
+      description: >
+        If Meta's dashboard now calls a button something else, say the exact new
+        wording. A screenshot with your app id cropped out helps a lot.
+    validations:
+      required: true

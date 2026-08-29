@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/CharanMN7/ig-comment-dm/security/advisories/new
+    about: Report privately. Never in a public issue.
+  - name: Question or idea
+    url: https://github.com/CharanMN7/ig-comment-dm/discussions
+    about: Ask how something works, or float a feature before building it.
