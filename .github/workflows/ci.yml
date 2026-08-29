@@ -41,6 +41,11 @@ jobs:
   secrets:
     name: Secret scan
     runs-on: ubuntu-latest
+    # gitleaks-action reads the PR's commit list through the API, which the
+    # top-level `contents: read` alone does not allow.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
