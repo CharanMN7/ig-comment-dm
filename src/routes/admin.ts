@@ -33,6 +33,7 @@ import { findConfigProblems } from '../config.ts';
 import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
 import { KEYWORD_TOO_SHORT_MESSAGE, findMatchingRule, parseKeywords } from '../match.ts';
 import { listRecentMedia, oauthRedirectUri } from '../meta.ts';
+import { worstCaseLength } from '../placeholders.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
 import {
   clearFailures,
@@ -586,9 +587,20 @@ function ruleForm(opts: {
         oninput="this.nextElementSibling.textContent=this.value.length+'/1,000 characters'"
       >${v.dm_text}</textarea>
       <p class="muted">${String(dmLen)}/1,000 characters</p>
+      <p class="muted">
+        Write <code>{username}</code> and it becomes the commenter’s Instagram name, with no
+        <code>@</code>. <code>Hey {username}, here’s the guide</code> reaches Sarah as
+        <em>Hey sarah, here’s the guide</em>. If Instagram does not tell us who commented, the
+        token disappears and the message reads <em>Hey, here’s the guide</em> — never
+        <em>Hey undefined</em>.
+      </p>
+      <p class="muted">
+        <code>{link}</code> is reserved for a rule’s tracked link and is empty until that
+        exists. Any other braces, like <code>{foo}</code>, are left exactly as you typed them.
+      </p>
       <label for="public_reply_text">Public reply under the comment (optional)</label>
       <textarea id="public_reply_text" name="public_reply_text">${v.public_reply_text}</textarea>
-      <p class="muted">Leave blank to only send the private message, with no public reply.</p>
+      <p class="muted">Leave blank to only send the private message, with no public reply. The same tokens work here.</p>
       <div class="row"><button type="submit">Save rule</button></div>
     </form>
   `;
@@ -703,7 +715,16 @@ function readRuleFields(form: Record<string, string>) {
   if (!ig) return { error: 'Pick an Instagram account.' };
   if (!parsed.ok) return { error: parsed.error };
   if (!dm) return { error: 'Write the private message to send.' };
-  if (dm.length > DM_TEXT_MAX) return { error: 'The private message must be 1,000 characters or fewer.' };
+  // Against the worst case, not the written length: the values do not exist
+  // until a send, and a 30-character username expanding into a message already
+  // at the limit would be rejected by Instagram rather than here.
+  if (worstCaseLength(dm) > DM_TEXT_MAX) {
+    return {
+      error: dm.includes('{username}')
+        ? 'The private message could exceed 1,000 characters once {username} is filled in. Shorten it.'
+        : 'The private message must be 1,000 characters or fewer.',
+    };
+  }
   if (media && looksLikePostUrl(media)) {
     return {
       error:

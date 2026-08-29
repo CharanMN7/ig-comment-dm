@@ -12,6 +12,7 @@ import {
 import { isSelfComment } from './guard.ts';
 import { findMatchingRule } from './match.ts';
 import { sendPrivateReply, sendPublicReply } from './meta.ts';
+import { substitutePlaceholders } from './placeholders.ts';
 import type { Env } from './types.ts';
 
 type CommentValue = {
@@ -164,13 +165,20 @@ export async function processComment(
     return;
   }
 
-  const dm = await sendPrivateReply(account.ig_user_id, token, commentId, rule.dm_text);
+  // The commenter's username rides on the webhook payload, so `{username}`
+  // costs no extra Graph call. `{link}` has no source yet -- there is no
+  // tracked-link feature -- so it degrades to empty, which is the same path a
+  // commenter with no username takes.
+  const values = { username: value.from?.username ?? null };
+
+  const dmText = substitutePlaceholders(rule.dm_text, values);
+  const dm = await sendPrivateReply(account.ig_user_id, token, commentId, dmText);
   let replyStatus: string | null = null;
   const errors: string[] = [];
 
   if (!dm.ok) errors.push(`DM: ${dm.body}`);
 
-  const publicText = rule.public_reply_text?.trim();
+  const publicText = substitutePlaceholders(rule.public_reply_text ?? '', values);
   if (publicText) {
     const reply = await sendPublicReply(commentId, token, publicText);
     replyStatus = reply.ok ? 'ok' : 'failed';
