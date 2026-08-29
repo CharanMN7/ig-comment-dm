@@ -1,6 +1,24 @@
-node_modules/
-.wrangler/
+# Secrets — never commit these. See SECURITY.md.
 .dev.vars
+.dev.vars.*
+!.dev.vars.example
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Wrangler
+.wrangler/
+wrangler.local.toml
+
+# Build output
+node_modules/
 dist/
+/tmp-worker-build/
+
+# Noise
 *.log
 .DS_Store
+.idea/
+.vscode/
