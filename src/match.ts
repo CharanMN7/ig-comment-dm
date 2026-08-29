@@ -25,10 +25,51 @@ export function parseKeywords(raw: string): string[] {
   }
 }
 
+/**
+ * A character that would make the keyword part of a longer word: any Unicode
+ * letter or digit.
+ *
+ * This replaces `\b`, which JavaScript defines as a boundary against
+ * `[A-Za-z0-9_]` and does **not** widen under the `u` flag. For a keyword in
+ * any non-Latin script both sides of the boundary are non-ASCII, so `\b` never
+ * asserted and the match failed silently.
+ */
+/**
+ * Scripts written without spaces between words.
+ *
+ * A word boundary is not merely a weaker signal in these scripts — it does not
+ * exist. `指南` inside `请发指南给我` is a normal, correct occurrence with a
+ * letter hard against it on both sides, so requiring a boundary there rejects
+ * every real comment. A character from one of these scripts therefore does not
+ * count as swallowing the keyword into a longer word.
+ *
+ * The consequence is deliberate and worth stating: a Japanese keyword `ガイド`
+ * also matches inside `ガイドライン`. That is the same trade-off
+ * `KEYWORD_TOO_SHORT_MESSAGE` already warns about for short Latin keywords, and
+ * the alternative — matching nothing at all — is the bug being fixed.
+ */
+const SEPARATORLESS_CLASS =
+  '[\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Thai}' +
+  '\\p{Script=Lao}\\p{Script=Khmer}\\p{Script=Myanmar}]';
+
+/**
+ * What may sit against the keyword without swallowing it into a longer word:
+ * the start or end of the text, a non-word character, or a character from a
+ * script that does not separate its words.
+ *
+ * Expressed as an allowlist rather than as a negated `[\p{L}\p{N}]` because the
+ * exclusion needs set subtraction, and the `v` flag that provides it is newer
+ * than the runtimes this has to work on.
+ */
+const BOUNDARY_BEFORE = `(?<=^|[^\\p{L}\\p{N}]|${SEPARATORLESS_CLASS})`;
+const BOUNDARY_AFTER = `(?=$|[^\\p{L}\\p{N}]|${SEPARATORLESS_CLASS})`;
+
 export function keywordMatches(normalizedComment: string, keyword: string): boolean {
   const k = normalizeCommentText(keyword);
   if (!k) return false;
-  const re = new RegExp(`\\b${escapeRegex(k)}\\b`, 'u');
+  // Lookaround rather than `\b`, so the boundary is decided by the Unicode
+  // properties of the neighbouring characters instead of by the ASCII range.
+  const re = new RegExp(`${BOUNDARY_BEFORE}${escapeRegex(k)}${BOUNDARY_AFTER}`, 'u');
   return re.test(normalizedComment);
 }
 
