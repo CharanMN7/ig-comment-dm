@@ -1,343 +1,421 @@
-# Comment to DM
+<div align="center">
 
-A small program that lives on Cloudflare. When someone comments on your Instagram post with a keyword you chose, it sends them **one private message** (and, if you want, a public reply under the comment).
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:833AB4,50:FD1D1D,100:FCB045&height=190&section=header&text=Comment%20to%20DM&fontSize=58&fontColor=ffffff&fontAlignY=34&desc=Instagram%20comment%20automation%20you%20actually%20own&descAlignY=54&descSize=17&animation=fadeIn" alt="Comment to DM" width="100%" />
 
-You do not need to know how to code. Someone sets this up once. After that you only use the website.
+<p>
+  <a href="#quick-start"><img src="https://img.shields.io/badge/deploy_in-6_minutes-FD1D1D?style=for-the-badge&labelColor=1a1a1a" alt="Deploy in 6 minutes" /></a>
+  <a href="#roadmap"><img src="https://img.shields.io/badge/roadmap-30%2B_planned-833AB4?style=for-the-badge&labelColor=1a1a1a" alt="Roadmap" /></a>
+  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-FCB045?style=for-the-badge&labelColor=1a1a1a" alt="PRs welcome" /></a>
+</p>
 
-This is **one copy per person**. Your Instagram, your Cloudflare account, your password. There is no signup and no shared dashboard with other people.
+<p>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/CharanMN7/ig-comment-dm?style=flat-square&color=blue" alt="MIT License" /></a>
+  <a href="https://github.com/CharanMN7/ig-comment-dm/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/CharanMN7/ig-comment-dm/ci.yml?branch=master&style=flat-square&label=CI" alt="CI" /></a>
+  <a href="https://github.com/CharanMN7/ig-comment-dm/stargazers"><img src="https://img.shields.io/github/stars/CharanMN7/ig-comment-dm?style=flat-square&color=FCB045" alt="Stars" /></a>
+  <a href="https://github.com/CharanMN7/ig-comment-dm/issues"><img src="https://img.shields.io/github/issues/CharanMN7/ig-comment-dm?style=flat-square" alt="Issues" /></a>
+  <img src="https://img.shields.io/badge/Cloudflare-Workers-F38020?style=flat-square&logo=cloudflare&logoColor=white" alt="Cloudflare Workers" />
+  <img src="https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/runtime_deps-1-brightgreen?style=flat-square" alt="One runtime dependency" />
+  <img src="https://img.shields.io/badge/cost-%240%2Fmonth-brightgreen?style=flat-square" alt="Free tier" />
+</p>
+
+<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=21&duration=3200&pause=900&color=FD1D1D&center=true&vCenter=true&width=620&lines=Someone+comments+%22guide%22+on+your+reel.;They+get+a+DM.+In+about+two+seconds.;No+monthly+fee.+No+one+else%27s+server." alt="Someone comments. They get a DM." />
+
+<br />
+
+**[Quick start](#quick-start) · [How it works](#how-it-works) · [User guide](#user-guide) · [Roadmap](#roadmap) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)**
+
+</div>
 
 ---
 
-## What you need before starting
+Someone comments **"guide"** on your reel. They get a DM with your link, automatically, about two seconds later.
 
-- A computer and about 45 minutes.
-- An Instagram **professional** account (Creator or Business). A personal account will not work. In the Instagram app: Settings → Account type and tools → Switch to professional account.
-- A free [Cloudflare](https://dash.cloudflare.com/sign-up) account.
-- A free [Meta for Developers](https://developers.facebook.com/) account, signed in with the Facebook login that can manage that Instagram account.
+That is the entire product. Tools that do this start around **$15/month** and want your Instagram login on their servers. This is the same thing, running on **your** Cloudflare account, on the free tier, for **$0** — and you can read all 4,400 lines of it in an afternoon.
 
-Keep a notes file open. You will paste several secret values into it. Do not post those values anywhere public.
+<div align="center">
+
+<a href="https://deploy.workers.cloudflare.com/?url=https://github.com/CharanMN7/ig-comment-dm"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare Workers" height="34" /></a>
+&nbsp;&nbsp;
+<a href="#quick-start"><img src="https://img.shields.io/badge/or_use_the_CLI-npm_run_setup-1a1a1a?style=for-the-badge&logo=npm" alt="npm run setup" height="34" /></a>
+
+</div>
 
 ---
 
-## 1. Create the Meta app (Instagram’s side)
+## Why this exists
 
-1. Open [https://developers.facebook.com/apps/](https://developers.facebook.com/apps/).
-2. Click **Create app**.
-3. If it asks for a use case, pick **Other**, then continue. If it asks for an app type, pick **Business**.
-4. Give the app a name you will recognize, for example `Comment to DM`. Click **Create app**.
-5. On the app dashboard, find **Add products** (or **Add use case**) and add **Instagram**.
-6. Open **Instagram → API setup with Instagram login** (wording may be “Business login”).
-7. You will **Publish** this app later (section 5). Staying in Development is why live comments never arrive: Meta only delivers the dashboard **Test** button until the app is Live. Testers can usually go Live without App Review. Do not submit App Review unless strangers will connect their Instagram.
+<table>
+<tr>
+<th width="34%">&nbsp;</th>
+<th width="33%">Hosted tools</th>
+<th width="33%">Comment to DM</th>
+</tr>
+<tr>
+<td><b>Cost</b></td>
+<td>$15–99 / month, forever</td>
+<td><b>$0.</b> Cloudflare's free tier covers 100,000 requests a day.</td>
+</tr>
+<tr>
+<td><b>Your Instagram token</b></td>
+<td>On their servers, alongside everyone else's</td>
+<td><b>In your Cloudflare account</b>, encrypted with AES-256-GCM using a key only you hold</td>
+</tr>
+<tr>
+<td><b>Your audience's DMs</b></td>
+<td>Pass through a third party</td>
+<td>Go straight from your Worker to Meta</td>
+</tr>
+<tr>
+<td><b>If they shut down</b></td>
+<td>You lose the automation</td>
+<td>Nothing changes. It is your Worker.</td>
+</tr>
+<tr>
+<td><b>Rate limits</b></td>
+<td>Whatever plan you bought</td>
+<td>Meta's actual limits</td>
+</tr>
+<tr>
+<td><b>Reading the code</b></td>
+<td>No</td>
+<td>4,400 lines. One dependency. No build step.</td>
+</tr>
+</table>
 
-### Copy three values
+It uses Meta's official Graph API through Instagram Login. No scraping, no browser automation, and it never sees your Instagram password.
 
-Still under **Instagram → API setup with Instagram login → Business login settings**:
+---
 
-- Copy **Instagram App ID** → save as `META_APP_ID`
-- Click **Show** next to **Instagram App Secret** → save as `META_APP_SECRET`
+## How it works
 
-Then open **App settings → Basic** (left sidebar):
+```mermaid
+flowchart LR
+    A["💬 Someone comments<br/>&quot;guide&quot;"] --> B{{"Meta webhook<br/><i>HMAC signed</i>"}}
+    B --> C["⚡ Your Cloudflare Worker"]
+    C --> D{"Is it you?"}
+    D -->|yes| X["🚫 ignored"]
+    D -->|no| E{"Already handled?"}
+    E -->|yes| X
+    E -->|no| F{"Matches a<br/>keyword rule?"}
+    F -->|no| Y["📝 logged as skipped"]
+    F -->|yes| G["📨 One private DM"]
+    G --> H["💭 Optional public reply"]
 
-- Click **Show** next to **App secret** → save as `FACEBOOK_APP_SECRET`
+    P["⏱ Every 5 minutes"] -.->|"catches what the<br/>webhook missed"| C
+    N["🌙 Nightly 03:00 UTC"] -.->|"refreshes the<br/>60-day token"| C
 
-These are not your Instagram password. They identify this app to Instagram.
+    style A fill:#FD1D1D,stroke:#833AB4,color:#fff
+    style C fill:#F38020,stroke:#833AB4,color:#fff
+    style G fill:#22aa66,stroke:#0a5,color:#fff
+    style X fill:#eee,stroke:#999,color:#333
+    style Y fill:#eee,stroke:#999,color:#333
+```
 
-The number at the **top** of the Meta dashboard is a different Facebook App ID. If you put that in `META_APP_ID`, Connect fails with **Invalid redirect_uri**.
+**Two independent delivery paths.** The webhook is the fast one — a DM lands in about two seconds. The five-minute poll is the safety net, because Instagram quietly drops webhooks for collapsed and low-signal comments. A comment that the webhook missed still gets its DM, just a few minutes later.
 
-`META_APP_SECRET` and `FACEBOOK_APP_SECRET` are **two different secrets**. Comment notifications are often signed with the Facebook one. If only the Instagram secret is stored, Home stays empty even when Meta POSTs.
+Everything lives in one Worker and one SQLite database:
 
-Do **not** paste the token from **Generate access tokens** into Cloudflare. Connect already stores a token. That screen is for turning **Webhook subscription** on (see below).
-
-### Where every secret comes from
-
-| Secret | Where it comes from |
+| | |
 |---|---|
-| `META_APP_ID` | Instagram → API setup with Instagram login → **3. Set up Instagram business login** → **Business login settings** → **Instagram App ID**. Not the id at the top of the dashboard. |
-| `META_APP_SECRET` | Same page → **Instagram App Secret** → Show. Not the Generate token. |
-| `FACEBOOK_APP_SECRET` | **App settings → Basic → App secret** → Show. Different from the Instagram App Secret. Required so live comment notifications are accepted. |
-| `WEBHOOK_VERIFY_TOKEN` | You make it: `openssl rand -hex 16`. Then type the **same** value into Meta’s webhook **Verify token** box. |
-| `TOKEN_ENCRYPTION_KEY` | You make it: `openssl rand -base64 32`. Never from Meta. |
-| `SESSION_SIGNING_KEY` | You make it: another `openssl rand -base64 32`. Never from Meta. |
-| `ADMIN_URL_SECRET` | You make it: `openssl rand -hex 16`. Goes in the admin URL. |
-| `PUBLIC_BASE_URL` | Your Worker URL, no trailing slash, e.g. `https://ig-comment-dm.ig-comment-dm.workers.dev`. |
-
-### Add every Instagram account as a tester (required in Development mode)
-
-A Facebook **Admin** role on the app is not enough. Each Instagram username you will Connect must be an **Instagram Tester**, even if that IG account is yours and even if you already connected a different one.
-
-For **each** creator account:
-
-1. In the Meta app: **App roles → Roles → Add people**.
-2. Choose **Instagram Tester** (not Developer, not Tester).
-3. Type that account’s Instagram **username**, select it, Add.
-4. On a phone or browser **logged into that same Instagram account**, open [instagram.com/accounts/manage_access](https://www.instagram.com/accounts/manage_access/) → **Tester invites** → **Accept**.
-
-If you skip step 4, Connect fails with **Insufficient developer role**. Repeat for every extra creator account.
-
-When you click Connect, Instagram must be logged in as the account you just invited. A different account in that browser is the usual reason one profile works and another does not — use a private window if needed.
-
-If Meta refuses to add the username because it already has a role on the business that owns the app, that is a different block. Say so and we can walk through it.
+| **Runtime** | Cloudflare Workers — no servers, no containers, no cold-start cost |
+| **Database** | Cloudflare D1 (SQLite) — five tables |
+| **Framework** | [Hono](https://hono.dev), server-rendered HTML |
+| **Dependencies** | One. Web Crypto does the hashing, HMAC, and AES. |
+| **Client-side JS** | None at all |
+| **Build step** | None |
 
 ---
 
-## 2. Put this program on Cloudflare
+## Quick start
 
-Someone technical can do this part. Commands assume they have [Node.js](https://nodejs.org/) installed.
+You need [Node.js 20+](https://nodejs.org), a free [Cloudflare account](https://dash.cloudflare.com/sign-up), and an Instagram **professional** account (Creator or Business — switch in the app under Settings → Account type and tools).
 
 ```bash
+git clone https://github.com/CharanMN7/ig-comment-dm.git
 cd ig-comment-dm
 npm install
 npx wrangler login
+
+npm run setup
 ```
 
-Create the database (D1). Cloudflare will print a long **database_id**. Copy it.
+`npm run setup` creates the database, generates every secret at the right size, deploys, and finishes by printing the exact strings to paste into Meta's dashboard:
 
-```bash
-npx wrangler d1 create ig-comment-dm
+```
+[1/6] Checking your Cloudflare login
+[2/6] Creating the database and deploying
+[3/6] Creating the database tables
+[4/6] Your three values from the Meta dashboard
+[5/6] Generating the rest
+[6/6] Deploying again so the secrets take effect
+
+Done. Your copy is live.
 ```
 
-Open `wrangler.toml` and replace `REPLACE_WITH_YOUR_D1_DATABASE_ID` with that id.
+It is safe to re-run, and it will not rotate secrets you already have.
 
-Create the tables:
+> [!IMPORTANT]
+> Before that, you need a Meta app — about 15 minutes of clicking, and the part that trips everyone up. **[docs/setup.md](docs/setup.md)** walks through every screen, including the four traps that cost people an evening each.
 
-```bash
-npx wrangler d1 execute ig-comment-dm --remote --file=migrations/001_init.sql
-npx wrangler d1 execute ig-comment-dm --remote --file=migrations/002_webhook_events.sql
-```
+Stuck? Run **`npm run doctor`**. It checks your live deployment and tells you what is missing in plain words.
 
-### Generate secrets
+<details>
+<summary><b>Why clone instead of a template repo?</b></summary>
 
-In a terminal:
+<br />
 
-```bash
-openssl rand -base64 32    # TOKEN_ENCRYPTION_KEY
-openssl rand -base64 32    # SESSION_SIGNING_KEY  (run it again; do not reuse the first)
-openssl rand -hex 16       # ADMIN_URL_SECRET     (32 characters)
-openssl rand -hex 16       # WEBHOOK_VERIFY_TOKEN
-```
+Because a fresh clone needs **zero file edits** to deploy — Wrangler provisions the D1 database from the config, so there is no placeholder to fill in. Nothing about the code differs between deployments; the only per-user values are Cloudflare secrets, which never touch the repository.
 
-Put each secret into Cloudflare. Paste when prompted, then press Enter. Do this for every line:
+A GitHub template would sever the upstream link. Meta renames dashboard screens, retires OAuth hosts, and changes signing behaviour often enough that `git pull` needs to keep working:
 
 ```bash
-npx wrangler secret put META_APP_ID
-npx wrangler secret put META_APP_SECRET
-npx wrangler secret put FACEBOOK_APP_SECRET
-npx wrangler secret put WEBHOOK_VERIFY_TOKEN
-npx wrangler secret put TOKEN_ENCRYPTION_KEY
-npx wrangler secret put ADMIN_URL_SECRET
-npx wrangler secret put SESSION_SIGNING_KEY
-npx wrangler secret put PUBLIC_BASE_URL
-```
-
-For `PUBLIC_BASE_URL`, you do not have the live URL yet. Use a placeholder like `https://example.com` for now, deploy once, then set it to the real URL and deploy again. Connect no longer uses this secret for the Instagram return address (it uses the host you actually opened), but cookies still look at it.
-
-```bash
+git remote add upstream https://github.com/CharanMN7/ig-comment-dm.git
+git pull upstream master
 npx wrangler deploy
 ```
 
-Wrangler prints a URL like `https://ig-comment-dm.YOURNAME.workers.dev`. That is the program.
+Your secrets live in Cloudflare, so updating never touches them.
 
-Do not add a `[limits]` / `cpu_ms` block to `wrangler.toml`. That setting is only for paid Workers; on the Free plan deploy fails with an error that CPU limits are not supported.
-
-Set the real public URL and deploy once more:
-
-```bash
-npx wrangler secret put PUBLIC_BASE_URL
-# paste: https://ig-comment-dm.YOURNAME.workers.dev
-# (no trailing slash)
-
-npx wrangler deploy
-```
-
-Your admin site is:
-
-```
-https://ig-comment-dm.YOURNAME.workers.dev/a/ADMIN_URL_SECRET
-```
-
-Replace `ADMIN_URL_SECRET` with the 32-character value you generated. Bookmark it. Anyone who guesses this URL still needs the password, but do not share the link.
-
-Open that URL. The first visit asks you to **create a password**. There is no “forgot password” email. If you forget it, the person who set this up can clear it in the database (see the bottom of this file).
+</details>
 
 ---
 
-## 3. Tell Instagram where to send comments and where to return after login
+## User guide
 
-Back in the Meta app dashboard.
+### Connect an account
 
-### Login return address
+Open your admin URL (printed by `npm run setup` — bookmark it) and create a password on the first visit. Then **Accounts → Connect a new account**.
 
-Meta does not show a field named just “oauth”. Do this:
+You can connect several Instagram accounts to one deployment. Each one needs to be an [Instagram Tester](docs/setup.md#part-2--instagram-tester-invites) on your Meta app.
 
-1. Left menu: **Instagram → API setup with Instagram login** (wording may be “API setup with Instagram business login”).
-2. Find **3. Set up Instagram business login** and click **Set up**. A popup asks for a **Redirect URL**.
-3. Paste:
+### Write a rule
 
-   ```
-   https://ig-comment-dm.YOURNAME.workers.dev/connect/callback
-   ```
+**Rules → New rule.**
 
-4. Save. Then click **Business login settings**.
-5. Under **OAuth redirect URIs**, paste **both** lines shown on the admin **Accounts** page (or on Connect):
+| Field | What to put |
+|---|---|
+| **Name** | For you only. `Free guide`. |
+| **Keywords** | One per line. **At least 3 characters** — `AI` would fire on "again" and "email". |
+| **The DM** | Under 1,000 characters. Put everything they need here. |
+| **Public reply** | Optional. Shows under the comment. |
+| **Which posts** | All posts and reels, or pick one from the dropdown. |
 
-```
-https://ig-comment-dm.YOURNAME.workers.dev/connect/callback
-https://ig-comment-dm.YOURNAME.workers.dev/connect/callback/
-```
+Matching ignores case, emoji, and punctuation, and matches whole words. A rule scoped to a specific post beats a rule that applies to everything.
 
-If you only see Facebook Login → Valid OAuth Redirect URIs, that is the wrong screen. Stay on the Instagram product.
+> [!TIP]
+> **Put everything in that one message.** Instagram allows exactly one private reply per comment, ever. You do not get a follow-up unless they reply to you first.
 
-Meta’s docs require an exact match to a listed “base URI”, and the dashboard often adds a trailing slash. Save, then click Connect and continue to Instagram.
+### Test it without messaging anyone
 
-If you still see **Invalid redirect_uri**, the usual cause is the Facebook App ID instead of **Instagram App ID** (same Business login settings page).
+**Test →** paste a sample comment. It shows which rule would fire. Nothing is sent.
 
-### Webhook (the comment notifications)
+Then comment from a **different** Instagram account — a friend's phone works. Your own comments on your own posts are ignored deliberately.
 
-**Instagram → API setup with Instagram login → Configure webhooks** (sometimes a **Webhooks** item in the left menu).
+### Read the Home page
 
-1. Click **Configure**. Callback URL:
-
-   ```
-   https://ig-comment-dm.YOURNAME.workers.dev/webhook
-   ```
-
-2. Verify token: paste the `WEBHOOK_VERIFY_TOKEN` you generated.
-3. Click **Save**. Subscribe to **comments** (leave **Include values** on). You can turn the other fields off.
-
-If verify fails, the Worker is not deployed or `WEBHOOK_VERIFY_TOKEN` does not match what you typed.
-
-### Turn on webhook subscription per Instagram account (required)
-
-Callback URL setup is not enough. On the same **API setup with Instagram login** page, find **Generate access tokens**.
-
-For **each** account you connected (`iam.charan.dev`, `hardware.charan.dev`, …):
-
-1. If the username is missing, click **Add Instagram account**, log in as that account, finish.
-2. On that row, set **Webhook subscription** to **On**. Leave it Off and Instagram will never tell this program about comments.
-3. You do **not** have to click **Generate token** for this program, and you must **not** paste that token into Cloudflare. Connect already saved a token. If Meta will not let you flip the webhook switch until you generate a token, generate it, then flip the switch, and ignore the token string.
-
-The person who **comments** (a friend) does not need to be in this list. The account that **owns the reel** does.
+| Panel | What it tells you |
+|---|---|
+| **Did Instagram reach us?** | Whether Meta is POSTing at all. Empty means the problem is on Meta's side, not yours. `Wrong secret` means `FACEBOOK_APP_SECRET` is missing. |
+| **Last 20 sends** | Every DM, skip, and failure, with the reason. |
+| **Red banners** | An account needs reconnecting, the nightly job has stalled, or a secret is misconfigured. |
 
 ---
 
-## 4. Connect Instagram and write a rule
+## Things that will surprise you
 
-1. Open your bookmarked admin URL and log in.
-2. Go to **Accounts → Connect a new account**. Instagram asks you to allow access. Allow it.
-3. Go to **Rules → New rule**.
-   - Name, for example `Free guide`.
-   - Keywords, one per line, at least 3 letters each (`guide`, not `AI`).
-   - The private message (the DM). Keep it under 1,000 characters. Put everything they need in this one message — Instagram will not let you send a follow-up unless they reply first.
-   - Optional public reply under the comment.
-   - **Which posts:** leave on **All posts and reels**. That includes Reels. A reel ID is a long number (from the dropdown after you connect), not the share link `instagram.com/reel/…`.
-4. Go to **Test**. Paste a sample comment. Confirm the right rule lights up. This sends nothing to real people.
+Instagram's rules, not ours. Each of these is enforced by Meta and cost someone an evening to discover.
 
-Open **Home** once after connecting. In Meta, **Generate access tokens** → **Webhook subscription** must be **On** for each connected account.
-
-Finish **section 5 (Publish)** before expecting a friend’s comment to fire instantly. Until the app is Live, Meta only delivers the webhook **Test** button. This program also checks recent comments every 5 minutes, so a real comment can still get a DM while you are waiting to Publish.
-
-Then comment on your own post or reel from a **different** Instagram account (a friend’s phone is fine). The friend does **not** need to be an Instagram Tester. Your own comments on your own posts are ignored on purpose.
-
-The private message lands in that other account’s Instagram **inbox**, or in **Message requests** if they do not follow you.
-
-On **Home**, look at two lists:
-
-- **Did Instagram reach us?** A row here means Meta POSTed. **Wrong secret** means add `FACEBOOK_APP_SECRET`. Empty while a friend already commented usually means the app is still in Development, or Hidden Words hid the comment.
-- **Last 20 sends** is the DM / skip / fail log.
-
-In the Meta app, the webhook must be subscribed to **comments** with **Include values** on. Use **Test** next to that field, then **Send to My Server** — clicking Test alone only previews the sample. That test should show up under **Did Instagram reach us?** immediately.
-
-Turn off Instagram **Hidden Words** / comment filters on the creator account while testing. Filtered comments never reach this program, even when everything else is correct.
+| | |
+|---|---|
+| 📨 | **One private message per comment, ever.** A second attempt is blocked here, and Meta would reject it anyway. |
+| 🙈 | **Your own comments are ignored.** Meta notifies you about them; acting would DM yourself and burn the one reply. |
+| 📅 | **Comments older than 7 days** cannot receive a private reply. They are logged as skipped. |
+| 🔑 | **Tokens expire after 60 days.** A nightly job refreshes them. Miss it and the account needs a 20-second reconnect. |
+| 🚧 | **A Development-mode app delivers nothing.** Meta only sends the dashboard Test button until you click Publish. This is the number one reason a correct setup does nothing. |
+| 🤐 | **Hidden Words eats comments before we see them.** If Instagram's filter hides a comment, it never reaches the API at all. Turn the filter off while testing. |
+| ⏳ | **Missed comments arrive late, not never.** The five-minute poll catches them. |
 
 ---
 
-## 5. Publish the Meta app (required for live comments)
+## Roadmap
 
-Real comment notifications are only delivered when the app is **Live**. Development mode is the usual reason “I set everything up and nothing happens.”
+### Shipped
 
-1. After you deploy, these pages exist on your Worker:
+<details open>
+<summary><b>Core pipeline</b></summary>
 
-   ```
-   https://ig-comment-dm.YOURNAME.workers.dev/privacy
-   https://ig-comment-dm.YOURNAME.workers.dev/terms
-   https://ig-comment-dm.YOURNAME.workers.dev/data-deletion
-   ```
+- [x] Comment → one official Instagram private reply, end to end
+- [x] Optional public reply under the comment
+- [x] Keyword rules with case, emoji, and punctuation normalisation, matched on word boundaries
+- [x] Post-scoped rules take priority over account-wide rules
+- [x] Reel and post picker, so nobody has to hunt for a Graph media id
+- [x] Self-comment guard — never DMs the account owner
+- [x] Exactly-once delivery, claimed atomically in the database before sending
+- [x] 7-day comment age guard, matching Meta's private-reply window
+- [x] Dry-run rule tester that sends nothing to real people
 
-2. In the Meta app, open **Publish** in the left sidebar. Paste those three URLs into privacy policy, terms of service, and data deletion.
-3. Click **Publish** so the app is Live.
-4. Keep your Instagram accounts as **Instagram Testers** and keep **Webhook subscription** On.
+</details>
 
-You do **not** need App Review if only tester accounts connect. App Review is for other people’s Instagram accounts.
+<details open>
+<summary><b>Reliability</b></summary>
+
+- [x] HMAC-verified webhooks, accepting either the Instagram or the Facebook app secret
+- [x] Five-minute reconciliation poll for comments the webhook never delivered
+- [x] Nightly token refresh with a 10-day lookahead and a reconnect warning
+- [x] Automatic `subscribed_apps` registration after Connect
+- [x] Retry with jittered backoff on Meta 429s and 5xxs
+- [x] Large Instagram ids preserved exactly, instead of being mangled by JSON number parsing
+- [x] Inbound webhook log, including rejected signatures, so silence is diagnosable
+
+</details>
+
+<details open>
+<summary><b>Security and operations</b></summary>
+
+- [x] Instagram tokens encrypted at rest with AES-256-GCM
+- [x] Two-factor admin: a 128-bit secret path plus a password
+- [x] Signed, `HttpOnly`, `SameSite=Strict` sessions with CSRF tokens on every form
+- [x] `Referrer-Policy: no-referrer` so the secret admin URL never leaks to a third party
+- [x] Login rate limiting with a doubling lockout
+- [x] Constant-time comparison of the admin path secret
+- [x] Startup validation of all eight secrets, surfaced in the admin panel
+- [x] `npm run setup` — clone to deployed in one command
+- [x] `npm run doctor` — diagnoses a live deployment
+- [x] Multi-account support on a single deployment
+- [x] Hosted privacy, terms, and data-deletion pages for Meta review
+
+</details>
+
+### Planned
+
+Everything below is [an open issue](https://github.com/CharanMN7/ig-comment-dm/issues). Comment on one to claim it — [`good first issue`](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue) items are self-contained and have the approach sketched out.
+
+<details open>
+<summary><b>🎯 Automation</b></summary>
+
+| | Feature | Why it matters |
+|---|---|---|
+| ⬜ | **Tracked links with click analytics** | Know whether the DM actually worked, not just that it sent |
+| ⬜ | **Button templates in DMs** | A tappable CTA converts far better than a bare URL |
+| ⬜ | **Opening DM + reveal on tap** | Works around Meta's one-reply-per-comment limit legitimately |
+| ⬜ | **Follow gate** | Deliver the link only after they follow |
+| ⬜ | **Follow-up DM after a delay** | A second touch inside the 24-hour window |
+| ⬜ | **Reply to DMs and story replies** | The same keyword rules, triggered by inbound messages |
+| ⬜ | **`{username}` and `{link}` placeholders** | Personalised copy without a rule per person |
+| ⬜ | **Public reply variations** | Rotate replies so a comment section does not read like a bot |
+| ⬜ | **Match any comment** | Fire on every comment on a post, no keyword needed |
+| ⬜ | **Bind a rule to the next reel you post** | Set the automation up before the content exists |
+| ⬜ | **Ad-comment to organic-post mapping** | Boosted posts report a different media id and silently miss |
+| ⬜ | **Per-account rate limiting** | Stay under Meta's 750 private replies per hour |
+| ⬜ | **Negative keywords** | Skip "not interested", "how much is the guide" |
+| ⬜ | **Bulk rule import from CSV** | Set up thirty posts without thirty forms |
+| ⬜ | **Rule templates** | Working starting points per niche |
+
+</details>
+
+<details open>
+<summary><b>🔤 Matching</b></summary>
+
+| | Feature | Why it matters |
+|---|---|---|
+| ⬜ | **Non-Latin script matching** | Word-boundary matching silently drops Cyrillic, Arabic, and CJK today |
+| ⬜ | **Latin diacritic folding** | `PREÇO` should match a `preco` keyword |
+| ⬜ | **Whole-word vs. partial toggle** | Hashtag campaigns need substring matching |
+
+</details>
+
+<details open>
+<summary><b>📊 Analytics</b></summary>
+
+| | Feature | Why it matters |
+|---|---|---|
+| ⬜ | **Dashboard totals** | Sent today, this week, this month, all time |
+| ⬜ | **Sends-over-time chart** | Inline SVG, no JavaScript |
+| ⬜ | **Per-rule performance** | Which keyword is actually earning its place |
+| ⬜ | **Top matched keywords** | What your audience really types |
+| ⬜ | **Follower history** | Instagram only keeps 30 days; daily snapshots keep more |
+| ⬜ | **Post insights** | Views, reach, saves, and shares next to the sends |
+| ⬜ | **Shareable report page** | A read-only link for a client, no login |
+| ⬜ | **Filterable, paginated send log** | Twenty rows stops being enough quickly |
+
+</details>
+
+<details open>
+<summary><b>🔌 Instagram coverage</b></summary>
+
+| | Feature | Why it matters |
+|---|---|---|
+| ⬜ | **`messages` webhook field** | Prerequisite for DM triggers and the inbox |
+| ⬜ | **DM inbox** | Read replies without leaving the panel |
+| ⬜ | **Typed Meta errors** | "Token expired" beats "Graph API error 190" |
+
+</details>
+
+<details open>
+<summary><b>🛠 Operations</b></summary>
+
+| | Feature | Why it matters |
+|---|---|---|
+| ⬜ | **Tracked migration runner** | Adding a migration should not mean editing two npm scripts |
+| ⬜ | **Health check endpoint** | Uptime monitoring without a login |
+| ⬜ | **Operational event log** | Cron failures are invisible until something breaks |
+| ⬜ | **Export rules and logs** | Your data, portable |
+| ⬜ | **Dark mode** | The panel is white at 1am |
+| ⬜ | **Installable on a phone** | Approve and edit rules from where you actually post |
+
+</details>
+
+<div align="center">
+
+**[→ Browse all open issues](https://github.com/CharanMN7/ig-comment-dm/issues)** · **[→ Good first issues](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue)**
+
+</div>
 
 ---
 
-## Local testing (for the person setting it up)
+## Documentation
 
-Copy `.dev.vars.example` to `.dev.vars` and fill in the same secrets. Use `PUBLIC_BASE_URL=http://localhost:8787`.
+| | |
+|---|---|
+| **[docs/setup.md](docs/setup.md)** | Every Meta dashboard screen, and the traps in each |
+| **[docs/troubleshooting.md](docs/troubleshooting.md)** | Symptom-first. Start here when nothing happens. |
+| **[docs/architecture.md](docs/architecture.md)** | Routes, pipeline, cron, crypto |
+| **[CONTRIBUTING.md](CONTRIBUTING.md)** | Setup, house style, what belongs here |
+| **[SECURITY.md](SECURITY.md)** | Threat model, secret inventory, rotation, private reporting |
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome. [`good first issue`](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue) items are self-contained and describe the approach.
 
 ```bash
 npm install
-npx wrangler d1 execute ig-comment-dm --local --file=migrations/001_init.sql
-npx wrangler d1 execute ig-comment-dm --local --file=migrations/002_webhook_events.sql
-npm run dev
+npm test          # 30 unit tests, no network, no database
+npm run typecheck
+npm run dev       # http://localhost:8787
 ```
 
-In the Meta app, add `http://localhost:8787/connect/callback` as an OAuth redirect URI if you want to click Connect locally. Webhooks from Instagram cannot reach localhost; use the curl command below instead.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first — particularly the constraint that keeps this project usable: **one runtime dependency, no build step, no client-side JavaScript.**
 
-### Curl: fake a comment webhook
-
-Replace `YOUR_APP_SECRET` and, after you have connected an account, `YOUR_IG_USER_ID` (the account id stored in the database).
-
-```bash
-export META_APP_SECRET='YOUR_APP_SECRET'
-BODY='{"object":"instagram","entry":[{"id":"YOUR_IG_USER_ID","time":'"$(date +%s)"',"changes":[{"field":"comments","value":{"id":"TEST_COMMENT_ID_1","text":"guide please","from":{"id":"OTHER_PERSON_ID","username":"someone"},"media":{"id":"MEDIA_ID"}}}]}]}'
-SIG="$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$META_APP_SECRET" | awk '{print $NF}')"
-curl -sS -D - -o /tmp/webhook-body.txt \
-  -X POST 'http://localhost:8787/webhook' \
-  -H 'Content-Type: application/json' \
-  -H "X-Hub-Signature-256: sha256=${SIG}" \
-  --data-binary "$BODY"
-```
-
-A `200` with an empty body is success. Instagram retries anything slow; this program answers immediately and works in the background.
-
-### Unit tests and live selftest
-
-```bash
-npm test
-
-ADMIN_URL_SECRET=... WEBHOOK_VERIFY_TOKEN=... META_APP_SECRET=... ADMIN_PASSWORD=... \
-  npm run selftest -- http://localhost:8787
-```
+Found a security problem? **Do not open an issue.** See [SECURITY.md](SECURITY.md).
 
 ---
 
-## How this behaves (so nothing surprises you)
+<div align="center">
 
-- **One private message per comment, ever.** A second attempt is blocked here, and Instagram would reject it anyway.
-- **Your own comments are ignored.** Instagram notifies us when you comment on your own post. We drop those.
-- **Comments older than 7 days** cannot get a private reply. They are skipped.
-- **Instagram tokens last 60 days.** A job runs every night at 03:00 UTC to refresh them. If a token is not refreshed in time it dies permanently and you must click **Reconnect** (about 20 seconds). The home page turns red if that is needed, or if the nightly job has not run in 3 days.
-- **Missed comments.** A second job runs every 5 minutes and looks at recent comments on your posts, in case Instagram never sent a notification. There can be a delay of a few minutes.
-- **Forgot admin password:** the person with Cloudflare access can run:
+### Star history
 
-  ```bash
-  npx wrangler d1 execute ig-comment-dm --remote --command \
-    "DELETE FROM system WHERE key IN ('admin_password_hash','admin_password_salt');"
-  ```
+<a href="https://star-history.com/#CharanMN7/ig-comment-dm&Date"><img src="https://api.star-history.com/svg?repos=CharanMN7/ig-comment-dm&type=Date" alt="Star history chart" width="600" /></a>
 
-  Then open the admin URL and create a new password.
+<br /><br />
 
----
+**[MIT licensed](LICENSE)** · Built on [Cloudflare Workers](https://workers.cloudflare.com) and [Hono](https://hono.dev)
 
-## Schema note
+<sub>Not affiliated with, endorsed by, or sponsored by Meta or Instagram.<br />
+Instagram is a trademark of Meta Platforms, Inc.</sub>
 
-`accounts.needs_reconnect` is in `migrations/001_init.sql` even though it was not in the original column list. The nightly job sets it when a refresh fails and fewer than 14 days remain, and the home page uses it for the red banner.
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:FCB045,50:FD1D1D,100:833AB4&height=110&section=footer" alt="" width="100%" />
 
-`webhook_events` is in `migrations/002_webhook_events.sql`. Home uses it to show whether Instagram POSTed, including failed signatures.
-
----
-
-## Changing the Worker
-
-Operator setup is this file. Bindings, schema dump, CLI contract, pipeline, and crypto notes are in [docs/](docs/).
+</div>
