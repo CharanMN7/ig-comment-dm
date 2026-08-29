@@ -17,6 +17,8 @@ import type { MiddlewareHandler } from 'hono';
 const POLICY = [
   "default-src 'none'",
   "style-src 'unsafe-inline'",
+  "manifest-src 'self'",
+  "img-src 'self' data:",
   "form-action 'self'",
   "frame-ancestors 'none'",
   "base-uri 'none'",

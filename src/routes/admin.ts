@@ -30,7 +30,7 @@ import {
   upsertAccount,
 } from '../db.ts';
 import { findConfigProblems } from '../config.ts';
-import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
+import { APP_ICON_SVG, csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
 import { KEYWORD_TOO_SHORT_MESSAGE, findMatchingRule, parseKeywords } from '../match.ts';
 import { listRecentMedia, oauthRedirectUri } from '../meta.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
@@ -94,6 +94,7 @@ adminRoutes.use('*', async (c, next) => {
   const path = subPath(pathname);
   const isSetup = path === '/setup';
   const isLogin = path === '/login';
+  const isPublicAsset = path === '/manifest.webmanifest' || path === '/icon.svg';
   const hasPassword = await passwordConfigured(c.env);
 
   if (!session && c.req.method === 'GET') {
@@ -124,8 +125,8 @@ adminRoutes.use('*', async (c, next) => {
     }
   }
 
-  if (!hasPassword && !isSetup) return c.redirect(`${base}/setup`, 302);
-  if (hasPassword && !session.authed && !isLogin && !isSetup) return c.redirect(`${base}/login`, 302);
+  if (!hasPassword && !isSetup && !isPublicAsset) return c.redirect(`${base}/setup`, 302);
+  if (hasPassword && !session.authed && !isLogin && !isSetup && !isPublicAsset) return c.redirect(`${base}/login`, 302);
 
   await next();
 });
@@ -1003,4 +1004,37 @@ adminRoutes.get('/selftest/status', async (c) => {
   const count = commentId ? await countSentByComment(c.env.DB, commentId) : 0;
   const row = commentId ? await getSent(c.env.DB, commentId) : null;
   return c.json({ last_cron_ok_at: lastCron, count, row });
+});
+
+adminRoutes.get('/manifest.webmanifest', (c) => {
+  const base = c.get('adminBase');
+  const manifest = {
+    name: 'IG Comment DM',
+    short_name: 'Comment DM',
+    description: 'Instagram comment-to-DM automation panel',
+    start_url: `${base}/`,
+    scope: `${base}/`,
+    display: 'standalone',
+    background_color: '#f6f6f4',
+    theme_color: '#111111',
+    icons: [
+      {
+        src: `${base}/icon.svg`,
+        sizes: '512x512',
+        type: 'image/svg+xml',
+        purpose: 'any maskable',
+      },
+    ],
+  };
+  return c.json(manifest, 200, {
+    'Content-Type': 'application/manifest+json; charset=utf-8',
+    'Cache-Control': 'no-store, max-age=0',
+  });
+});
+
+adminRoutes.get('/icon.svg', (c) => {
+  return c.body(APP_ICON_SVG, 200, {
+    'Content-Type': 'image/svg+xml; charset=utf-8',
+    'Cache-Control': 'public, max-age=86400',
+  });
 });

@@ -297,3 +297,54 @@ describe('login throttle', () => {
     assert.equal(lockRemaining({ fails: 0, lockedUntil: 0 }, 1_000), 0);
   });
 });
+
+describe('web app manifest and mobile installability', () => {
+  it('renders theme-color, manifest link, and icons in admin layout', async () => {
+    const { layout, APP_ICON_SVG } = await import('../src/html.ts');
+    const { html } = await import('hono/html');
+
+    const adminHtml = (
+      await layout({
+        title: 'Test Admin',
+        base: '/a/secret123',
+        body: html`<h1>Admin Body</h1>`,
+      })
+    ).toString();
+
+    assert.ok(adminHtml.includes('<meta name="theme-color" content="#111111" />'));
+    assert.ok(adminHtml.includes('<link rel="manifest" href="/a/secret123/manifest.webmanifest" />'));
+    assert.ok(adminHtml.includes('<link rel="icon" type="image/svg+xml" href="/a/secret123/icon.svg" />'));
+    assert.ok(adminHtml.includes('<link rel="apple-touch-icon" href="/a/secret123/icon.svg" />'));
+    assert.ok(adminHtml.includes('<meta name="mobile-web-app-capable" content="yes" />'));
+    assert.ok(APP_ICON_SVG.startsWith('<svg') && APP_ICON_SVG.includes('</svg>'));
+  });
+
+  it('renders fallback data-URI icon when base is not provided', async () => {
+    const { layout, APP_ICON_DATA_URI } = await import('../src/html.ts');
+    const { html } = await import('hono/html');
+
+    const publicHtml = (
+      await layout({
+        title: 'Public Page',
+        body: html`<h1>Public</h1>`,
+      })
+    ).toString();
+
+    assert.ok(!publicHtml.includes('<link rel="manifest"'));
+    assert.ok(publicHtml.includes(`href="${APP_ICON_DATA_URI}"`));
+  });
+
+  it('includes manifest-src and img-src in CSP headers', async () => {
+    const { securityHeaders } = await import('../src/headers.ts');
+    const headers = new Map<string, string>();
+    const mockContext = {
+      req: { url: 'https://example.com/a/secret123' },
+      header: (name: string, value: string) => headers.set(name, value),
+    };
+
+    await securityHeaders(mockContext as any, async () => {});
+    const csp = headers.get('Content-Security-Policy') ?? '';
+    assert.ok(csp.includes("manifest-src 'self'"), 'CSP must include manifest-src');
+    assert.ok(csp.includes("img-src 'self' data:"), 'CSP must include img-src');
+  });
+});
