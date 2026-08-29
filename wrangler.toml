@@ -4,10 +4,12 @@ compatibility_date = "2026-08-14"
 # Do not enable nodejs_compat. Web Crypto (crypto.subtle) only.
 # Do not set [limits] cpu_ms — that is paid Workers only and deploy fails on Free.
 
+# No database_id on purpose. Wrangler provisions a D1 database with this name on
+# the first `wrangler deploy` and writes the id back here locally, so a fresh
+# clone needs no edits before it can deploy. Do not commit the id it writes.
 [[d1_databases]]
 binding = "DB"
 database_name = "ig-comment-dm"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
 
 [triggers]
 crons = ["0 3 * * *", "*/5 * * * *"]
