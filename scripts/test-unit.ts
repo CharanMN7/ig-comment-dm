@@ -2,10 +2,14 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   hmacSha256Hex,
+  timingSafeEqualString,
   verifyHmacSha256Hex,
   verifyMetaSignature,
   verifyMetaSignatureAny,
 } from '../src/crypto.ts';
+import { findConfigProblems } from '../src/config.ts';
+import { FREE_ATTEMPTS, lockRemaining, lockSecondsFor } from '../src/throttle.ts';
+import type { Env } from '../src/types.ts';
 import { authorizeUrl, oauthRedirectUri } from '../src/meta.ts';
 import { isSelfComment } from '../src/guard.ts';
 import { parseWebhookPayload } from '../src/process.ts';
@@ -191,5 +195,105 @@ describe('webhook HMAC', () => {
       false,
     );
     assert.equal(await verifyMetaSignatureAny([instagram], body, `sha256=${fbHex}`), false);
+  });
+});
+
+function env(overrides: Partial<Env> = {}): Env {
+  const key32 = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+  const other32 = 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=';
+  return {
+    DB: null as unknown as D1Database,
+    META_APP_ID: '1234567890',
+    META_APP_SECRET: 'ig-secret',
+    FACEBOOK_APP_SECRET: 'fb-secret',
+    WEBHOOK_VERIFY_TOKEN: 'verify',
+    TOKEN_ENCRYPTION_KEY: key32,
+    SESSION_SIGNING_KEY: other32,
+    ADMIN_URL_SECRET: 'a'.repeat(32),
+    PUBLIC_BASE_URL: 'https://worker.example.workers.dev',
+    ...overrides,
+  };
+}
+
+function problemSecrets(overrides: Partial<Env>): string[] {
+  return findConfigProblems(env(overrides)).map((p) => p.secret);
+}
+
+describe('timingSafeEqualString', () => {
+  it('matches identical strings and rejects everything else', () => {
+    assert.equal(timingSafeEqualString('abc123', 'abc123'), true);
+    assert.equal(timingSafeEqualString('abc123', 'abc124'), false);
+    assert.equal(timingSafeEqualString('abc123', 'abc1234'), false);
+    assert.equal(timingSafeEqualString('', ''), true);
+    assert.equal(timingSafeEqualString('abc', ''), false);
+  });
+
+  it('handles multi-byte characters without throwing', () => {
+    assert.equal(timingSafeEqualString('日本語', '日本語'), true);
+    assert.equal(timingSafeEqualString('日本語', '日本誤'), false);
+  });
+});
+
+describe('findConfigProblems', () => {
+  it('reports nothing when every secret is well formed', () => {
+    assert.deepEqual(findConfigProblems(env()), []);
+  });
+
+  it('flags a missing FACEBOOK_APP_SECRET, the usual cause of silence', () => {
+    assert.deepEqual(problemSecrets({ FACEBOOK_APP_SECRET: '' }), ['FACEBOOK_APP_SECRET']);
+  });
+
+  it('flags a key that does not decode to 32 bytes', () => {
+    // Valid base64, decodes to 9 bytes. Deliberately zero-entropy: a realistic
+    // random-looking fixture here is indistinguishable from a leaked key to the
+    // secret scanner in CI, and silencing that scanner is worse than an ugly
+    // test value.
+    assert.deepEqual(problemSecrets({ TOKEN_ENCRYPTION_KEY: 'AAAAAAAAAAAA' }), [
+      'TOKEN_ENCRYPTION_KEY',
+    ]);
+  });
+
+  it('flags one key reused for both encryption and session signing', () => {
+    const same = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+    assert.deepEqual(
+      problemSecrets({ TOKEN_ENCRYPTION_KEY: same, SESSION_SIGNING_KEY: same }),
+      ['SESSION_SIGNING_KEY'],
+    );
+  });
+
+  it('flags a short admin path secret', () => {
+    assert.deepEqual(problemSecrets({ ADMIN_URL_SECRET: 'abc123' }), ['ADMIN_URL_SECRET']);
+  });
+
+  it('flags a trailing slash and a missing scheme on PUBLIC_BASE_URL', () => {
+    assert.deepEqual(problemSecrets({ PUBLIC_BASE_URL: 'https://w.example.dev/' }), [
+      'PUBLIC_BASE_URL',
+    ]);
+    assert.deepEqual(problemSecrets({ PUBLIC_BASE_URL: 'w.example.dev' }), ['PUBLIC_BASE_URL']);
+  });
+
+  it('reports an unset secret rather than silently accepting it', () => {
+    assert.deepEqual(problemSecrets({ META_APP_ID: '   ' }), ['META_APP_ID']);
+  });
+});
+
+describe('login throttle', () => {
+  it('allows the first few attempts without any lock', () => {
+    for (let attempt = 1; attempt <= FREE_ATTEMPTS; attempt++) {
+      assert.equal(lockSecondsFor(attempt), 0, `attempt ${attempt} should not lock`);
+    }
+  });
+
+  it('doubles the lock from one minute and caps it at an hour', () => {
+    assert.equal(lockSecondsFor(FREE_ATTEMPTS + 1), 60);
+    assert.equal(lockSecondsFor(FREE_ATTEMPTS + 2), 120);
+    assert.equal(lockSecondsFor(FREE_ATTEMPTS + 3), 240);
+    assert.equal(lockSecondsFor(FREE_ATTEMPTS + 20), 3600);
+  });
+
+  it('reports remaining lock time only while the lock is in the future', () => {
+    assert.equal(lockRemaining({ fails: 9, lockedUntil: 1_000 }, 900), 100);
+    assert.equal(lockRemaining({ fails: 9, lockedUntil: 1_000 }, 1_000), 0);
+    assert.equal(lockRemaining({ fails: 0, lockedUntil: 0 }, 1_000), 0);
   });
 });

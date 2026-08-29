@@ -219,6 +219,22 @@ export async function verifyPassword(password: string, hashB64: string, saltB64:
   return timingSafeEqual(actual, expected);
 }
 
+/**
+ * Compares the `/a/<secret>` path segment against ADMIN_URL_SECRET without
+ * leaking how many leading characters were right. A plain `!==` short-circuits
+ * on the first differing byte, which over enough requests is a byte-at-a-time
+ * oracle for a value that is otherwise the panel's whole first factor.
+ *
+ * Length is compared first and non-constant-time on purpose: the length of the
+ * secret is not the secret.
+ */
+export function timingSafeEqualString(a: string, b: string): boolean {
+  const ab = encoder.encode(a);
+  const bb = encoder.encode(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
 export function sessionSigningKey(b64: string): Uint8Array {
   return decodeKey32(b64, 'SESSION_SIGNING_KEY');
 }
