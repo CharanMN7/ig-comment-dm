@@ -294,81 +294,89 @@ Everything below is [an open issue](https://github.com/CharanMN7/ig-comment-dm/i
 <details open>
 <summary><b>🎯 Automation</b></summary>
 
-| | Feature | Why it matters |
-|---|---|---|
-| ⬜ | **Tracked links with click analytics** | Know whether the DM actually worked, not just that it sent |
-| ⬜ | **Button templates in DMs** | A tappable CTA converts far better than a bare URL |
-| ⬜ | **Opening DM + reveal on tap** | Works around Meta's one-reply-per-comment limit legitimately |
-| ⬜ | **Follow gate** | Deliver the link only after they follow |
-| ⬜ | **Follow-up DM after a delay** | A second touch inside the 24-hour window |
-| ⬜ | **Reply to DMs and story replies** | The same keyword rules, triggered by inbound messages |
-| ⬜ | **`{username}` and `{link}` placeholders** | Personalised copy without a rule per person |
-| ⬜ | **Public reply variations** | Rotate replies so a comment section does not read like a bot |
-| ⬜ | **Match any comment** | Fire on every comment on a post, no keyword needed |
-| ⬜ | **Bind a rule to the next reel you post** | Set the automation up before the content exists |
-| ⬜ | **Ad-comment to organic-post mapping** | Boosted posts report a different media id and silently miss |
-| ⬜ | **Per-account rate limiting** | Stay under Meta's 750 private replies per hour |
-| ⬜ | **Negative keywords** | Skip "not interested", "how much is the guide" |
-| ⬜ | **Bulk rule import from CSV** | Set up thirty posts without thirty forms |
-| ⬜ | **Rule templates** | Working starting points per niche |
+| Issue | Feature | Why it matters |
+|:--|---|---|
+| [#23](https://github.com/CharanMN7/ig-comment-dm/issues/23) | **Tracked links with click analytics** | Know whether the DM actually worked, not just that it sent |
+| [#24](https://github.com/CharanMN7/ig-comment-dm/issues/24) | **Button templates in DMs** | A tappable CTA converts far better than a bare URL |
+| [#25](https://github.com/CharanMN7/ig-comment-dm/issues/25) | **Opening DM + reveal on tap** | Works around Meta's one-reply-per-comment limit legitimately |
+| [#26](https://github.com/CharanMN7/ig-comment-dm/issues/26) | **Follow gate** | Deliver the link only after they follow |
+| [#27](https://github.com/CharanMN7/ig-comment-dm/issues/27) | **Follow-up DM after a delay** | A second touch inside the 24-hour window |
+| [#29](https://github.com/CharanMN7/ig-comment-dm/issues/29) | **Reply to DMs and story replies** | The same keyword rules, triggered by inbound messages |
+| [#30](https://github.com/CharanMN7/ig-comment-dm/issues/30) | **`{username}` and `{link}` placeholders** | Personalised copy without a rule per person |
+| [#31](https://github.com/CharanMN7/ig-comment-dm/issues/31) | **Public reply variations** | Rotate replies so a comment section does not read like a bot |
+| [#32](https://github.com/CharanMN7/ig-comment-dm/issues/32) | **Match any comment** | Fire on every comment on a post, no keyword needed |
+| [#33](https://github.com/CharanMN7/ig-comment-dm/issues/33) | **Bind a rule to the next reel you post** | Set the automation up before the content exists |
+| [#34](https://github.com/CharanMN7/ig-comment-dm/issues/34) | **Ad-comment to organic-post mapping** | Boosted posts report a different media id and silently miss |
+| [#35](https://github.com/CharanMN7/ig-comment-dm/issues/35) | **Per-account rate limiting** | Stay under Meta's 750 private replies per hour |
+| [#36](https://github.com/CharanMN7/ig-comment-dm/issues/36) | **Send every matching rule's public reply** | Today the second matching rule is silently dropped |
+| [#22](https://github.com/CharanMN7/ig-comment-dm/issues/22) | **Negative keywords** | Skip "not interested", "how much is the guide" |
+| [#37](https://github.com/CharanMN7/ig-comment-dm/issues/37) | **Bulk rule import from CSV** | Set up thirty posts without thirty forms |
+| [#38](https://github.com/CharanMN7/ig-comment-dm/issues/38) | **Rule templates** | Working starting points per niche |
 
 </details>
 
 <details open>
 <summary><b>🔤 Matching</b></summary>
 
-| | Feature | Why it matters |
-|---|---|---|
-| ⬜ | **Non-Latin script matching** | Word-boundary matching silently drops Cyrillic, Arabic, and CJK today |
-| ⬜ | **Latin diacritic folding** | `PREÇO` should match a `preco` keyword |
-| ⬜ | **Whole-word vs. partial toggle** | Hashtag campaigns need substring matching |
+| Issue | Feature | Why it matters |
+|:--|---|---|
+| [#19](https://github.com/CharanMN7/ig-comment-dm/issues/19) | **Non-Latin script matching** | Word-boundary matching silently drops Cyrillic, Arabic, and CJK today |
+| [#20](https://github.com/CharanMN7/ig-comment-dm/issues/20) | **Latin diacritic folding** | `PREÇO` should match a `preco` keyword |
+| [#21](https://github.com/CharanMN7/ig-comment-dm/issues/21) | **Whole-word vs. partial toggle** | Hashtag campaigns need substring matching |
 
 </details>
 
 <details open>
 <summary><b>📊 Analytics</b></summary>
 
-| | Feature | Why it matters |
-|---|---|---|
-| ⬜ | **Dashboard totals** | Sent today, this week, this month, all time |
-| ⬜ | **Sends-over-time chart** | Inline SVG, no JavaScript |
-| ⬜ | **Per-rule performance** | Which keyword is actually earning its place |
-| ⬜ | **Top matched keywords** | What your audience really types |
-| ⬜ | **Follower history** | Instagram only keeps 30 days; daily snapshots keep more |
-| ⬜ | **Post insights** | Views, reach, saves, and shares next to the sends |
-| ⬜ | **Shareable report page** | A read-only link for a client, no login |
-| ⬜ | **Filterable, paginated send log** | Twenty rows stops being enough quickly |
+| Issue | Feature | Why it matters |
+|:--|---|---|
+| [#39](https://github.com/CharanMN7/ig-comment-dm/issues/39) | **Dashboard totals** | Sent today, this week, this month, all time |
+| [#40](https://github.com/CharanMN7/ig-comment-dm/issues/40) | **Sends-over-time chart** | Inline SVG, no JavaScript |
+| [#41](https://github.com/CharanMN7/ig-comment-dm/issues/41) | **Per-rule performance** | Which keyword is actually earning its place |
+| [#42](https://github.com/CharanMN7/ig-comment-dm/issues/42) | **Top matched keywords** | What your audience really types |
+| [#52](https://github.com/CharanMN7/ig-comment-dm/issues/52) | **Follower history** | Instagram only keeps 30 days; daily snapshots keep more |
+| [#53](https://github.com/CharanMN7/ig-comment-dm/issues/53) | **Post insights** | Views, reach, saves, and shares next to the sends |
+| [#43](https://github.com/CharanMN7/ig-comment-dm/issues/43) | **Shareable report page** | A read-only link for a client, no login |
+| [#44](https://github.com/CharanMN7/ig-comment-dm/issues/44) | **Filterable, paginated send log** | Twenty rows stops being enough quickly |
 
 </details>
 
 <details open>
 <summary><b>🔌 Instagram coverage</b></summary>
 
-| | Feature | Why it matters |
-|---|---|---|
-| ⬜ | **`messages` webhook field** | Prerequisite for DM triggers and the inbox |
-| ⬜ | **DM inbox** | Read replies without leaving the panel |
-| ⬜ | **Typed Meta errors** | "Token expired" beats "Graph API error 190" |
+| Issue | Feature | Why it matters |
+|:--|---|---|
+| [#28](https://github.com/CharanMN7/ig-comment-dm/issues/28) | **`messages` webhook field** | Prerequisite for DM triggers and the inbox |
+| [#54](https://github.com/CharanMN7/ig-comment-dm/issues/54) | **DM inbox** | Read replies without leaving the panel |
+| [#48](https://github.com/CharanMN7/ig-comment-dm/issues/48) | **Typed Meta errors** | "Token expired" beats "Graph API error 190" |
 
 </details>
 
 <details open>
 <summary><b>🛠 Operations</b></summary>
 
-| | Feature | Why it matters |
-|---|---|---|
-| ⬜ | **Tracked migration runner** | Adding a migration should not mean editing two npm scripts |
-| ⬜ | **Health check endpoint** | Uptime monitoring without a login |
-| ⬜ | **Operational event log** | Cron failures are invisible until something breaks |
-| ⬜ | **Export rules and logs** | Your data, portable |
-| ⬜ | **Dark mode** | The panel is white at 1am |
-| ⬜ | **Installable on a phone** | Approve and edit rules from where you actually post |
+| Issue | Feature | Why it matters |
+|:--|---|---|
+| [#45](https://github.com/CharanMN7/ig-comment-dm/issues/45) | **Tracked migration runner** | Adding a migration should not mean editing two npm scripts |
+| [#46](https://github.com/CharanMN7/ig-comment-dm/issues/46) | **Health check endpoint** | Uptime monitoring without a login |
+| [#47](https://github.com/CharanMN7/ig-comment-dm/issues/47) | **Operational event log** | Cron failures are invisible until something breaks |
+| [#49](https://github.com/CharanMN7/ig-comment-dm/issues/49) | **Export rules and logs** | Your data, portable |
+| [#50](https://github.com/CharanMN7/ig-comment-dm/issues/50) | **Dark mode** | The panel is white at 1am |
+| [#51](https://github.com/CharanMN7/ig-comment-dm/issues/51) | **Installable on a phone** | Approve and edit rules from where you actually post |
 
 </details>
 
+> [!TIP]
+> **New here?** These four are self-contained, need no Meta app to test, and have the approach written out in the issue:
+> [#19 non-Latin keyword matching](https://github.com/CharanMN7/ig-comment-dm/issues/19) ·
+> [#30 `{username}` placeholders](https://github.com/CharanMN7/ig-comment-dm/issues/30) ·
+> [#50 dark mode](https://github.com/CharanMN7/ig-comment-dm/issues/50) ·
+> [#48 human-readable Meta errors](https://github.com/CharanMN7/ig-comment-dm/issues/48)
+
 <div align="center">
 
-**[→ Browse all open issues](https://github.com/CharanMN7/ig-comment-dm/issues)** · **[→ Good first issues](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue)**
+**[→ All open issues](https://github.com/CharanMN7/ig-comment-dm/issues)** · **[→ Good first issues](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue)** · **[→ Discussions](https://github.com/CharanMN7/ig-comment-dm/discussions)**
 
 </div>
 
