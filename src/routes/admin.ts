@@ -7,6 +7,7 @@ import {
   encryptAesGcm,
   hashPassword,
   nowSeconds,
+  timingSafeEqualString,
   verifyPassword,
 } from '../crypto.ts';
 import { ensureCommentSubscriptions, runCron } from '../cron.ts';
@@ -28,10 +29,18 @@ import {
   updateRule,
   upsertAccount,
 } from '../db.ts';
+import { findConfigProblems } from '../config.ts';
 import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
 import { KEYWORD_TOO_SHORT_MESSAGE, findMatchingRule, parseKeywords } from '../match.ts';
 import { listRecentMedia, oauthRedirectUri } from '../meta.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
+import {
+  clearFailures,
+  describeLock,
+  lockRemaining,
+  readThrottle,
+  recordFailure,
+} from '../throttle.ts';
 import type { Env, SessionData } from '../types.ts';
 
 type Vars = {
@@ -76,7 +85,7 @@ function subPath(pathname: string): string {
 adminRoutes.use('*', async (c, next) => {
   const pathname = new URL(c.req.url).pathname;
   const secret = secretFromPath(pathname);
-  if (!secret || secret !== c.env.ADMIN_URL_SECRET) return c.notFound();
+  if (!secret || !timingSafeEqualString(secret, c.env.ADMIN_URL_SECRET ?? '')) return c.notFound();
   const base = `/a/${secret}`;
   c.set('adminBase', base);
   c.set('form', {});
@@ -196,52 +205,74 @@ adminRoutes.post('/setup', async (c) => {
   }
 });
 
+function loginPage(opts: { base: string; csrf: string; error?: string; lockedFor?: number }) {
+  return layout({
+    title: 'Log in',
+    body: html`
+      <h1>Log in</h1>
+      ${opts.error ? html`<p class="err">${opts.error}</p>` : html``}
+      ${opts.lockedFor
+        ? html`<p class="muted">
+            Too many wrong passwords. Try again in ${describeLock(opts.lockedFor)}. Each further
+            attempt doubles the wait, up to an hour.
+          </p>`
+        : html`
+            <form method="post" action="${opts.base}/login">
+              ${csrfField(opts.csrf)}
+              <label for="password">Password</label>
+              <input id="password" name="password" type="password" required autocomplete="current-password" />
+              <div class="row"><button type="submit">Log in</button></div>
+            </form>
+          `}
+    `,
+  });
+}
+
 adminRoutes.get('/login', async (c) => {
   if (!(await passwordConfigured(c.env))) return c.redirect(`${c.get('adminBase')}/setup`, 302);
   if (c.get('session').authed) return c.redirect(`${c.get('adminBase')}/`, 302);
-  const base = c.get('adminBase');
-  const err = c.req.query('e');
+  const remaining = lockRemaining(await readThrottle(c.env.DB), nowSeconds());
   return c.html(
-    layout({
-      title: 'Log in',
-      body: html`
-        <h1>Log in</h1>
-        ${err ? html`<p class="err">Wrong password.</p>` : html``}
-        <form method="post" action="${base}/login">
-          ${csrfField(c.get('session').csrf)}
-          <label for="password">Password</label>
-          <input id="password" name="password" type="password" required autocomplete="current-password" />
-          <div class="row"><button type="submit">Log in</button></div>
-        </form>
-      `,
+    loginPage({
+      base: c.get('adminBase'),
+      csrf: c.get('session').csrf,
+      error: c.req.query('e') ? 'Wrong password.' : undefined,
+      lockedFor: remaining || undefined,
     }),
   );
 });
 
 adminRoutes.post('/login', async (c) => {
   const base = c.get('adminBase');
+  const csrf = c.get('session').csrf;
+
+  // Check the lock before hashing. PBKDF2 is the most expensive thing this
+  // Worker does, so answering a locked-out attempt without running it also
+  // stops the login form being used to burn CPU quota.
+  const remaining = lockRemaining(await readThrottle(c.env.DB), nowSeconds());
+  if (remaining > 0) {
+    return c.html(loginPage({ base, csrf, lockedFor: remaining }), 429);
+  }
+
   const password = formOf(c).password ?? '';
   const hash = await systemGet(c.env.DB, 'admin_password_hash');
   const salt = await systemGet(c.env.DB, 'admin_password_salt');
   const ok = hash && salt ? await verifyPassword(password, hash, salt) : false;
+
   if (!ok) {
+    const lock = await recordFailure(c.env.DB);
     return c.html(
-      layout({
-        title: 'Log in',
-        body: html`
-          <h1>Log in</h1>
-          <p class="err">Wrong password.</p>
-          <form method="post" action="${base}/login">
-            ${csrfField(c.get('session').csrf)}
-            <label for="password">Password</label>
-            <input id="password" name="password" type="password" required autocomplete="current-password" />
-            <div class="row"><button type="submit">Log in</button></div>
-          </form>
-        `,
+      loginPage({
+        base,
+        csrf,
+        error: 'Wrong password.',
+        lockedFor: lock > 0 ? lock : undefined,
       }),
       401,
     );
   }
+
+  await clearFailures(c.env.DB);
   const made = await makeSession(c.env.SESSION_SIGNING_KEY, true);
   c.header('Set-Cookie', serializeSessionCookie(made.token, c.env.PUBLIC_BASE_URL, 30 * 24 * 60 * 60));
   return c.redirect(`${base}/`, 302);
@@ -274,7 +305,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   const cronStale = !Number.isFinite(lastCronN) || now - lastCronN > CRON_STALE_SECONDS;
   const reconnect = accounts.filter((a) => a.needs_reconnect === 1 || a.token_expires_at <= now);
   const latestEvent = events[0];
-  const missingFbSecret = !(c.env.FACEBOOK_APP_SECRET ?? '').trim();
+  const configProblems = findConfigProblems(c.env);
 
   const banners = [];
   if (reconnect.length) {
@@ -294,12 +325,23 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
       </div>
     `);
   }
-  if (missingFbSecret) {
+  if (configProblems.length) {
     banners.push(html`
       <div class="banner">
-        The Facebook App Secret is not set. Instagram often signs comment notifications with that secret,
-        not the Instagram one. Whoever set this up needs to add
-        <code>FACEBOOK_APP_SECRET</code> from Meta → App settings → Basic, then deploy again.
+        <b>${configProblems.length === 1 ? 'A Worker secret needs attention.' : `${String(configProblems.length)} Worker secrets need attention.`}</b>
+        Whoever set this up should fix these and deploy again.
+        <table style="margin-top:0.55rem">
+          <tr><th>Secret</th><th>What is wrong</th><th>Command that fixes it</th></tr>
+          ${configProblems.map(
+            (p) => html`
+              <tr>
+                <td><code>${p.secret}</code></td>
+                <td>${p.detail}</td>
+                <td><code>${p.fix}</code></td>
+              </tr>
+            `,
+          )}
+        </table>
       </div>
     `);
   }
