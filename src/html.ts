@@ -1,6 +1,16 @@
 import { html, raw } from 'hono/html';
 import type { HtmlEscapedString } from 'hono/utils/html';
 
+export const APP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="128" fill="#111111"/>
+  <path d="M140 160C140 137.909 157.909 120 180 120H332C354.091 120 372 137.909 372 160V290C372 312.091 354.091 330 332 330H240L170 380V330H180C157.909 330 140 312.091 140 290V160Z" fill="#F6F6F4"/>
+  <circle cx="216" cy="225" r="16" fill="#111111"/>
+  <circle cx="256" cy="225" r="16" fill="#111111"/>
+  <circle cx="296" cy="225" r="16" fill="#111111"/>
+</svg>`;
+
+export const APP_ICON_DATA_URI = `data:image/svg+xml;utf8,${encodeURIComponent(APP_ICON_SVG)}`;
+
 const CSS = `
 :root { color: #111; background: #f6f6f4; font: 15px/1.45 system-ui, sans-serif; }
 * { box-sizing: border-box; }
@@ -8,7 +18,7 @@ body { margin: 0; }
 main { max-width: 44rem; margin: 0 auto; padding: 1.25rem 1rem 4rem; }
 header.top { border-bottom: 1px solid #ddd; background: #fff; }
 header.top nav { max-width: 44rem; margin: 0 auto; padding: 0.65rem 1rem; display: flex; gap: 0.9rem; align-items: center; flex-wrap: wrap; }
-header.top nav a { color: #111; text-decoration: none; }
+header.top nav a { color: #111; text-decoration: none; display: inline-flex; align-items: center; min-height: 44px; padding: 0 0.2rem; }
 header.top nav a:hover { text-decoration: underline; }
 header.top .brand { font-weight: 650; margin-right: 0.5rem; }
 header.top form { margin-left: auto; }
@@ -25,13 +35,13 @@ th, td { text-align: left; padding: 0.4rem 0.55rem; border-bottom: 1px solid #ee
 th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; color: #555; background: #fafafa; }
 label { display: block; font-weight: 650; margin: 0.85rem 0 0.25rem; }
 input[type=text], input[type=password], textarea, select {
-  width: 100%; padding: 0.4rem 0.5rem; font: inherit; border: 1px solid #ccc; background: #fff;
+  width: 100%; padding: 0.5rem; font: inherit; border: 1px solid #ccc; background: #fff; min-height: 44px;
 }
 textarea { min-height: 6rem; }
 .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-top: 0.75rem; }
 button, .btn {
-  background: #111; color: #fff; border: 0; padding: 0.42rem 0.8rem; font: inherit; cursor: pointer;
-  text-decoration: none; display: inline-block;
+  background: #111; color: #fff; border: 0; padding: 0.5rem 0.85rem; font: inherit; cursor: pointer;
+  text-decoration: none; display: inline-flex; align-items: center; justify-content: center; min-height: 44px;
 }
 button.secondary, a.btn.secondary { background: #fff; color: #111; border: 1px solid #bbb; }
 button.danger { background: #a11; }
@@ -41,6 +51,15 @@ button.danger { background: #a11; }
 pre.raw { background: #111; color: #eee; padding: 0.6rem 0.7rem; overflow: auto; font-size: 0.78rem; }
 .actions form { display: inline; }
 code { font-size: 0.88em; }
+
+@media (max-width: 480px) {
+  main { padding: 1rem 0.75rem 3rem; }
+  .kpis { grid-template-columns: 1fr; }
+  header.top nav { gap: 0.5rem; padding: 0.5rem 0.75rem; }
+  header.top form { width: 100%; margin-left: 0; margin-top: 0.25rem; }
+  header.top form button { width: 100%; }
+  table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}
 `;
 
 export function csrfField(token: string) {
@@ -53,6 +72,10 @@ export function layout(opts: {
   csrf?: string;
   body: HtmlEscapedString | Promise<HtmlEscapedString>;
 }) {
+  const iconHref = opts.base ? `${opts.base}/icon.svg` : APP_ICON_DATA_URI;
+  const manifestLink = opts.base
+    ? html`<link rel="manifest" href="${opts.base}/manifest.webmanifest" />`
+    : html``;
   const nav = opts.base
     ? html`
         <header class="top">
@@ -75,6 +98,13 @@ export function layout(opts: {
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="theme-color" content="#111111" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+        <meta name="apple-mobile-web-app-title" content="Comment DM" />
+        <link rel="icon" type="image/svg+xml" href="${iconHref}" />
+        <link rel="apple-touch-icon" href="${iconHref}" />
+        ${manifestLink}
         <title>${opts.title}</title>
         <style>
           ${raw(CSS)}
