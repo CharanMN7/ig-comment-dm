@@ -4,6 +4,7 @@ import { securityHeaders } from './headers.ts';
 import { reconcileComments } from './reconcile.ts';
 import { adminRoutes } from './routes/admin.ts';
 import { connectRoutes } from './routes/connect.ts';
+import { healthRoutes } from './routes/health.ts';
 import { legalRoutes } from './routes/legal.ts';
 import { webhookRoutes } from './routes/webhook.ts';
 import type { Env } from './types.ts';
@@ -13,6 +14,9 @@ const app = new Hono<{ Bindings: Env }>({ strict: false });
 app.use('*', securityHeaders);
 
 app.get('/', (c) => c.text('ok'));
+// Mounted before the admin routes and outside their auth middleware: an uptime
+// monitor has no secret and must not need one.
+app.route('/', healthRoutes);
 app.route('/', legalRoutes);
 app.route('/webhook', webhookRoutes);
 app.route('/connect', connectRoutes);
