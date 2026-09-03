@@ -18,6 +18,7 @@ import {
   findMatchingRule,
   keywordMatches,
   normalizeCommentText,
+  parseMatchMode,
 } from '../src/match.ts';
 import type { Rule } from '../src/types.ts';
 
@@ -29,6 +30,7 @@ function rule(partial: Partial<Rule> & Pick<Rule, 'id' | 'keywords' | 'label'>):
     public_reply_text: null,
     active: 1,
     created_at: 0,
+    match_mode: 'word',
     ...partial,
   };
 }
@@ -110,6 +112,97 @@ describe('findMatchingRule', () => {
 
   it('returns null when nothing matches', () => {
     assert.equal(findMatchingRule([global], 'nice photo', undefined), null);
+  });
+});
+
+describe('match_mode (#21)', () => {
+  describe('parseMatchMode', () => {
+    it('reads the explicit opt-in', () => {
+      assert.equal(parseMatchMode('contains'), 'contains');
+    });
+
+    it('falls back to word for anything else', () => {
+      // A rule row written before the column existed, or a hand-edited value,
+      // must not silently widen the rule's reach.
+      for (const raw of ['word', '', 'CONTAINS', 'partial', null, undefined, 0, {}]) {
+        assert.equal(parseMatchMode(raw), 'word', `parseMatchMode(${JSON.stringify(raw)})`);
+      }
+    });
+  });
+
+  describe('keywordMatches', () => {
+    it('contains mode matches a hashtag built on the keyword', () => {
+      const n = normalizeCommentText('so hyped for #launch2026!!');
+      assert.equal(keywordMatches(n, 'launch', 'contains'), true);
+      assert.equal(keywordMatches(n, 'launch', 'word'), false);
+    });
+
+    it('contains mode matches a plural', () => {
+      const n = normalizeCommentText('do you have guides?');
+      assert.equal(keywordMatches(n, 'guide', 'contains'), true);
+    });
+
+    it('word mode still rejects a plural', () => {
+      const n = normalizeCommentText('do you have guides?');
+      assert.equal(keywordMatches(n, 'guide', 'word'), false);
+    });
+
+    it('word mode is the default when no mode is given', () => {
+      const n = normalizeCommentText('do you have guides?');
+      assert.equal(keywordMatches(n, 'guide'), false);
+    });
+
+    it('word mode still stops a short keyword firing inside another word', () => {
+      const n = normalizeCommentText('again, check my email');
+      assert.equal(keywordMatches(n, 'AI', 'word'), false);
+      assert.equal(keywordMatches(n, 'mail', 'word'), false);
+    });
+
+    it('contains mode is exactly why the 3-character floor matters', () => {
+      // Documents the trade-off rather than asserting a bug: in contains mode a
+      // 2-character keyword really would match these. The form's minimum is the
+      // guard, not the matcher.
+      const n = normalizeCommentText('again, check my email');
+      assert.equal(keywordMatches(n, 'AI', 'contains'), true);
+      assert.equal(keywordMatches(n, 'mail', 'contains'), true);
+    });
+
+    it('an empty keyword never matches, in either mode', () => {
+      const n = normalizeCommentText('anything at all');
+      assert.equal(keywordMatches(n, '   ', 'contains'), false);
+      assert.equal(keywordMatches(n, '   ', 'word'), false);
+    });
+  });
+
+  describe('findMatchingRule', () => {
+    it('honours a rule set to contains', () => {
+      const r = rule({
+        id: 20,
+        label: 'launch',
+        keywords: JSON.stringify(['launch']),
+        match_mode: 'contains',
+      });
+      assert.equal(findMatchingRule([r], 'ready for #launch2026', undefined)?.id, 20);
+    });
+
+    it('leaves an existing word-mode rule unchanged', () => {
+      const r = rule({ id: 21, label: 'guide', keywords: JSON.stringify(['guide']) });
+      assert.equal(findMatchingRule([r], 'do you have guides?', undefined), null);
+      assert.equal(findMatchingRule([r], 'send the guide please', undefined)?.id, 21);
+    });
+
+    it('applies each rule its own mode', () => {
+      const wordRule = rule({ id: 30, label: 'w', keywords: JSON.stringify(['guide']) });
+      const containsRule = rule({
+        id: 31,
+        label: 'c',
+        keywords: JSON.stringify(['guide']),
+        match_mode: 'contains',
+      });
+      // Only the contains rule can match a plural, so it must be the one found
+      // even though the word rule is first in the list.
+      assert.equal(findMatchingRule([wordRule, containsRule], 'have guides?', undefined)?.id, 31);
+    });
   });
 });
 
