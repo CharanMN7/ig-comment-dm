@@ -37,6 +37,8 @@ export type Rule = {
   ig_user_id: string;
   label: string;
   keywords: string;
+  /** JSON array, same shape as `keywords`. Empty means no exclusions. */
+  exclude_keywords: string;
   media_id: string | null;
   dm_text: string;
   public_reply_text: string | null;

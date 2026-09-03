@@ -17,6 +17,7 @@ import {
   escapeRegex,
   findMatchingRule,
   keywordMatches,
+  matchRule,
   normalizeCommentText,
 } from '../src/match.ts';
 import type { Rule } from '../src/types.ts';
@@ -29,6 +30,7 @@ function rule(partial: Partial<Rule> & Pick<Rule, 'id' | 'keywords' | 'label'>):
     public_reply_text: null,
     active: 1,
     created_at: 0,
+    exclude_keywords: '[]',
     ...partial,
   };
 }
@@ -110,6 +112,82 @@ describe('findMatchingRule', () => {
 
   it('returns null when nothing matches', () => {
     assert.equal(findMatchingRule([global], 'nice photo', undefined), null);
+  });
+});
+
+describe('exclude_keywords (#22)', () => {
+  const guide = (extra: Record<string, unknown> = {}) =>
+    rule({
+      id: 1,
+      label: 'guide',
+      keywords: JSON.stringify(['guide']),
+      exclude_keywords: JSON.stringify(['how much', 'already have', 'not interested']),
+      ...extra,
+    });
+
+  it('skips the rule when an exclusion matches', () => {
+    const out = matchRule([guide()], 'how much is the guide?', undefined);
+    assert.equal(out.rule, null);
+    assert.equal(out.excluded.length, 1);
+    assert.equal(out.excluded[0]?.keyword, 'how much');
+    assert.equal(out.excluded[0]?.rule.label, 'guide');
+  });
+
+  it('still fires when no exclusion matches', () => {
+    const out = matchRule([guide()], 'can I get the guide please', undefined);
+    assert.equal(out.rule?.id, 1);
+    assert.equal(out.excluded.length, 0);
+  });
+
+  it('reports which exclusion matched, not just that one did', () => {
+    const out = matchRule([guide()], 'not interested in the guide', undefined);
+    assert.equal(out.excluded[0]?.keyword, 'not interested');
+  });
+
+  it('matching continues to the next rule after an exclusion', () => {
+    // The documented answer to the design question: an exclusion is scoped to
+    // the rule that declares it and does not veto the whole comment.
+    const price = rule({ id: 2, label: 'price', keywords: JSON.stringify(['how much']) });
+    const out = matchRule([guide(), price], 'how much is the guide?', undefined);
+    assert.equal(out.rule?.id, 2, 'rule B should still be reached');
+    assert.equal(out.excluded[0]?.rule.id, 1, 'rule A should be reported as skipped');
+  });
+
+  it('only reports a rule as excluded if its keywords matched first', () => {
+    // A rule that was never in the running is not "skipped"; saying so would
+    // fill the Test page with noise.
+    const out = matchRule([guide()], 'how much for shipping?', undefined);
+    assert.equal(out.rule, null);
+    assert.equal(out.excluded.length, 0);
+  });
+
+  it('uses the same matcher as keywords, so exclusions are whole-word too', () => {
+    const r = rule({
+      id: 3,
+      label: 'r',
+      keywords: JSON.stringify(['guide']),
+      exclude_keywords: JSON.stringify(['price']),
+    });
+    // "priceless" must not trip the "price" exclusion.
+    assert.equal(matchRule([r], 'this guide is priceless', undefined).rule?.id, 3);
+    assert.equal(matchRule([r], 'guide - what price?', undefined).rule, null);
+  });
+
+  it('a rule with no exclusions behaves exactly as before', () => {
+    const r = rule({ id: 4, label: 'r', keywords: JSON.stringify(['guide']) });
+    assert.equal(matchRule([r], 'how much is the guide?', undefined).rule?.id, 4);
+  });
+
+  it('tolerates a missing or malformed exclusion list', () => {
+    for (const raw of ['', 'not json', '{}', 'null']) {
+      const r = rule({ id: 5, label: 'r', keywords: JSON.stringify(['guide']), exclude_keywords: raw });
+      assert.equal(matchRule([r], 'send the guide', undefined).rule?.id, 5, raw);
+    }
+  });
+
+  it('findMatchingRule still returns just the rule', () => {
+    assert.equal(findMatchingRule([guide()], 'how much is the guide?', undefined), null);
+    assert.equal(findMatchingRule([guide()], 'send the guide', undefined)?.id, 1);
   });
 });
 
