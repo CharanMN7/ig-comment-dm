@@ -21,6 +21,7 @@ p { margin: 0.5rem 0; }
 .ok { background: #e7f6ea; border: 1px solid #2a6; color: #143; padding: 0.7rem 0.85rem; margin: 0 0 1rem; }
 .err { color: #a11; }
 table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e4e4e0; }
+.table-wrap { overflow-x: auto; }
 th, td { text-align: left; padding: 0.4rem 0.55rem; border-bottom: 1px solid #eee; vertical-align: top; font-size: 0.9rem; }
 th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; color: #555; background: #fafafa; }
 label { display: block; font-weight: 650; margin: 0.85rem 0 0.25rem; }
@@ -59,6 +60,7 @@ export function layout(opts: {
           <nav>
             <span class="brand">Comment to DM</span>
             <a href="${opts.base}/">Home</a>
+            <a href="${opts.base}/logs">Logs</a>
             <a href="${opts.base}/rules">Rules</a>
             <a href="${opts.base}/test">Test</a>
             <a href="${opts.base}/accounts">Accounts</a>
