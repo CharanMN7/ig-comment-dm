@@ -80,6 +80,67 @@ describe('keyword matching', () => {
   });
 });
 
+describe('keyword matching across scripts', () => {
+  // Every one of these silently failed before: `` is defined against
+  // [A-Za-z0-9_] and does not widen under the `u` flag, so for a keyword whose
+  // edges are non-ASCII the boundary never asserted.
+  const spaceUsing: Array<[string, string, string]> = [
+    ['Cyrillic', 'гид', 'нужен гид пожалуйста'],
+    ['Arabic', 'الدليل', 'أريد الدليل'],
+    ['Korean', '가이드', '가이드 주세요'],
+    ['Devanagari', 'मार्गदर्शन', 'मुझे मार्गदर्शन चाहिए'],
+    ['Greek', 'οδηγός', 'θέλω τον οδηγός'],
+  ];
+
+  for (const [script, keyword, comment] of spaceUsing) {
+    it(`matches a ${script} keyword`, () => {
+      assert.equal(keywordMatches(normalizeCommentText(comment), keyword), true);
+    });
+  }
+
+  // Scripts with no spaces between words. A boundary does not exist here, so
+  // requiring one rejects every real comment.
+  const separatorless: Array<[string, string, string]> = [
+    ['Chinese', '指南', '请发指南给我'],
+    ['Japanese', 'ガイド', 'ガイドください'],
+    ['Thai', 'คู่มือ', 'ขอคู่มือหน่อย'],
+  ];
+
+  for (const [script, keyword, comment] of separatorless) {
+    it(`matches a ${script} keyword with no separator around it`, () => {
+      assert.equal(keywordMatches(normalizeCommentText(comment), keyword), true);
+    });
+  }
+
+  it('still refuses a substring in a script that does use spaces', () => {
+    // The boundary is widened, not removed.
+    assert.equal(keywordMatches(normalizeCommentText('нужен гидроцикл'), 'гид'), false);
+    assert.equal(keywordMatches(normalizeCommentText('가이드북 주세요'), '가이드'), false);
+    assert.equal(keywordMatches(normalizeCommentText('guidebook here'), 'guide'), false);
+  });
+
+  it('accepts a separatorless neighbour around a Latin keyword', () => {
+    // Japanese runs Latin words straight into kana with no space, so treating a
+    // kana neighbour as word-forming would reject the ordinary case.
+    assert.equal(
+      keywordMatches(normalizeCommentText('新しいiphoneケースが欲しい'), 'iphoneケース'),
+      true,
+    );
+  });
+
+  it('records that a separatorless keyword matches inside a longer word', () => {
+    // Deliberate, not an oversight: there is no boundary available to consult.
+    // The same trade-off KEYWORD_TOO_SHORT_MESSAGE describes for short Latin
+    // keywords, and far better than matching nothing at all.
+    assert.equal(keywordMatches(normalizeCommentText('ガイドライン'), 'ガイド'), true);
+  });
+
+  it('matches at the very start and end of the text', () => {
+    assert.equal(keywordMatches(normalizeCommentText('гид'), 'гид'), true);
+    assert.equal(keywordMatches(normalizeCommentText('指南'), '指南'), true);
+  });
+});
+
 describe('findMatchingRule', () => {
   const global = rule({ id: 1, label: 'global', keywords: JSON.stringify(['guide']), dm_text: 'global-dm' });
   const scoped = rule({
