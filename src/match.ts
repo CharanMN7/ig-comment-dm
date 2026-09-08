@@ -1,7 +1,17 @@
 import type { Rule } from './types.ts';
 
+const NON_NFD_MAP: Record<string, string> = {
+  '\u0111': 'd',  '\u0110': 'D',  // đ Đ (Vietnamese)
+  '\u0142': 'l',  '\u0141': 'L',  // ł Ł (Polish)
+  '\u00F8': 'o',  '\u00D8': 'O',  // ø Ø (Scandinavian)
+  '\u00DF': 'ss', '\u1E9E': 'SS', // ß ẞ (German)
+  '\u00F0': 'd',  '\u00D0': 'D',  // ð Ð (Icelandic)
+  '\u00FE': 'th', '\u00DE': 'TH', // þ Þ (Icelandic)
+};
+
 export function normalizeCommentText(text: string): string {
   return text
+    .replace(/[\u0111\u0110\u0142\u0141\u00F8\u00D8\u00DF\u1E9E\u00F0\u00D0\u00FE\u00DE]/g, (c) => NON_NFD_MAP[c] ?? c)
     .normalize('NFD')
     .replace(/([A-Za-z])\p{Diacritic}+/gu, '$1')
     .normalize('NFC')
