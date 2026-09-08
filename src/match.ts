@@ -67,12 +67,26 @@ const SEPARATORLESS_CLASS =
 const BOUNDARY_BEFORE = `(?<=^|[^\\p{L}\\p{N}]|${SEPARATORLESS_CLASS})`;
 const BOUNDARY_AFTER = `(?=$|[^\\p{L}\\p{N}]|${SEPARATORLESS_CLASS})`;
 
-export function keywordMatches(normalizedComment: string, keyword: string): boolean {
+const keywordRegexCache = new Map<string, RegExp | null>();
+
+export function compileKeywordRegex(keyword: string): RegExp | null {
+  const cached = keywordRegexCache.get(keyword);
+  if (cached !== undefined) return cached;
   const k = normalizeCommentText(keyword);
-  if (!k) return false;
+  if (!k) {
+    keywordRegexCache.set(keyword, null);
+    return null;
+  }
   // Lookaround rather than `\b`, so the boundary is decided by the Unicode
   // properties of the neighbouring characters instead of by the ASCII range.
   const re = new RegExp(`${BOUNDARY_BEFORE}${escapeRegex(k)}${BOUNDARY_AFTER}`, 'u');
+  keywordRegexCache.set(keyword, re);
+  return re;
+}
+
+export function keywordMatches(normalizedComment: string, keyword: string): boolean {
+  const re = compileKeywordRegex(keyword);
+  if (!re) return false;
   return re.test(normalizedComment);
 }
 
