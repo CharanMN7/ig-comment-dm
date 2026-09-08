@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  CRON_STALE_SECONDS,
   hmacSha256Hex,
   timingSafeEqualString,
   verifyHmacSha256Hex,
@@ -13,6 +14,7 @@ import type { Env } from '../src/types.ts';
 import { authorizeUrl, oauthRedirectUri } from '../src/meta.ts';
 import { isSelfComment } from '../src/guard.ts';
 import { parseWebhookPayload } from '../src/process.ts';
+import { POLL_STALE_SECONDS, buildHealthReport } from '../src/routes/health.ts';
 import {
   escapeRegex,
   findMatchingRule,
@@ -77,6 +79,85 @@ describe('keyword matching', () => {
     // punctuation stripped, so c++ becomes c
     assert.equal(normalizeCommentText('love c++ here'), 'love c here');
     assert.equal(keywordMatches(n, 'c++'), true);
+  });
+});
+
+describe('health report', () => {
+  const NOW = 1_756_400_000;
+  const healthy = {
+    databaseOk: true,
+    activeAccounts: 2,
+    needsReconnect: 0,
+    lastCronOkAt: NOW - 60,
+    lastPollOkAt: NOW - 60,
+    now: NOW,
+  };
+
+  it('reports ok when the database answers and both jobs are recent', () => {
+    const report = buildHealthReport(healthy);
+    assert.equal(report.ok, true);
+    assert.equal(report.database, 'ok');
+    assert.deepEqual(report.accounts, { active: 2, needs_reconnect: 0 });
+  });
+
+  it('is not ok when the database is unreachable', () => {
+    assert.equal(buildHealthReport({ ...healthy, databaseOk: false }).ok, false);
+    assert.equal(buildHealthReport({ ...healthy, databaseOk: false }).database, 'error');
+  });
+
+  it('is not ok when the nightly refresh is stale', () => {
+    // The characteristic silent failure: nothing else tells you it stopped.
+    const stale = { ...healthy, lastCronOkAt: NOW - CRON_STALE_SECONDS - 1 };
+    assert.equal(buildHealthReport(stale).ok, false);
+  });
+
+  it('is not ok when the five-minute poll is stale', () => {
+    const stale = { ...healthy, lastPollOkAt: NOW - POLL_STALE_SECONDS - 1 };
+    assert.equal(buildHealthReport(stale).ok, false);
+  });
+
+  it('tolerates a job that ran within its window', () => {
+    assert.equal(buildHealthReport({ ...healthy, lastCronOkAt: NOW - CRON_STALE_SECONDS + 1 }).ok, true);
+    assert.equal(buildHealthReport({ ...healthy, lastPollOkAt: NOW - POLL_STALE_SECONDS + 1 }).ok, true);
+  });
+
+  it('treats a job that has never run as stale', () => {
+    // Correct for a fresh deployment: nothing has proven the job works yet.
+    assert.equal(buildHealthReport({ ...healthy, lastCronOkAt: null }).ok, false);
+    assert.equal(buildHealthReport({ ...healthy, lastPollOkAt: null }).ok, false);
+  });
+
+  it('still reports ok while accounts need reconnecting', () => {
+    // That is the operator's problem to fix, not an outage of this service.
+    // Paging on it would train them to ignore the monitor.
+    const report = buildHealthReport({ ...healthy, needsReconnect: 2 });
+    assert.equal(report.ok, true);
+    assert.equal(report.accounts.needs_reconnect, 2);
+  });
+
+  it('exposes nothing but booleans, small integers and timestamps', () => {
+    // The endpoint is unauthenticated, so this is the security boundary.
+    const report = buildHealthReport({ ...healthy, lastCronOkAt: null });
+    const serialized = JSON.stringify(report);
+
+    assert.deepEqual(Object.keys(report).sort(), [
+      'accounts',
+      'database',
+      'last_cron_ok_at',
+      'last_poll_ok_at',
+      'ok',
+    ]);
+    for (const forbidden of ['username', 'ig_user_id', 'token', 'secret']) {
+      assert.equal(serialized.includes(forbidden), false, `leaked ${forbidden}`);
+    }
+  });
+
+  it('reports a database failure as a bare status, never as a message', () => {
+    // A D1 failure string can quote the query, so the body carries the literal
+    // 'error' and nothing else; the detail goes to the Worker log.
+    const report = buildHealthReport({ ...healthy, databaseOk: false });
+    assert.equal(report.database, 'error');
+    assert.equal(JSON.stringify(report).length < 200, true);
   });
 });
 

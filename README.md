@@ -220,6 +220,35 @@ Then comment from a **different** Instagram account — a friend's phone works. 
 | **Last 20 sends** | Every DM, skip, and failure, with the reason. |
 | **Red banners** | An account needs reconnecting, the nightly job has stalled, or a secret is misconfigured. |
 
+### Monitor it from outside
+
+`GET /health` needs no authentication and is safe to point an uptime monitor at.
+It answers `200` when the database is reachable and both scheduled jobs have run
+recently, and `503` when they have not — so a monitor can alert without parsing
+the body.
+
+```bash
+curl -i https://your-worker.workers.dev/health
+```
+
+```json
+{
+  "ok": true,
+  "database": "ok",
+  "accounts": { "active": 2, "needs_reconnect": 0 },
+  "last_cron_ok_at": 1756400000,
+  "last_poll_ok_at": 1756402000
+}
+```
+
+This is the answer to the silent failure in the table below: if the nightly
+refresh stops, nothing tells you until tokens expire and every account needs a
+manual reconnect. The red banner only appears if someone happens to open the
+admin page.
+
+The response is booleans, small integers and timestamps. It never carries a
+username, an account id, a secret, or anything derived from `ADMIN_URL_SECRET`.
+
 ---
 
 ## Things that will surprise you
