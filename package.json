@@ -19,7 +19,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260905.1",
-    "typescript": "^5.9.2",
+    "typescript": "^7.0.2",
     "wrangler": "^4.129.0"
   },
   "description": "Self-hosted Instagram comment-to-DM automation on a single Cloudflare Worker.",
