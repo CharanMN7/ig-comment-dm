@@ -62,6 +62,18 @@ describe('normalizeCommentText', () => {
     assert.equal(normalizeCommentText('PREÇO café über'), 'preco cafe uber');
     assert.equal(normalizeCommentText('й が क़ ไทย'), 'й が क़ ไทย');
   });
+
+  it('folds stroke and bar letters (đ, ł, ø, ß, ð, þ) and uppercase variants', () => {
+    assert.equal(normalizeCommentText('điện'), 'dien');
+    assert.equal(normalizeCommentText('ĐIỆN'), 'dien');
+    assert.equal(normalizeCommentText('łódź'), 'lodz');
+    assert.equal(normalizeCommentText('ŁÓDŹ'), 'lodz');
+    assert.equal(normalizeCommentText('tromsø'), 'tromso');
+    assert.equal(normalizeCommentText('TROMSØ'), 'tromso');
+    assert.equal(normalizeCommentText('straße STRAẞE'), 'strasse strasse');
+    assert.equal(normalizeCommentText('að að'), 'ad ad');
+    assert.equal(normalizeCommentText('ÞÓR thór'), 'thor thor');
+  });
 });
 
 describe('keyword matching', () => {

@@ -1,7 +1,19 @@
 import type { Rule } from './types.ts';
 
+const STROKE_AND_BAR_LETTERS: Record<string, string> = {
+  'đ': 'd', 'Đ': 'd',
+  'ł': 'l', 'Ł': 'l',
+  'ø': 'o', 'Ø': 'o',
+  'ß': 'ss', 'ẞ': 'ss',
+  'ð': 'd', 'Ð': 'd',
+  'þ': 'th', 'Þ': 'th',
+};
+
+const STROKE_AND_BAR_REGEX = /[đĐłŁøØßẞðÐþÞ]/g;
+
 export function normalizeCommentText(text: string): string {
   return text
+    .replace(STROKE_AND_BAR_REGEX, (ch) => STROKE_AND_BAR_LETTERS[ch] || ch)
     .normalize('NFD')
     .replace(/([A-Za-z])\p{Diacritic}+/gu, '$1')
     .normalize('NFC')
