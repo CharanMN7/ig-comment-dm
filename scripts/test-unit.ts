@@ -14,6 +14,11 @@ import { authorizeUrl, oauthRedirectUri } from '../src/meta.ts';
 import { isSelfComment } from '../src/guard.ts';
 import { parseWebhookPayload } from '../src/process.ts';
 import {
+  MAX_USERNAME_LENGTH,
+  substitutePlaceholders,
+  worstCaseLength,
+} from '../src/placeholders.ts';
+import {
   escapeRegex,
   findMatchingRule,
   keywordMatches,
@@ -77,6 +82,101 @@ describe('keyword matching', () => {
     // punctuation stripped, so c++ becomes c
     assert.equal(normalizeCommentText('love c++ here'), 'love c here');
     assert.equal(keywordMatches(n, 'c++'), true);
+  });
+});
+
+describe('placeholder substitution', () => {
+  const sub = substitutePlaceholders;
+
+  it('fills {username} from the commenter', () => {
+    assert.equal(
+      sub("Hey {username}, here's the guide", { username: 'sarah' }),
+      "Hey sarah, here's the guide",
+    );
+  });
+
+  it('fills {link} when a value is supplied', () => {
+    assert.equal(sub('Here: {link}', { link: 'https://x/r/ab12cd' }), 'Here: https://x/r/ab12cd');
+  });
+
+  it('fills both tokens in one message', () => {
+    assert.equal(
+      sub('Hey {username}, here: {link}', { username: 'sarah', link: 'https://x/r/ab' }),
+      'Hey sarah, here: https://x/r/ab',
+    );
+  });
+
+  it('fills every occurrence, not only the first', () => {
+    assert.equal(sub('{username} {username}', { username: 'sarah' }), 'sarah sarah');
+  });
+
+  it('degrades to no name rather than to "undefined" or a leftover brace', () => {
+    // The explicit requirement: `Hey {username}, here's…` must read `Hey, here's…`
+    for (const values of [{}, { username: null }, { username: undefined }]) {
+      const out = sub("Hey {username}, here's the guide", values);
+      assert.equal(out, "Hey, here's the guide");
+      assert.equal(out.includes('undefined'), false);
+      assert.equal(out.includes('{'), false);
+    }
+  });
+
+  it('does not leave a doubled space where a token was removed', () => {
+    assert.equal(sub('a {username} b', {}), 'a b');
+    assert.equal(sub('{username} leading', {}), 'leading');
+    assert.equal(sub('trailing {username}', {}), 'trailing');
+  });
+
+  it('keeps paragraph breaks a creator wrote', () => {
+    // Collapsing these would silently reformat their copy.
+    const paragraphs = ['one', '', 'two'].join('\n');
+    assert.equal(sub(paragraphs, {}), paragraphs);
+  });
+
+  it('leaves an unknown token exactly as written', () => {
+    // Blanking it would delete a creator's copy.
+    assert.equal(sub('literal {foo} here', { username: 'sarah' }), 'literal {foo} here');
+    assert.equal(sub('{username} and {foo}', { username: 'sarah' }), 'sarah and {foo}');
+  });
+
+  it('leaves text with no tokens untouched apart from trimming', () => {
+    assert.equal(sub('plain message', {}), 'plain message');
+  });
+
+  it('does not delete punctuation the creator wrote before an empty token', () => {
+    // Deliberate. `here's the guide: {link}` with no link leaves a dangling
+    // colon, which is not pretty -- but guessing which punctuation belongs to
+    // the token and which belongs to the sentence means silently editing
+    // someone's copy. Only whitespace is tidied.
+    assert.equal(sub("here's the guide: {link}", {}), "here's the guide:");
+  });
+});
+
+describe('placeholder length budgeting', () => {
+  it('counts a plain message as its own length', () => {
+    assert.equal(worstCaseLength('hello'), 5);
+  });
+
+  it('budgets {username} at the longest username Instagram allows', () => {
+    // The values do not exist when the rule is saved, so the form has to
+    // validate against the worst case or Instagram rejects the send instead.
+    assert.equal(worstCaseLength('{username}'), MAX_USERNAME_LENGTH);
+    assert.equal(worstCaseLength('hi {username}'), 3 + MAX_USERNAME_LENGTH);
+  });
+
+  it('budgets each occurrence separately', () => {
+    assert.equal(worstCaseLength('{username}{username}'), MAX_USERNAME_LENGTH * 2);
+  });
+
+  it('does not budget an unknown token', () => {
+    assert.equal(worstCaseLength('{foo}'), 5);
+  });
+
+  it('catches a message that only exceeds the limit once expanded', () => {
+    // 995 written characters plus {username} is under 1,000 as typed and over
+    // it as sent.
+    const message = 'x'.repeat(985) + '{username}';
+    assert.equal(message.length < 1000, true);
+    assert.equal(worstCaseLength(message) > 1000, true);
   });
 });
 
