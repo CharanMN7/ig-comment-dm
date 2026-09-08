@@ -588,7 +588,7 @@ function ruleForm(opts: {
       <p class="muted">${String(dmLen)}/1,000 characters</p>
       <label for="public_reply_text">Public reply under the comment (optional)</label>
       <textarea id="public_reply_text" name="public_reply_text">${v.public_reply_text}</textarea>
-      <p class="muted">Leave blank to only send the private message, with no public reply.</p>
+      <p class="muted">One reply per line (one chosen at random per send). Leave blank to only send the private message, with no public reply.</p>
       <div class="row"><button type="submit">Save rule</button></div>
     </form>
   `;

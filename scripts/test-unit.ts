@@ -12,7 +12,11 @@ import { FREE_ATTEMPTS, lockRemaining, lockSecondsFor } from '../src/throttle.ts
 import type { Env } from '../src/types.ts';
 import { authorizeUrl, oauthRedirectUri } from '../src/meta.ts';
 import { isSelfComment } from '../src/guard.ts';
-import { parseWebhookPayload } from '../src/process.ts';
+import {
+  parsePublicReplyVariations,
+  parseWebhookPayload,
+  selectPublicReply,
+} from '../src/process.ts';
 import {
   escapeRegex,
   findMatchingRule,
@@ -363,3 +367,54 @@ describe('login throttle', () => {
     assert.equal(lockRemaining({ fails: 0, lockedUntil: 0 }, 1_000), 0);
   });
 });
+
+describe('public reply variations', () => {
+  it('handles null, undefined, or empty string gracefully', () => {
+    assert.deepEqual(parsePublicReplyVariations(null), []);
+    assert.deepEqual(parsePublicReplyVariations(undefined), []);
+    assert.deepEqual(parsePublicReplyVariations(''), []);
+    assert.deepEqual(parsePublicReplyVariations('   \n  \n  '), []);
+    assert.equal(selectPublicReply(null), null);
+    assert.equal(selectPublicReply(''), null);
+  });
+
+  it('keeps backward compatibility with existing single-value reply text', () => {
+    const single = 'Sent you a DM with the details! Check your inbox.';
+    assert.deepEqual(parsePublicReplyVariations(single), [single]);
+    assert.equal(selectPublicReply(single), single);
+  });
+
+  it('parses multiple newline-delimited variations ignoring blank lines', () => {
+    const multiline = `
+      Check your DM!
+      
+      Sent to your inbox!
+      
+      Check your message request folder!
+    `;
+    const variations = parsePublicReplyVariations(multiline);
+    assert.deepEqual(variations, [
+      'Check your DM!',
+      'Sent to your inbox!',
+      'Check your message request folder!',
+    ]);
+  });
+
+  it('supports JSON array format if stored as json', () => {
+    const jsonStr = JSON.stringify(['Variation 1', 'Variation 2', 'Variation 3']);
+    assert.deepEqual(parsePublicReplyVariations(jsonStr), [
+      'Variation 1',
+      'Variation 2',
+      'Variation 3',
+    ]);
+  });
+
+  it('picks variations at random using random generator function', () => {
+    const text = 'Option A\nOption B\nOption C';
+    assert.equal(selectPublicReply(text, () => 0), 'Option A');
+    assert.equal(selectPublicReply(text, () => 1), 'Option B');
+    assert.equal(selectPublicReply(text, () => 2), 'Option C');
+    assert.equal(selectPublicReply(text, () => 3), 'Option A'); // modulo wrapping
+  });
+});
+
