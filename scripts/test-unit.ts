@@ -14,6 +14,7 @@ import { authorizeUrl, oauthRedirectUri } from '../src/meta.ts';
 import { isSelfComment } from '../src/guard.ts';
 import { parseWebhookPayload } from '../src/process.ts';
 import {
+  compileKeywordRegex,
   escapeRegex,
   findMatchingRule,
   keywordMatches,
@@ -82,6 +83,18 @@ describe('keyword matching', () => {
     // punctuation stripped, so c++ becomes c
     assert.equal(normalizeCommentText('love c++ here'), 'love c here');
     assert.equal(keywordMatches(n, 'c++'), true);
+  });
+
+  it('caches compiled keyword regex instances', () => {
+    const re1 = compileKeywordRegex('price');
+    const re2 = compileKeywordRegex('price');
+    assert.ok(re1 !== null);
+    assert.equal(re1, re2);
+
+    const empty1 = compileKeywordRegex('   ');
+    const empty2 = compileKeywordRegex('   ');
+    assert.equal(empty1, null);
+    assert.equal(empty2, null);
   });
 });
 
