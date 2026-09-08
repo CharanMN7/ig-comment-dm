@@ -2,6 +2,9 @@ import type { Rule } from './types.ts';
 
 export function normalizeCommentText(text: string): string {
   return text
+    .normalize('NFD')
+    .replace(/([A-Za-z])\p{Diacritic}+/gu, '$1')
+    .normalize('NFC')
     .toLowerCase()
     .replace(/\p{Extended_Pictographic}/gu, ' ')
     .replace(/[\uFE0F\u200D]/g, ' ')
