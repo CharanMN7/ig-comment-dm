@@ -31,7 +31,7 @@ import {
 } from '../db.ts';
 import { findConfigProblems } from '../config.ts';
 import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
-import { KEYWORD_TOO_SHORT_MESSAGE, findMatchingRule, parseKeywords } from '../match.ts';
+import { KEYWORD_TOO_SHORT_MESSAGE, findMatchingRule, parseKeywords, parseMatchMode } from '../match.ts';
 import { listRecentMedia, oauthRedirectUri } from '../meta.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
 import {
@@ -536,6 +536,7 @@ function ruleForm(opts: {
     media_id: string;
     dm_text: string;
     public_reply_text: string;
+    match_mode: string;
   };
   posts: Array<{ id: string; label: string }>;
   error?: string;
@@ -560,7 +561,25 @@ function ruleForm(opts: {
       <input id="label" name="label" type="text" required value="${v.label}" placeholder="Free guide" />
       <label for="keywords">Keywords (one per line)</label>
       <textarea id="keywords" name="keywords" required placeholder="guide&#10;freebie">${v.keywords}</textarea>
-      <p class="muted">A comment matches if it contains any of these as whole words.</p>
+      <fieldset class="match-mode">
+        <legend>How to match them</legend>
+        <label>
+          <input type="radio" name="match_mode" value="word" ${v.match_mode !== 'contains' ? 'checked' : ''} />
+          Whole words (recommended)
+        </label>
+        <p class="muted">
+          <code>guide</code> matches “the guide” but not “guides”. Stops a short keyword like
+          <code>AI</code> firing on “again”.
+        </p>
+        <label>
+          <input type="radio" name="match_mode" value="contains" ${v.match_mode === 'contains' ? 'checked' : ''} />
+          Anywhere in the word
+        </label>
+        <p class="muted">
+          <code>launch</code> also matches <code>#launch2026</code> and “launching”. Use it for hashtag and
+          brand campaigns — it matches more, so pick keywords that are distinctive.
+        </p>
+      </fieldset>
       <label for="media_id">Which posts</label>
       <select id="media_id" name="media_id">
         <option value="" ${!v.media_id ? 'selected' : ''}>All posts and reels (recommended)</option>
@@ -685,6 +704,7 @@ adminRoutes.get('/rules/new', async (c) => {
           media_id: '',
           dm_text: '',
           public_reply_text: '',
+          match_mode: 'word',
         },
         posts: await recentMediaOptions(c.env),
       })}`,
@@ -699,6 +719,9 @@ function readRuleFields(form: Record<string, string>) {
   const ig = (form.ig_user_id ?? '').trim();
   const media = (form.media_id ?? '').trim();
   const pub = (form.public_reply_text ?? '').trim();
+  // Anything but the explicit opt-in stays on whole-word matching, so a missing
+  // or tampered field cannot silently widen a rule's reach.
+  const matchMode = parseMatchMode((form.match_mode ?? '').trim());
   if (!label) return { error: 'Give this rule a name.' };
   if (!ig) return { error: 'Pick an Instagram account.' };
   if (!parsed.ok) return { error: parsed.error };
@@ -718,6 +741,7 @@ function readRuleFields(form: Record<string, string>) {
       media_id: media || null,
       dm_text: dm,
       public_reply_text: pub || null,
+      match_mode: matchMode,
     },
   };
 }
@@ -745,6 +769,7 @@ adminRoutes.post('/rules', async (c) => {
             media_id: f.media_id ?? '',
             dm_text: f.dm_text ?? '',
             public_reply_text: f.public_reply_text ?? '',
+            match_mode: f.match_mode ?? 'word',
           },
           posts: await recentMediaOptions(c.env),
           error: fields.error,
@@ -780,6 +805,7 @@ adminRoutes.get('/rules/:id/edit', async (c) => {
           media_id: rule.media_id ?? '',
           dm_text: rule.dm_text,
           public_reply_text: rule.public_reply_text ?? '',
+          match_mode: rule.match_mode ?? 'word',
         },
         posts: await recentMediaOptions(c.env),
       })}`,
@@ -813,6 +839,7 @@ adminRoutes.post('/rules/:id', async (c) => {
             media_id: f.media_id ?? '',
             dm_text: f.dm_text ?? '',
             public_reply_text: f.public_reply_text ?? '',
+            match_mode: f.match_mode ?? 'word',
           },
           posts: await recentMediaOptions(c.env),
           error: fields.error,
@@ -890,7 +917,10 @@ adminRoutes.post('/test', async (c) => {
         ${match
           ? html`
               <div class="ok">
-                This would match the rule <b>${match.label}</b>.
+                This would match the rule <b>${match.label}</b>, matching
+                ${parseMatchMode(match.match_mode) === 'contains'
+                  ? html`<b>anywhere in the word</b>`
+                  : html`on <b>whole words</b>`}.
               </div>
               <h2>Private message that would be sent</h2>
               <p>${match.dm_text}</p>

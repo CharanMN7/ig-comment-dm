@@ -42,6 +42,8 @@ export type Rule = {
   public_reply_text: string | null;
   active: number;
   created_at: number;
+  /** 'word' (default) or 'contains'. See MatchMode in match.ts. */
+  match_mode: string;
 };
 
 export type Sent = {

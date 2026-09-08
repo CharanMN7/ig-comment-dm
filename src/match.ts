@@ -25,9 +25,32 @@ export function parseKeywords(raw: string): string[] {
   }
 }
 
-export function keywordMatches(normalizedComment: string, keyword: string): boolean {
+/** How a rule's keywords are matched against a comment. */
+export type MatchMode = 'word' | 'contains';
+
+/**
+ * `word` is the default everywhere: it is what stops `AI` firing on `again`.
+ * Anything unrecognised falls back to it, so a bad value read from an older
+ * row or a hand-edited database cannot quietly widen a rule's reach.
+ */
+export function parseMatchMode(raw: unknown): MatchMode {
+  return raw === 'contains' ? 'contains' : 'word';
+}
+
+export function keywordMatches(
+  normalizedComment: string,
+  keyword: string,
+  mode: MatchMode = 'word',
+): boolean {
   const k = normalizeCommentText(keyword);
   if (!k) return false;
+  if (mode === 'contains') {
+    // No word boundaries, so `launch` catches `#launch2026` and `guide` catches
+    // `guides`. `#` is stripped by normalisation, which is why the hashtag case
+    // works at all. The 3-character floor still applies at the form, and matters
+    // more here: a 2-character substring would match almost every comment.
+    return normalizedComment.includes(k);
+  }
   const re = new RegExp(`\\b${escapeRegex(k)}\\b`, 'u');
   return re.test(normalizedComment);
 }
@@ -45,8 +68,9 @@ export function findMatchingRule(
   const scoped = rules.filter((r) => r.media_id != null && r.media_id !== '' && r.media_id === mediaId);
   const global = rules.filter((r) => r.media_id == null || r.media_id === '');
   for (const rule of [...scoped, ...global]) {
+    const mode = parseMatchMode(rule.match_mode);
     for (const kw of parseKeywords(rule.keywords)) {
-      if (keywordMatches(normalized, kw)) return rule;
+      if (keywordMatches(normalized, kw, mode)) return rule;
     }
   }
   return null;
