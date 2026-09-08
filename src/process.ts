@@ -57,6 +57,43 @@ export function parseWebhookPayload(raw: string): unknown {
   }
 }
 
+export function parsePublicReplyVariations(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.map((s) => String(s).trim()).filter((s) => s.length > 0);
+      }
+    } catch {
+      // Fall through if not valid JSON
+    }
+  }
+
+  return trimmed
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+export function selectPublicReply(
+  raw: string | null | undefined,
+  randomFn: (max: number) => number = (max) => {
+    const arr = new Uint32Array(1);
+    crypto.getRandomValues(arr);
+    return arr[0] % max;
+  }
+): string | null {
+  const variations = parsePublicReplyVariations(raw);
+  if (variations.length === 0) return null;
+  if (variations.length === 1) return variations[0];
+  const idx = Math.abs(randomFn(variations.length)) % variations.length;
+  return variations[idx];
+}
+
 function commentIdOf(value: CommentValue): string | undefined {
   return asId(value.id) || asId(value.comment_id);
 }
@@ -170,7 +207,7 @@ export async function processComment(
 
   if (!dm.ok) errors.push(`DM: ${dm.body}`);
 
-  const publicText = rule.public_reply_text?.trim();
+  const publicText = selectPublicReply(rule.public_reply_text);
   if (publicText) {
     const reply = await sendPublicReply(commentId, token, publicText);
     replyStatus = reply.ok ? 'ok' : 'failed';
