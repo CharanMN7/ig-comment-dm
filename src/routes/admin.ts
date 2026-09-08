@@ -19,6 +19,7 @@ import {
   insertRule,
   listAccounts,
   listRules,
+  paginatedSent,
   recentSent,
   recentWebhookEvents,
   setAccountActive,
@@ -397,6 +398,9 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
             `}
 
         <h2>Last 20 sends</h2>
+        <p>
+          <a class="btn secondary" href="${base}/logs">View all logs</a>
+        </p>
         ${sends.length === 0
           ? html`<p class="muted">
               Nothing sent yet. The Meta app must be <b>Live</b> (Publish in the left sidebar) for
@@ -478,6 +482,206 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
           ${csrfField(session.csrf)}
           <button class="secondary" type="submit">Check connections now</button>
         </form>
+      `,
+    }),
+  );
+});
+
+adminRoutes.get('/logs', async (c) => {
+  const base = c.get('adminBase');
+
+  const status = c.req.query('status') ?? '';
+  const igUserId = c.req.query('ig_user_id') ?? '';
+  const ruleIdRaw = c.req.query('rule_id') ?? '';
+  const fromRaw = c.req.query('from') ?? '';
+  const toRaw = c.req.query('to') ?? '';
+  const beforeRaw = c.req.query('before') ?? '';
+
+  const ruleId = ruleIdRaw ? Number(ruleIdRaw) : undefined;
+
+  const from = fromRaw
+    ? Math.floor(new Date(`${fromRaw}T00:00:00Z`).getTime() / 1000)
+    : undefined;
+
+  const to = toRaw
+    ? Math.floor(new Date(`${toRaw}T00:00:00Z`).getTime() / 1000) + 86400
+    : undefined;
+
+  const before = beforeRaw ? Number(beforeRaw) : undefined;
+
+  const accounts = await listAccounts(c.env.DB);
+  const rules = await listRules(c.env.DB);
+
+  const rows = await paginatedSent(
+    c.env.DB,
+    {
+      status: status || undefined,
+      ig_user_id: igUserId || undefined,
+      rule_id: Number.isFinite(ruleId) ? ruleId : undefined,
+      from,
+      to,
+      before: Number.isFinite(before) ? before : undefined,
+    },
+    50,
+  );
+
+  const hasNext = rows.length > 50;
+  const sends = rows.slice(0, 50);
+
+  const accountNames = new Map(
+    accounts.map((account) => [account.ig_user_id, account.username]),
+  );
+
+  const last = sends[sends.length - 1];
+
+  let nextUrl: string | null = null;
+
+  if (hasNext && last) {
+    const params = new URLSearchParams();
+
+    if (status) params.set('status', status);
+    if (igUserId) params.set('ig_user_id', igUserId);
+    if (ruleIdRaw) params.set('rule_id', ruleIdRaw);
+    if (fromRaw) params.set('from', fromRaw);
+    if (toRaw) params.set('to', toRaw);
+
+    params.set('before', String(last.sent_at));
+
+    nextUrl = `${base}/logs?${params.toString()}`;
+  }
+
+  return c.html(
+    layout({
+      title: 'Logs',
+      base,
+      csrf: c.get('session').csrf,
+      body: html`
+        <h1>Logs</h1>
+
+        <form method="get" action="${base}/logs">
+          <label for="status">Status</label>
+          <select id="status" name="status">
+            <option value="">All statuses</option>
+            <option value="ok" ${status === 'ok' ? 'selected' : ''}>Sent</option>
+            <option value="failed" ${status === 'failed' ? 'selected' : ''}>Failed</option>
+            <option value="skipped" ${status === 'skipped' ? 'selected' : ''}>Skipped</option>
+            <option value="pending" ${status === 'pending' ? 'selected' : ''}>
+              In progress
+            </option>
+          </select>
+
+          <label for="ig_user_id">Account</label>
+          <select id="ig_user_id" name="ig_user_id">
+            <option value="">All accounts</option>
+            ${accounts.map(
+              (account) => html`
+                <option
+                  value="${account.ig_user_id}"
+                  ${igUserId === account.ig_user_id ? 'selected' : ''}
+                >
+                  @${account.username}
+                </option>
+              `,
+            )}
+          </select>
+
+          <label for="rule_id">Rule</label>
+          <select id="rule_id" name="rule_id">
+            <option value="">All rules</option>
+            ${rules.map(
+              (rule) => html`
+                <option
+                  value="${rule.id}"
+                  ${ruleIdRaw === String(rule.id) ? 'selected' : ''}
+                >
+                  ${rule.label}
+                </option>
+              `,
+            )}
+          </select>
+
+          <label for="from">From</label>
+          <input
+            id="from"
+            name="from"
+            type="date"
+            value="${fromRaw}"
+          />
+
+          <label for="to">To</label>
+          <input
+            id="to"
+            name="to"
+            type="date"
+            value="${toRaw}"
+          />
+
+          <div class="row">
+            <button type="submit">Filter</button>
+            <a class="btn secondary" href="${base}/logs">Clear</a>
+          </div>
+        </form>
+
+        <h2>Send history</h2>
+
+        ${sends.length === 0
+          ? html`
+              <p class="muted">No sends match these filters.</p>
+            `
+          : html`
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>When</th>
+                      <th>Account</th>
+                      <th>Rule</th>
+                      <th>Status</th>
+                      <th>Detail</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    ${sends.map(
+                      (s) => html`
+                        <tr>
+                          <td>${fmtWhen(s.sent_at)}</td>
+
+                          <td>
+                            @${accountNames.get(s.ig_user_id) ?? s.ig_user_id}
+                          </td>
+
+                          <td>${s.rule_label ?? '—'}</td>
+
+                          <td>${statusWords(s.dm_status)}</td>
+
+                          <td>
+                            ${s.dm_status === 'failed' && s.error
+                              ? html`
+                                  <span class="err">Send failed.</span>
+                                  <div class="muted">${s.error}</div>
+                                `
+                              : s.error
+                                ? html`
+                                    <span class="muted">${s.error}</span>
+                                  `
+                                : html`—`}
+                          </td>
+                        </tr>
+                      `,
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            `}
+
+        ${nextUrl
+          ? html`
+              <div class="row">
+                <a class="btn secondary" href="${nextUrl}">Older →</a>
+              </div>
+            `
+          : html``}
       `,
     }),
   );

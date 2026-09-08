@@ -1,20 +1,33 @@
-import type { Account, Rule, Sent, WebhookEvent } from './types.ts';
+import type { Account, Rule, Sent, WebhookEvent } from "./types.ts";
 
-export async function systemGet(db: D1Database, key: string): Promise<string | null> {
-  const row = await db.prepare('SELECT value FROM system WHERE key = ?').bind(key).first<{ value: string | null }>();
+export async function systemGet(
+  db: D1Database,
+  key: string,
+): Promise<string | null> {
+  const row = await db
+    .prepare("SELECT value FROM system WHERE key = ?")
+    .bind(key)
+    .first<{ value: string | null }>();
   return row?.value ?? null;
 }
 
-export async function systemSet(db: D1Database, key: string, value: string): Promise<void> {
+export async function systemSet(
+  db: D1Database,
+  key: string,
+  value: string,
+): Promise<void> {
   await db
     .prepare(
-      'INSERT INTO system (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+      "INSERT INTO system (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     )
     .bind(key, value)
     .run();
 }
 
-export async function getAccount(db: D1Database, igUserId: string): Promise<Account | null> {
+export async function getAccount(
+  db: D1Database,
+  igUserId: string,
+): Promise<Account | null> {
   return await db
     .prepare(
       `SELECT ig_user_id, username, access_token_enc, token_iv, token_expires_at,
@@ -75,8 +88,15 @@ export async function upsertAccount(
     .run();
 }
 
-export async function setAccountActive(db: D1Database, igUserId: string, active: number): Promise<void> {
-  await db.prepare('UPDATE accounts SET active = ? WHERE ig_user_id = ?').bind(active, igUserId).run();
+export async function setAccountActive(
+  db: D1Database,
+  igUserId: string,
+  active: number,
+): Promise<void> {
+  await db
+    .prepare("UPDATE accounts SET active = ? WHERE ig_user_id = ?")
+    .bind(active, igUserId)
+    .run();
 }
 
 export async function updateAccountToken(
@@ -98,11 +118,20 @@ export async function updateAccountToken(
     .run();
 }
 
-export async function flagNeedsReconnect(db: D1Database, igUserId: string): Promise<void> {
-  await db.prepare('UPDATE accounts SET needs_reconnect = 1 WHERE ig_user_id = ?').bind(igUserId).run();
+export async function flagNeedsReconnect(
+  db: D1Database,
+  igUserId: string,
+): Promise<void> {
+  await db
+    .prepare("UPDATE accounts SET needs_reconnect = 1 WHERE ig_user_id = ?")
+    .bind(igUserId)
+    .run();
 }
 
-export async function accountsNeedingRefresh(db: D1Database, expiresBefore: number): Promise<Account[]> {
+export async function accountsNeedingRefresh(
+  db: D1Database,
+  expiresBefore: number,
+): Promise<Account[]> {
   const { results } = await db
     .prepare(
       `SELECT ig_user_id, username, access_token_enc, token_iv, token_expires_at,
@@ -116,7 +145,10 @@ export async function accountsNeedingRefresh(db: D1Database, expiresBefore: numb
   return results ?? [];
 }
 
-export async function listActiveRules(db: D1Database, igUserId: string): Promise<Rule[]> {
+export async function listActiveRules(
+  db: D1Database,
+  igUserId: string,
+): Promise<Rule[]> {
   const { results } = await db
     .prepare(
       `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at
@@ -127,7 +159,10 @@ export async function listActiveRules(db: D1Database, igUserId: string): Promise
   return results ?? [];
 }
 
-export async function listRules(db: D1Database, igUserId?: string): Promise<Rule[]> {
+export async function listRules(
+  db: D1Database,
+  igUserId?: string,
+): Promise<Rule[]> {
   if (igUserId) {
     const { results } = await db
       .prepare(
@@ -147,7 +182,10 @@ export async function listRules(db: D1Database, igUserId?: string): Promise<Rule
   return results ?? [];
 }
 
-export async function getRule(db: D1Database, id: number): Promise<Rule | null> {
+export async function getRule(
+  db: D1Database,
+  id: number,
+): Promise<Rule | null> {
   return await db
     .prepare(
       `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at
@@ -174,7 +212,15 @@ export async function insertRule(
       `INSERT INTO rules (ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at)
        VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
     )
-    .bind(row.ig_user_id, row.label, row.keywords, row.media_id, row.dm_text, row.public_reply_text, row.created_at)
+    .bind(
+      row.ig_user_id,
+      row.label,
+      row.keywords,
+      row.media_id,
+      row.dm_text,
+      row.public_reply_text,
+      row.created_at,
+    )
     .run();
 }
 
@@ -196,16 +242,27 @@ export async function updateRule(
        SET ig_user_id = ?, label = ?, keywords = ?, media_id = ?, dm_text = ?, public_reply_text = ?
        WHERE id = ?`,
     )
-    .bind(row.ig_user_id, row.label, row.keywords, row.media_id, row.dm_text, row.public_reply_text, id)
+    .bind(
+      row.ig_user_id,
+      row.label,
+      row.keywords,
+      row.media_id,
+      row.dm_text,
+      row.public_reply_text,
+      id,
+    )
     .run();
 }
 
 export async function toggleRule(db: D1Database, id: number): Promise<void> {
-  await db.prepare('UPDATE rules SET active = 1 - active WHERE id = ?').bind(id).run();
+  await db
+    .prepare("UPDATE rules SET active = 1 - active WHERE id = ?")
+    .bind(id)
+    .run();
 }
 
 export async function deleteRule(db: D1Database, id: number): Promise<void> {
-  await db.prepare('DELETE FROM rules WHERE id = ?').bind(id).run();
+  await db.prepare("DELETE FROM rules WHERE id = ?").bind(id).run();
 }
 
 export async function tryClaimComment(
@@ -225,7 +282,14 @@ export async function tryClaimComment(
        VALUES (?, ?, NULL, ?, ?, NULL, ?, ?)
        ON CONFLICT(comment_id) DO NOTHING`,
     )
-    .bind(row.comment_id, row.ig_user_id, row.commenter_id, row.dm_status, row.error, row.sent_at)
+    .bind(
+      row.comment_id,
+      row.ig_user_id,
+      row.commenter_id,
+      row.dm_status,
+      row.error,
+      row.sent_at,
+    )
     .run();
   const meta = result.meta as { changes?: number; rows_written?: number };
   return (meta.changes ?? meta.rows_written ?? 0) > 0;
@@ -246,11 +310,21 @@ export async function updateSent(
     .prepare(
       `UPDATE sent SET rule_id = ?, dm_status = ?, reply_status = ?, error = ?, sent_at = ? WHERE comment_id = ?`,
     )
-    .bind(patch.rule_id, patch.dm_status, patch.reply_status, patch.error, patch.sent_at, commentId)
+    .bind(
+      patch.rule_id,
+      patch.dm_status,
+      patch.reply_status,
+      patch.error,
+      patch.sent_at,
+      commentId,
+    )
     .run();
 }
 
-export async function recentSent(db: D1Database, limit: number): Promise<(Sent & { rule_label: string | null })[]> {
+export async function recentSent(
+  db: D1Database,
+  limit: number,
+): Promise<(Sent & { rule_label: string | null })[]> {
   const { results } = await db
     .prepare(
       `SELECT s.comment_id, s.ig_user_id, s.rule_id, s.commenter_id, s.dm_status, s.reply_status,
@@ -262,6 +336,79 @@ export async function recentSent(db: D1Database, limit: number): Promise<(Sent &
     )
     .bind(limit)
     .all<Sent & { rule_label: string | null }>();
+  return results ?? [];
+}
+
+export type SentLogFilters = {
+  status?: string;
+  ig_user_id?: string;
+  rule_id?: number;
+  from?: number;
+  to?: number;
+  before?: number;
+};
+
+export async function paginatedSent(
+  db: D1Database,
+  opts: {
+    status?: string;
+    ig_user_id?: string;
+    rule_id?: number;
+    from?: number;
+    to?: number;
+    before?: number;
+  },
+  limit = 50,
+): Promise<(Sent & { rule_label: string | null })[]> {
+  const conditions: string[] = [];
+  const bindings: (string | number)[] = [];
+
+  if (opts.status) {
+    conditions.push('s.dm_status = ?');
+    bindings.push(opts.status);
+  }
+
+  if (opts.ig_user_id) {
+    conditions.push('s.ig_user_id = ?');
+    bindings.push(opts.ig_user_id);
+  }
+
+  if (opts.rule_id !== undefined) {
+    conditions.push('s.rule_id = ?');
+    bindings.push(opts.rule_id);
+  }
+
+  if (opts.from !== undefined) {
+    conditions.push('s.sent_at >= ?');
+    bindings.push(opts.from);
+  }
+
+  if (opts.to !== undefined) {
+    conditions.push('s.sent_at < ?');
+    bindings.push(opts.to);
+  }
+
+  if (opts.before !== undefined) {
+    conditions.push('s.sent_at < ?');
+    bindings.push(opts.before);
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const { results } = await db
+    .prepare(
+      `SELECT s.comment_id, s.ig_user_id, s.rule_id, s.commenter_id,
+              s.dm_status, s.reply_status, s.error, s.sent_at,
+              r.label AS rule_label
+       FROM sent s
+       LEFT JOIN rules r ON r.id = s.rule_id
+       ${where}
+       ORDER BY s.sent_at DESC
+       LIMIT ?`,
+    )
+    .bind(...bindings, limit + 1)
+    .all<Sent & { rule_label: string | null }>();
+
   return results ?? [];
 }
 
@@ -278,7 +425,11 @@ export async function todayCounters(
        FROM sent WHERE sent_at >= ?`,
     )
     .bind(since)
-    .first<{ triggers: number; sends: number | null; failures: number | null }>();
+    .first<{
+      triggers: number;
+      sends: number | null;
+      failures: number | null;
+    }>();
   return {
     triggers: row?.triggers ?? 0,
     sends: row?.sends ?? 0,
@@ -305,7 +456,10 @@ export async function insertWebhookEvent(
     .run();
 }
 
-export async function recentWebhookEvents(db: D1Database, limit: number): Promise<WebhookEvent[]> {
+export async function recentWebhookEvents(
+  db: D1Database,
+  limit: number,
+): Promise<WebhookEvent[]> {
   const { results } = await db
     .prepare(
       `SELECT id, received_at, status, object, preview, error
@@ -318,19 +472,31 @@ export async function recentWebhookEvents(db: D1Database, limit: number): Promis
   return results ?? [];
 }
 
-export async function pruneWebhookEvents(db: D1Database, olderThan: number): Promise<void> {
-  await db.prepare('DELETE FROM webhook_events WHERE received_at < ?').bind(olderThan).run();
+export async function pruneWebhookEvents(
+  db: D1Database,
+  olderThan: number,
+): Promise<void> {
+  await db
+    .prepare("DELETE FROM webhook_events WHERE received_at < ?")
+    .bind(olderThan)
+    .run();
 }
 
-export async function countSentByComment(db: D1Database, commentId: string): Promise<number> {
+export async function countSentByComment(
+  db: D1Database,
+  commentId: string,
+): Promise<number> {
   const row = await db
-    .prepare('SELECT COUNT(*) AS n FROM sent WHERE comment_id = ?')
+    .prepare("SELECT COUNT(*) AS n FROM sent WHERE comment_id = ?")
     .bind(commentId)
     .first<{ n: number }>();
   return row?.n ?? 0;
 }
 
-export async function getSent(db: D1Database, commentId: string): Promise<Sent | null> {
+export async function getSent(
+  db: D1Database,
+  commentId: string,
+): Promise<Sent | null> {
   return await db
     .prepare(
       `SELECT comment_id, ig_user_id, rule_id, commenter_id, dm_status, reply_status, error, sent_at
