@@ -62,6 +62,21 @@ describe('normalizeCommentText', () => {
     assert.equal(normalizeCommentText('PREÇO café über'), 'preco cafe uber');
     assert.equal(normalizeCommentText('й が क़ ไทย'), 'й が क़ ไทย');
   });
+
+  it('folds stroke and bar Latin letters (đ ł ø ß ð þ)', () => {
+    assert.equal(normalizeCommentText('điện'), 'dien');
+    assert.equal(normalizeCommentText('ĐIỆN'), 'dien');
+    assert.equal(normalizeCommentText('łódź'), 'lodz');
+    assert.equal(normalizeCommentText('ŁÓDŹ'), 'lodz');
+    assert.equal(normalizeCommentText('tromsø'), 'tromso');
+    assert.equal(normalizeCommentText('TROMSØ'), 'tromso');
+    assert.equal(normalizeCommentText('straße'), 'strasse');
+    assert.equal(normalizeCommentText('STRAẞE'), 'strasse');
+    assert.equal(normalizeCommentText('faðir'), 'fadir');
+    assert.equal(normalizeCommentText('FAÐIR'), 'fadir');
+    assert.equal(normalizeCommentText('þing'), 'thing');
+    assert.equal(normalizeCommentText('ÞING'), 'thing');
+  });
 });
 
 describe('keyword matching', () => {
