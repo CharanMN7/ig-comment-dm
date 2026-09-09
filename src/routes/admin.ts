@@ -24,7 +24,8 @@ import {
   setAccountActive,
   systemGet,
   systemSet,
-  todayCounters,
+  COUNTER_WINDOWS,
+  sendCounters,
   toggleRule,
   updateRule,
   upsertAccount,
@@ -41,6 +42,7 @@ import {
   readThrottle,
   recordFailure,
 } from '../throttle.ts';
+import type { Counters } from '../db.ts';
 import type { Env, SessionData } from '../types.ts';
 
 type Vars = {
@@ -48,6 +50,50 @@ type Vars = {
   session: SessionData;
   form: Record<string, string>;
 };
+
+const WINDOW_LABELS: Record<(typeof COUNTER_WINDOWS)[number], string> = {
+  today: 'Today',
+  week: 'Last 7 days',
+  month: 'Last 30 days',
+  all: 'All time',
+};
+
+/**
+ * One totals table. "Reached" is the distinct-commenter count, which is the
+ * number people mean by "how many humans has this reached" -- it is smaller
+ * than DMs sent whenever someone comments twice.
+ */
+function countersTable(caption: string, counters: Counters) {
+  return html`
+    <h2>${caption}</h2>
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>Comments seen</th>
+          <th>DMs sent</th>
+          <th>Skipped</th>
+          <th>Failed</th>
+          <th>People reached</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${COUNTER_WINDOWS.map(
+          (w) => html`
+            <tr>
+              <th scope="row">${WINDOW_LABELS[w]}</th>
+              <td>${String(counters[w].triggers)}</td>
+              <td>${String(counters[w].sends)}</td>
+              <td>${String(counters[w].skips)}</td>
+              <td>${String(counters[w].failures)}</td>
+              <td>${String(counters[w].recipients)}</td>
+            </tr>
+          `,
+        )}
+      </tbody>
+    </table>
+  `;
+}
 
 export const adminRoutes = new Hono<{ Bindings: Env; Variables: Vars }>({ strict: false });
 
@@ -296,8 +342,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   } catch {
     events = [];
   }
-  const dayStart = Math.floor(now / 86400) * 86400;
-  const counts = await todayCounters(c.env.DB, dayStart);
+  const counts = await sendCounters(c.env.DB, now);
   const lastCron = await systemGet(c.env.DB, 'last_cron_ok_at');
   const lastCronN = lastCron ? parseInt(lastCron, 10) : NaN;
   const lastPoll = await systemGet(c.env.DB, 'last_poll_ok_at');
@@ -363,10 +408,30 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
         ${banners}
         <h1>Home</h1>
         <div class="kpis">
-          <div class="kpi"><span class="muted">Comments seen today</span><b>${String(counts.triggers)}</b></div>
-          <div class="kpi"><span class="muted">DMs sent today</span><b>${String(counts.sends)}</b></div>
-          <div class="kpi"><span class="muted">Failures today</span><b>${String(counts.failures)}</b></div>
+          <div class="kpi">
+            <span class="muted">Comments seen today</span><b>${String(counts.overall.today.triggers)}</b>
+          </div>
+          <div class="kpi">
+            <span class="muted">DMs sent today</span><b>${String(counts.overall.today.sends)}</b>
+          </div>
+          <div class="kpi">
+            <span class="muted">Failures today</span><b>${String(counts.overall.today.failures)}</b>
+          </div>
+          <div class="kpi">
+            <span class="muted">People reached, all time</span
+            ><b>${String(counts.overall.all.recipients)}</b>
+          </div>
         </div>
+
+        ${countersTable('Totals', counts.overall)}
+        ${accounts.length > 1
+          ? counts.byAccount.map((row) =>
+              countersTable(
+                `@${accounts.find((a) => a.ig_user_id === row.ig_user_id)?.username ?? row.ig_user_id}`,
+                row.counters,
+              ),
+            )
+          : ''}
 
         <h2>Accounts</h2>
         ${accounts.length === 0

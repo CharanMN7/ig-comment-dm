@@ -12,6 +12,7 @@ import { FREE_ATTEMPTS, lockRemaining, lockSecondsFor } from '../src/throttle.ts
 import type { Env } from '../src/types.ts';
 import { authorizeUrl, oauthRedirectUri } from '../src/meta.ts';
 import { isSelfComment } from '../src/guard.ts';
+import { COUNTER_WINDOWS, counterWindowStarts } from '../src/db.ts';
 import { parseWebhookPayload } from '../src/process.ts';
 import {
   escapeRegex,
@@ -143,6 +144,48 @@ describe('keyword matching across scripts', () => {
   it('matches at the very start and end of the text', () => {
     assert.equal(keywordMatches(normalizeCommentText('гид'), 'гид'), true);
     assert.equal(keywordMatches(normalizeCommentText('指南'), '指南'), true);
+  });
+});
+
+describe('counter windows', () => {
+  const DAY = 86400;
+  // 2025-09-04T13:33:20Z -- deliberately mid-day, so day alignment is visible.
+  const NOW = 1_757_000_000;
+  const dayStart = Math.floor(NOW / DAY) * DAY;
+
+  it('starts today at midnight, not at the current time', () => {
+    assert.equal(counterWindowStarts(NOW).today, dayStart);
+    assert.equal(NOW > dayStart, true);
+  });
+
+  it('counts whole days, so 7 days means today plus the previous six', () => {
+    // Not NOW - 7 * DAY: an operator reading "last 7 days" at 09:00 means seven
+    // days, not six days and nine hours.
+    const starts = counterWindowStarts(NOW);
+    assert.equal(starts.week, dayStart - 6 * DAY);
+    assert.equal(starts.month, dayStart - 29 * DAY);
+  });
+
+  it('makes all time a window rather than a special case', () => {
+    assert.equal(counterWindowStarts(NOW).all, 0);
+  });
+
+  it('nests the windows, so each total is at least the one before it', () => {
+    const s = counterWindowStarts(NOW);
+    assert.equal(s.today > s.week, true);
+    assert.equal(s.week > s.month, true);
+    assert.equal(s.month > s.all, true);
+  });
+
+  it('is stable at any time of day', () => {
+    // Midnight and one second before the next one belong to the same window.
+    const midnight = counterWindowStarts(dayStart);
+    const almostMidnight = counterWindowStarts(dayStart + DAY - 1);
+    assert.deepEqual(midnight, almostMidnight);
+  });
+
+  it('lists the windows longest-lived last', () => {
+    assert.deepEqual([...COUNTER_WINDOWS], ['today', 'week', 'month', 'all']);
   });
 });
 
