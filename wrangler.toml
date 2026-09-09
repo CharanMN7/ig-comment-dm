@@ -10,6 +10,9 @@ compatibility_date = "2026-08-14"
 [[d1_databases]]
 binding = "DB"
 database_name = "ig-comment-dm"
+# migrations_dir defaults to ./migrations and migrations_table to d1_migrations.
+# `npm run db:migrate` applies every file there that this database has not seen
+# yet, so adding one is a matter of dropping in the next 0NN_*.sql.
 
 [triggers]
 crons = ["0 3 * * *", "*/5 * * * *"]

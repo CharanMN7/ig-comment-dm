@@ -10,7 +10,7 @@ The operator uses the admin UI and never sees the code.
 - Hono, default Workers export (`fetch` + `scheduled`). Not `hono/vercel`.
 - Hono `{ strict: false }` so `/a/:secret` and `/a/:secret/` both work
 - D1 via the `DB` binding. Raw parameterized SQL (`.prepare().bind()`). No ORM.
-- Schema in `migrations/001_init.sql` and `migrations/002_webhook_events.sql`, applied by the Wrangler CLI
+- Schema in `migrations/*.sql`, applied by `wrangler d1 migrations apply`, which records what it has run in a `d1_migrations` table
 - Server-rendered HTML via `hono/html`. No React, no Tailwind, no bundler, no client framework. One `<style>` block in the layout.
 - Runtime dependency: `hono` only. `wrangler` / `typescript` / `@cloudflare/workers-types` are devDependencies.
 - Do **not** enable `nodejs_compat`. Do **not** import `node:crypto`.
@@ -116,7 +116,7 @@ Live checks: handshake 200, wrong verify token 403, bad signature 401, synthetic
 ## Intentional deviations from the original spec sheet
 
 - `accounts.needs_reconnect` column (required by cron + banner).
-- `CREATE … IF NOT EXISTS` so re-running the migration is harmless.
+- Each migration runs exactly once per database, so a migration may alter an existing table.
 - Transient `dm_status = 'pending'` on the claim row, then updated.
 - Graph version kept at **v23.0** as specified. Current Meta docs show v26.0; bump `GRAPH_VERSION` in `src/meta.ts` if calls start failing.
 - Instagram Login webhook flattening (`field`/`value` on entry).
