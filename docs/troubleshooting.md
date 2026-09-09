@@ -31,6 +31,7 @@ and it still does not work.
 - [Red banner: an account needs reconnecting](#red-banner-an-account-needs-reconnecting)
 - [Red banner: the daily check has not run](#red-banner-the-daily-check-has-not-run)
 - [Home shows a table of secrets needing attention](#home-shows-a-table-of-secrets-needing-attention)
+- [Uptime monitoring and health check (`/health`)](#uptime-monitoring-and-health-check-health)
 - [Reading the logs directly](#reading-the-logs-directly)
 - [Still stuck](#still-stuck)
 
@@ -427,6 +428,35 @@ table names the secret, what is wrong, and the command that fixes it. It catches
 
 Every one of these otherwise fails later and somewhere unrelated. Fix them, run
 `npx wrangler deploy`, and reload.
+
+---
+
+## Uptime monitoring and health check (`/health`)
+
+To monitor your deployment with services like Better Stack, Uptime Kuma, or Pingdom without exposing administrative credentials, use the unauthenticated health endpoint:
+
+```
+GET https://ig-comment-dm.YOURNAME.workers.dev/health
+```
+
+- **HTTP 200 OK**: Healthy. Database is reachable and the scheduled daily check has run recently.
+- **HTTP 503 Service Unavailable**: Unhealthy. Returned if database connection fails or if the daily cron has not run in over 72 hours.
+- **Privacy**: The response leaks no secrets, tokens, or usernames. It only reports counts and timestamps:
+
+```json
+{
+  "ok": true,
+  "database": "ok",
+  "accounts": {
+    "active": 1,
+    "needs_reconnect": 0
+  },
+  "last_cron_ok_at": 1726000000,
+  "last_poll_ok_at": 1726000300
+}
+```
+
+The endpoint automatically sets `X-Robots-Tag: noindex` and `Cache-Control: no-store, max-age=0`.
 
 ---
 

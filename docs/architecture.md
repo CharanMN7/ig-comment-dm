@@ -49,6 +49,7 @@ Follow-up DMs are out of scope. They need the person to reply first (24h window)
 | Method | Path | Role |
 |---|---|---|
 | GET | `/` | `ok` — deploy smoke check |
+| GET | `/health` | Health check: JSON status, 200 healthy / 503 unhealthy. No auth required. |
 | GET | `/privacy`, `/terms`, `/data-deletion` | Static HTML for Meta Publish. |
 | GET | `/webhook` | Meta verify handshake. Right `hub.verify_token` → echo `hub.challenge`. Wrong → 403. |
 | POST | `/webhook` | Verify signature (either secret), log event, return **200 immediately**, process in `waitUntil`. |
