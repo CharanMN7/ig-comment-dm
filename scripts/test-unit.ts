@@ -15,6 +15,7 @@ import { isSelfComment } from '../src/guard.ts';
 import { parseWebhookPayload } from '../src/process.ts';
 import {
   MAX_USERNAME_LENGTH,
+  findReservedPlaceholder,
   substitutePlaceholders,
   worstCaseLength,
 } from '../src/placeholders.ts';
@@ -95,15 +96,13 @@ describe('placeholder substitution', () => {
     );
   });
 
-  it('fills {link} when a value is supplied', () => {
-    assert.equal(sub('Here: {link}', { link: 'https://x/r/ab12cd' }), 'Here: https://x/r/ab12cd');
-  });
-
-  it('fills both tokens in one message', () => {
-    assert.equal(
-      sub('Hey {username}, here: {link}', { username: 'sarah', link: 'https://x/r/ab' }),
-      'Hey sarah, here: https://x/r/ab',
-    );
+  it('leaves {link} alone rather than deleting it', () => {
+    // There is no tracked-link feature yet (#23), so there is nothing to fill
+    // it with. Treating it as known would delete it -- `here's the guide:
+    // {link}` would send with no link and nothing to show it had gone. The rule
+    // form refuses to save it instead; this is the belt to that's braces.
+    assert.equal(sub('Here: {link}', {}), 'Here: {link}');
+    assert.equal(sub('Hey {username}, here: {link}', { username: 'sarah' }), 'Hey sarah, here: {link}');
   });
 
   it('fills every occurrence, not only the first', () => {
@@ -143,11 +142,56 @@ describe('placeholder substitution', () => {
   });
 
   it('does not delete punctuation the creator wrote before an empty token', () => {
-    // Deliberate. `here's the guide: {link}` with no link leaves a dangling
-    // colon, which is not pretty -- but guessing which punctuation belongs to
-    // the token and which belongs to the sentence means silently editing
-    // someone's copy. Only whitespace is tidied.
-    assert.equal(sub("here's the guide: {link}", {}), "here's the guide:");
+    // Deliberate. `Hey {username}:` with no username leaves a dangling colon,
+    // which is not pretty -- but guessing which punctuation belongs to the
+    // token and which belongs to the sentence means silently editing someone's
+    // copy. Only whitespace is tidied.
+    assert.equal(sub('here you go, {username}:', {}), 'here you go,:');
+  });
+
+  it('matches {Username} in any case', () => {
+    // Someone starting a sentence with the token means the same thing, and
+    // ignoring it is a bug found in a subscriber's inbox rather than here.
+    assert.equal(sub('{Username}, hello', { username: 'sarah' }), 'sarah, hello');
+    assert.equal(sub('{USERNAME}, hello', { username: 'sarah' }), 'sarah, hello');
+    assert.equal(sub('{Username}, hello', {}), ', hello');
+  });
+
+  it('does not reformat copy when it substituted nothing', () => {
+    // The whitespace tidy repairs the gap this function leaves behind. Running
+    // it on text it did not touch would collapse spacing a creator typed on
+    // purpose -- an aligned list, a deliberate double space, trailing padding.
+    const aligned = `Free  guide
+Bonus  pack
+  indented`;
+    assert.equal(sub(aligned, { username: 'sarah' }), aligned);
+    assert.equal(sub('two  spaces', {}), 'two  spaces');
+    assert.equal(sub('  padded  ', {}), '  padded  ');
+  });
+
+  it('still tidies when a token was actually removed', () => {
+    assert.equal(sub('a {username} b', {}), 'a b');
+    assert.equal(sub('an empty {username} value', { username: '' }), 'an empty value');
+  });
+});
+
+describe('reserved placeholders', () => {
+  it('reports {link} with an explanation', () => {
+    const found = findReservedPlaceholder("here's the guide: {link}");
+    assert.equal(found?.name, 'link');
+    assert.equal(typeof found?.message, 'string');
+    assert.equal((found?.message ?? '').length > 0, true);
+  });
+
+  it('reports it whatever case it was typed in', () => {
+    assert.equal(findReservedPlaceholder('{Link}')?.name, 'link');
+    assert.equal(findReservedPlaceholder('{LINK}')?.name, 'link');
+  });
+
+  it('says nothing about a message that does not use one', () => {
+    assert.equal(findReservedPlaceholder('Hey {username}, here you go'), null);
+    assert.equal(findReservedPlaceholder('a literal {foo}'), null);
+    assert.equal(findReservedPlaceholder('plain message'), null);
   });
 });
 
@@ -169,6 +213,11 @@ describe('placeholder length budgeting', () => {
 
   it('does not budget an unknown token', () => {
     assert.equal(worstCaseLength('{foo}'), 5);
+    assert.equal(worstCaseLength('{link}'), 6);
+  });
+
+  it('budgets {Username} the same as {username}', () => {
+    assert.equal(worstCaseLength('{Username}'), MAX_USERNAME_LENGTH);
   });
 
   it('catches a message that only exceeds the limit once expanded', () => {

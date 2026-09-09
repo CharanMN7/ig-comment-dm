@@ -166,9 +166,8 @@ export async function processComment(
   }
 
   // The commenter's username rides on the webhook payload, so `{username}`
-  // costs no extra Graph call. `{link}` has no source yet -- there is no
-  // tracked-link feature -- so it degrades to empty, which is the same path a
-  // commenter with no username takes.
+  // costs no extra Graph call. A comment Instagram sends without one degrades
+  // to an empty token, which reads as `Hey, here's the guide`.
   const values = { username: value.from?.username ?? null };
 
   const dmText = substitutePlaceholders(rule.dm_text, values);

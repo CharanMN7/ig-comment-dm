@@ -33,7 +33,7 @@ import { findConfigProblems } from '../config.ts';
 import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
 import { KEYWORD_TOO_SHORT_MESSAGE, findMatchingRule, parseKeywords } from '../match.ts';
 import { listRecentMedia, oauthRedirectUri } from '../meta.ts';
-import { worstCaseLength } from '../placeholders.ts';
+import { findReservedPlaceholder, worstCaseLength } from '../placeholders.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
 import {
   clearFailures,
@@ -595,8 +595,9 @@ function ruleForm(opts: {
         <em>Hey undefined</em>.
       </p>
       <p class="muted">
-        <code>{link}</code> is reserved for a rule’s tracked link and is empty until that
-        exists. Any other braces, like <code>{foo}</code>, are left exactly as you typed them.
+        Any other braces, like <code>{foo}</code>, are left exactly as you typed them.
+        <code>{link}</code> is reserved for a rule’s tracked link, which does not exist yet,
+        so a message using it will not save.
       </p>
       <label for="public_reply_text">Public reply under the comment (optional)</label>
       <textarea id="public_reply_text" name="public_reply_text">${v.public_reply_text}</textarea>
@@ -715,6 +716,15 @@ function readRuleFields(form: Record<string, string>) {
   if (!ig) return { error: 'Pick an Instagram account.' };
   if (!parsed.ok) return { error: parsed.error };
   if (!dm) return { error: 'Write the private message to send.' };
+  // Refuse a token that has no value yet rather than sending an empty gap where
+  // the author expected a link.
+  for (const [field, text] of [
+    ['private message', dm],
+    ['public reply', pub],
+  ] as const) {
+    const reserved = findReservedPlaceholder(text);
+    if (reserved) return { error: `The ${field} uses {${reserved.name}}. ${reserved.message}` };
+  }
   // Against the worst case, not the written length: the values do not exist
   // until a send, and a 30-character username expanding into a message already
   // at the limit would be rejected by Instagram rather than here.
