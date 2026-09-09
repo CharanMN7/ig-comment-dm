@@ -339,3 +339,48 @@ export async function getSent(db: D1Database, commentId: string): Promise<Sent |
     .bind(commentId)
     .first<Sent>();
 }
+
+export type HealthSummary = {
+  activeAccounts: number;
+  needsReconnectAccounts: number;
+  lastCronOkAt: number | null;
+  lastPollOkAt: number | null;
+};
+
+export async function getHealthSummary(db: D1Database, now: number): Promise<HealthSummary> {
+  // Query 1: Accounts status
+  const accountsRow = await db
+    .prepare(
+      `SELECT
+         COUNT(CASE WHEN active = 1 AND needs_reconnect = 0 AND token_expires_at > ? THEN 1 END) AS active_count,
+         COUNT(CASE WHEN needs_reconnect = 1 OR token_expires_at <= ? THEN 1 END) AS reconnect_count
+       FROM accounts`,
+    )
+    .bind(now, now)
+    .first<{ active_count: number | null; reconnect_count: number | null }>();
+
+  // Query 2: System timestamps
+  const systemRows = await db
+    .prepare("SELECT key, value FROM system WHERE key IN ('last_cron_ok_at', 'last_poll_ok_at')")
+    .all<{ key: string; value: string | null }>();
+
+  let lastCronOkAt: number | null = null;
+  let lastPollOkAt: number | null = null;
+
+  for (const row of systemRows.results ?? []) {
+    if (row.key === 'last_cron_ok_at' && row.value) {
+      const parsed = parseInt(row.value, 10);
+      if (Number.isFinite(parsed)) lastCronOkAt = parsed;
+    } else if (row.key === 'last_poll_ok_at' && row.value) {
+      const parsed = parseInt(row.value, 10);
+      if (Number.isFinite(parsed)) lastPollOkAt = parsed;
+    }
+  }
+
+  return {
+    activeAccounts: accountsRow?.active_count ?? 0,
+    needsReconnectAccounts: accountsRow?.reconnect_count ?? 0,
+    lastCronOkAt,
+    lastPollOkAt,
+  };
+}

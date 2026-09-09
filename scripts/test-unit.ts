@@ -363,3 +363,101 @@ describe('login throttle', () => {
     assert.equal(lockRemaining({ fails: 0, lockedUntil: 0 }, 1_000), 0);
   });
 });
+
+describe('health endpoint', () => {
+  function makeMockDb(options: {
+    accounts?: { active_count: number | null; reconnect_count: number | null } | null;
+    system?: Array<{ key: string; value: string | null }>;
+    shouldThrow?: boolean;
+  }): D1Database {
+    return {
+      prepare(query: string) {
+        return {
+          bind(..._args: any[]) {
+            return this;
+          },
+          async first<T = unknown>(): Promise<T | null> {
+            if (options.shouldThrow) {
+              throw new Error('d1 query failed');
+            }
+            if (query.includes('FROM accounts')) {
+              return (options.accounts ?? null) as T | null;
+            }
+            return null;
+          },
+          async all<T = unknown>(): Promise<{ results: T[] }> {
+            if (options.shouldThrow) {
+              throw new Error('d1 query failed');
+            }
+            if (query.includes('FROM system')) {
+              return { results: (options.system ?? []) as T[] };
+            }
+            return { results: [] };
+          },
+        } as any;
+      },
+    } as unknown as D1Database;
+  }
+
+  it('returns 200 with healthy payload and headers when cron is fresh', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const mockDb = makeMockDb({
+      accounts: { active_count: 2, reconnect_count: 1 },
+      system: [
+        { key: 'last_cron_ok_at', value: String(now - 3600) },
+        { key: 'last_poll_ok_at', value: String(now - 60) },
+      ],
+    });
+
+    const mockEnv = env({ DB: mockDb });
+    const { default: worker } = await import('../src/index.ts');
+
+    const res = await worker.fetch(new Request('https://worker.example.workers.dev/health'), mockEnv, {} as any);
+
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('x-robots-tag'), 'noindex');
+    assert.equal(res.headers.get('cache-control'), 'no-store, max-age=0');
+
+    const json = (await res.json()) as any;
+    assert.equal(json.ok, true);
+    assert.equal(json.database, 'ok');
+    assert.deepEqual(json.accounts, { active: 2, needs_reconnect: 1 });
+    assert.equal(json.last_cron_ok_at, now - 3600);
+    assert.equal(json.last_poll_ok_at, now - 60);
+  });
+
+  it('returns 503 when cron has not run recently (stale)', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const mockDb = makeMockDb({
+      accounts: { active_count: 1, reconnect_count: 0 },
+      system: [
+        { key: 'last_cron_ok_at', value: String(now - 400000) }, // > 72h
+      ],
+    });
+
+    const mockEnv = env({ DB: mockDb });
+    const { default: worker } = await import('../src/index.ts');
+
+    const res = await worker.fetch(new Request('https://worker.example.workers.dev/health'), mockEnv, {} as any);
+
+    assert.equal(res.status, 503);
+    const json = (await res.json()) as any;
+    assert.equal(json.ok, false);
+    assert.equal(json.database, 'ok');
+  });
+
+  it('returns 503 database: error when DB throws', async () => {
+    const mockDb = makeMockDb({ shouldThrow: true });
+    const mockEnv = env({ DB: mockDb });
+    const { default: worker } = await import('../src/index.ts');
+
+    const res = await worker.fetch(new Request('https://worker.example.workers.dev/health'), mockEnv, {} as any);
+
+    assert.equal(res.status, 503);
+    const json = (await res.json()) as any;
+    assert.equal(json.ok, false);
+    assert.equal(json.database, 'error');
+    assert.deepEqual(json.accounts, { active: 0, needs_reconnect: 0 });
+  });
+});
+

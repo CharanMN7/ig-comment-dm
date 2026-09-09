@@ -35,9 +35,12 @@ export const securityHeaders: MiddlewareHandler = async (c, next) => {
 
   // The admin panel and the OAuth callback both render account state. Neither
   // should ever sit in a shared cache or a browser's back-forward cache after
-  // logout.
+  // logout. Health checks also must not be cached or indexed by search engines.
   const path = new URL(c.req.url).pathname;
-  if (path.startsWith('/a/') || path.startsWith('/connect')) {
+  if (path.startsWith('/a/') || path.startsWith('/connect') || path === '/health') {
     c.header('Cache-Control', 'no-store, max-age=0');
+  }
+  if (path === '/health') {
+    c.header('X-Robots-Tag', 'noindex');
   }
 };

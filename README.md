@@ -284,6 +284,7 @@ Instagram's rules, not ours. Each of these is enforced by Meta and cost someone 
 - [x] `npm run doctor` — diagnoses a live deployment
 - [x] Multi-account support on a single deployment
 - [x] Hosted privacy, terms, and data-deletion pages for Meta review
+- [x] Health check endpoint (`GET /health`) for uptime monitoring and deployment verification
 
 </details>
 
