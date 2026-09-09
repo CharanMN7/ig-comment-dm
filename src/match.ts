@@ -1,7 +1,25 @@
 import type { Rule } from './types.ts';
 
+const STROKE_CHAR_MAP: Record<string, string> = {
+  đ: 'd',
+  Đ: 'd',
+  ł: 'l',
+  Ł: 'l',
+  ø: 'o',
+  Ø: 'o',
+  ß: 'ss',
+  ẞ: 'ss',
+  ð: 'd',
+  Ð: 'd',
+  þ: 'th',
+  Þ: 'th',
+};
+
+const STROKE_CHAR_RE = /[đĐłŁøØßẞðÐþÞ]/gu;
+
 export function normalizeCommentText(text: string): string {
   return text
+    .replace(STROKE_CHAR_RE, (ch) => STROKE_CHAR_MAP[ch] ?? ch)
     .normalize('NFD')
     .replace(/([A-Za-z])\p{Diacritic}+/gu, '$1')
     .normalize('NFC')
