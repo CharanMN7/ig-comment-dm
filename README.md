@@ -196,12 +196,13 @@ You can connect several Instagram accounts to one deployment. Each one needs to 
 | Field | What to put |
 |---|---|
 | **Name** | For you only. `Free guide`. |
-| **Keywords** | One per line. **At least 3 characters** — `AI` would fire on "again" and "email". |
+| **Match any comment** | Checkbox for giveaways/waitlists. Fires on every comment without keywords. **Requires a specific post**. |
+| **Keywords** | One per line. **At least 3 characters** — `AI` would fire on "again" and "email". (Hidden when Match any comment is checked) |
 | **The DM** | Under 1,000 characters. Put everything they need here. |
 | **Public reply** | Optional. Shows under the comment. |
 | **Which posts** | All posts and reels, or pick one from the dropdown. |
 
-Matching ignores case, emoji, and punctuation, and matches whole words. A rule scoped to a specific post beats a rule that applies to everything.
+Matching ignores case, emoji, and punctuation, and matches whole words. A rule scoped to a specific post beats a rule that applies to everything. On the same post, specific keyword rules take precedence over a match-all rule.
 
 > [!TIP]
 > **Put everything in that one message.** Instagram allows exactly one private reply per comment, ever. You do not get a follow-up unless they reply to you first.
@@ -248,6 +249,7 @@ Instagram's rules, not ours. Each of these is enforced by Meta and cost someone 
 - [x] Comment → one official Instagram private reply, end to end
 - [x] Optional public reply under the comment
 - [x] Keyword rules with case, emoji, and punctuation normalisation, matched on word boundaries
+- [x] Match-any-comment mode for giveaways, waitlists, and launches (scoped to a post)
 - [x] Post-scoped rules take priority over account-wide rules
 - [x] Reel and post picker, so nobody has to hunt for a Graph media id
 - [x] Self-comment guard — never DMs the account owner

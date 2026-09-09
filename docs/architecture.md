@@ -10,7 +10,7 @@ The operator uses the admin UI and never sees the code.
 - Hono, default Workers export (`fetch` + `scheduled`). Not `hono/vercel`.
 - Hono `{ strict: false }` so `/a/:secret` and `/a/:secret/` both work
 - D1 via the `DB` binding. Raw parameterized SQL (`.prepare().bind()`). No ORM.
-- Schema in `migrations/001_init.sql` and `migrations/002_webhook_events.sql`, applied by the Wrangler CLI
+- Schema in `migrations/001_init.sql`, `migrations/002_webhook_events.sql`, and `migrations/003_match_all.sql`, applied by the Wrangler CLI
 - Server-rendered HTML via `hono/html`. No React, no Tailwind, no bundler, no client framework. One `<style>` block in the layout.
 - Runtime dependency: `hono` only. `wrangler` / `typescript` / `@cloudflare/workers-types` are devDependencies.
 - Do **not** enable `nodejs_compat`. Do **not** import `node:crypto`.

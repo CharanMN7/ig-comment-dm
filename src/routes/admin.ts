@@ -536,11 +536,13 @@ function ruleForm(opts: {
     media_id: string;
     dm_text: string;
     public_reply_text: string;
+    match_all?: number;
   };
   posts: Array<{ id: string; label: string }>;
   error?: string;
 }) {
   const v = opts.values;
+  const isMatchAll = Boolean(v.match_all);
   const dmLen = v.dm_text.length;
   const known = new Set(opts.posts.map((p) => p.id));
   return html`
@@ -558,12 +560,34 @@ function ruleForm(opts: {
       </select>
       <label for="label">Name for this rule</label>
       <input id="label" name="label" type="text" required value="${v.label}" placeholder="Free guide" />
-      <label for="keywords">Keywords (one per line)</label>
-      <textarea id="keywords" name="keywords" required placeholder="guide&#10;freebie">${v.keywords}</textarea>
-      <p class="muted">A comment matches if it contains any of these as whole words.</p>
+      
+      <div style="margin: 1rem 0 0.5rem;">
+        <label style="display: inline-flex; align-items: center; gap: 0.5rem; font-weight: normal; cursor: pointer;">
+          <input
+            type="checkbox"
+            id="match_all"
+            name="match_all"
+            value="1"
+            ${isMatchAll ? 'checked' : ''}
+            onchange="document.getElementById('keywords-group').style.display = this.checked ? 'none' : 'block';"
+          />
+          <b>Match any comment on this post</b> (for giveaways, waitlists, and launches)
+        </label>
+        <p class="muted" style="margin-left: 1.5rem;">
+          When enabled, everyone who comments on the selected post gets the DM without needing a specific keyword.
+          A specific post must be selected below — match-all cannot be used across all posts.
+        </p>
+      </div>
+
+      <div id="keywords-group" style="${isMatchAll ? 'display: none;' : 'display: block;'}">
+        <label for="keywords">Keywords (one per line)</label>
+        <textarea id="keywords" name="keywords" placeholder="guide&#10;freebie">${v.keywords}</textarea>
+        <p class="muted">A comment matches if it contains any of these as whole words.</p>
+      </div>
+
       <label for="media_id">Which posts</label>
       <select id="media_id" name="media_id">
-        <option value="" ${!v.media_id ? 'selected' : ''}>All posts and reels (recommended)</option>
+        <option value="" ${!v.media_id ? 'selected' : ''}>All posts and reels (recommended for keyword rules)</option>
         ${opts.posts.map(
           (p) =>
             html`<option value="${p.id}" ${p.id === v.media_id ? 'selected' : ''}>${p.label}</option>`,
@@ -573,9 +597,7 @@ function ruleForm(opts: {
           : html``}
       </select>
       <p class="muted">
-        Leave this on <b>All posts and reels</b> unless you want one reel only. A reel’s ID is a long number
-        from Instagram, not the share link (<code>instagram.com/reel/…</code>). If the list is empty, leave it
-        on all posts — that still covers reels.
+        Select a specific reel or post. Match-all rules <b>require</b> a specific post to be selected. If the list is empty, refresh or leave on all posts for keyword rules.
       </p>
       <label for="dm_text">Private message to send</label>
       <textarea
@@ -624,7 +646,7 @@ adminRoutes.get('/rules', async (c) => {
                 </thead>
                 <tbody>
                   ${rules.map((r) => {
-                    const kws = parseKeywords(r.keywords).join(', ');
+                    const kws = r.match_all ? html`<em>Any comment on post</em>` : parseKeywords(r.keywords).join(', ');
                     return html`<tr>
                       <td>${r.label}</td>
                       <td>@${accountMap.get(r.ig_user_id) ?? r.ig_user_id}</td>
@@ -693,7 +715,7 @@ adminRoutes.get('/rules/new', async (c) => {
 });
 
 function readRuleFields(form: Record<string, string>) {
-  const parsed = parseKeywordLines(form.keywords ?? '');
+  const matchAll = form.match_all === '1' || form.match_all === 'true' || form.match_all === 'on';
   const dm = (form.dm_text ?? '').trim();
   const label = (form.label ?? '').trim();
   const ig = (form.ig_user_id ?? '').trim();
@@ -701,7 +723,17 @@ function readRuleFields(form: Record<string, string>) {
   const pub = (form.public_reply_text ?? '').trim();
   if (!label) return { error: 'Give this rule a name.' };
   if (!ig) return { error: 'Pick an Instagram account.' };
-  if (!parsed.ok) return { error: parsed.error };
+  if (matchAll) {
+    if (!media) {
+      return {
+        error:
+          'A match-all rule must be scoped to a specific post or reel. An account-wide match-all rule would DM every commenter on every post.',
+      };
+    }
+  } else {
+    const parsed = parseKeywordLines(form.keywords ?? '');
+    if (!parsed.ok) return { error: parsed.error };
+  }
   if (!dm) return { error: 'Write the private message to send.' };
   if (dm.length > DM_TEXT_MAX) return { error: 'The private message must be 1,000 characters or fewer.' };
   if (media && looksLikePostUrl(media)) {
@@ -710,14 +742,22 @@ function readRuleFields(form: Record<string, string>) {
         'That looks like a link, not a post ID. Leave “Which posts” on All posts and reels, or pick a reel from the list.',
     };
   }
+
+  let keywords = '[]';
+  if (!matchAll) {
+    const parsed = parseKeywordLines(form.keywords ?? '');
+    if (parsed.ok) keywords = JSON.stringify(parsed.keywords);
+  }
+
   return {
     row: {
       ig_user_id: ig,
       label,
-      keywords: JSON.stringify(parsed.keywords),
+      keywords,
       media_id: media || null,
       dm_text: dm,
       public_reply_text: pub || null,
+      match_all: matchAll ? 1 : 0,
     },
   };
 }
@@ -745,6 +785,7 @@ adminRoutes.post('/rules', async (c) => {
             media_id: f.media_id ?? '',
             dm_text: f.dm_text ?? '',
             public_reply_text: f.public_reply_text ?? '',
+            match_all: f.match_all === '1' || f.match_all === 'true' || f.match_all === 'on' ? 1 : 0,
           },
           posts: await recentMediaOptions(c.env),
           error: fields.error,
@@ -780,6 +821,7 @@ adminRoutes.get('/rules/:id/edit', async (c) => {
           media_id: rule.media_id ?? '',
           dm_text: rule.dm_text,
           public_reply_text: rule.public_reply_text ?? '',
+          match_all: rule.match_all ?? 0,
         },
         posts: await recentMediaOptions(c.env),
       })}`,
@@ -813,6 +855,7 @@ adminRoutes.post('/rules/:id', async (c) => {
             media_id: f.media_id ?? '',
             dm_text: f.dm_text ?? '',
             public_reply_text: f.public_reply_text ?? '',
+            match_all: f.match_all === '1' || f.match_all === 'true' || f.match_all === 'on' ? 1 : 0,
           },
           posts: await recentMediaOptions(c.env),
           error: fields.error,
@@ -890,7 +933,7 @@ adminRoutes.post('/test', async (c) => {
         ${match
           ? html`
               <div class="ok">
-                This would match the rule <b>${match.label}</b>.
+                This would match the rule <b>${match.label}</b>${match.match_all ? ' (Match any comment)' : ''}.
               </div>
               <h2>Private message that would be sent</h2>
               <p>${match.dm_text}</p>

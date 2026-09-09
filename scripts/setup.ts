@@ -179,7 +179,11 @@ async function main(): Promise<void> {
 
   // ----------------------------------------------------------- 3. migrations
   step(3, TOTAL, 'Creating the database tables');
-  for (const file of ['migrations/001_init.sql', 'migrations/002_webhook_events.sql']) {
+  for (const file of [
+    'migrations/001_init.sql',
+    'migrations/002_webhook_events.sql',
+    'migrations/003_match_all.sql',
+  ]) {
     const res = wrangler(['d1', 'execute', 'ig-comment-dm', '--remote', `--file=${file}`, '-y'], {
       quiet: true,
     });
