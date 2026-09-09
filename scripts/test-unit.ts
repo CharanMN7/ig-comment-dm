@@ -96,6 +96,7 @@ describe('health report', () => {
   it('reports ok when the database answers and both jobs are recent', () => {
     const report = buildHealthReport(healthy);
     assert.equal(report.ok, true);
+    assert.equal(report.status, 'ok');
     assert.equal(report.database, 'ok');
     assert.deepEqual(report.accounts, { active: 2, needs_reconnect: 0 });
   });
@@ -121,10 +122,43 @@ describe('health report', () => {
     assert.equal(buildHealthReport({ ...healthy, lastPollOkAt: NOW - POLL_STALE_SECONDS + 1 }).ok, true);
   });
 
-  it('treats a job that has never run as stale', () => {
-    // Correct for a fresh deployment: nothing has proven the job works yet.
-    assert.equal(buildHealthReport({ ...healthy, lastCronOkAt: null }).ok, false);
-    assert.equal(buildHealthReport({ ...healthy, lastPollOkAt: null }).ok, false);
+  it('reports a nightly that has not come round yet as starting, not error', () => {
+    // The false alarm this replaces: the nightly is on 0 3 * * *, so for up to
+    // a day after a clean deploy there is no timestamp to be recent, and a flat
+    // 503 there is the first thing an operator's monitor would page on.
+    const report = buildHealthReport({ ...healthy, lastCronOkAt: null });
+    assert.equal(report.status, 'starting');
+    assert.equal(report.ok, false);
+  });
+
+  it('reports a brand-new deployment as starting', () => {
+    const report = buildHealthReport({ ...healthy, lastCronOkAt: null, lastPollOkAt: null });
+    assert.equal(report.status, 'starting');
+  });
+
+  it('is an error when the poll has never run but the nightly has', () => {
+    // This is what bounds 'starting'. A nightly timestamp proves the Worker has
+    // been alive for a day, so the five-minute poll has had ~288 chances.
+    const report = buildHealthReport({ ...healthy, lastPollOkAt: null });
+    assert.equal(report.status, 'error');
+    assert.equal(report.ok, false);
+  });
+
+  it('is an error, not starting, once a job has run and gone quiet', () => {
+    const cron = buildHealthReport({ ...healthy, lastCronOkAt: NOW - CRON_STALE_SECONDS - 1 });
+    assert.equal(cron.status, 'error');
+    const poll = buildHealthReport({ ...healthy, lastPollOkAt: NOW - POLL_STALE_SECONDS - 1 });
+    assert.equal(poll.status, 'error');
+  });
+
+  it('is an error whatever the timestamps say, if the database is down', () => {
+    const report = buildHealthReport({
+      ...healthy,
+      databaseOk: false,
+      lastCronOkAt: null,
+      lastPollOkAt: null,
+    });
+    assert.equal(report.status, 'error');
   });
 
   it('still reports ok while accounts need reconnecting', () => {
@@ -146,6 +180,7 @@ describe('health report', () => {
       'last_cron_ok_at',
       'last_poll_ok_at',
       'ok',
+      'status',
     ]);
     for (const forbidden of ['username', 'ig_user_id', 'token', 'secret']) {
       assert.equal(serialized.includes(forbidden), false, `leaked ${forbidden}`);

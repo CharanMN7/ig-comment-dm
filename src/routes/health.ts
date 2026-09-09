@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { CRON_STALE_SECONDS, nowSeconds } from '../crypto.ts';
-import { listAccounts, systemGet } from '../db.ts';
+import { countAccountHealth, systemGet } from '../db.ts';
 import type { Env } from '../types.ts';
 
 /**
@@ -11,8 +11,11 @@ import type { Env } from '../types.ts';
  */
 export const POLL_STALE_SECONDS = 30 * 60;
 
+export type HealthStatus = 'ok' | 'starting' | 'error';
+
 export type HealthReport = {
   ok: boolean;
+  status: HealthStatus;
   database: 'ok' | 'error';
   accounts: { active: number; needs_reconnect: number };
   last_cron_ok_at: number | null;
@@ -25,10 +28,7 @@ function readTimestamp(raw: string | null): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
-function isStale(at: number | null, within: number, now: number): boolean {
-  // Never having run is stale. A fresh deployment is briefly unhealthy by this
-  // rule, which is correct: nothing has proven the job works yet.
-  if (at == null) return true;
+function isStale(at: number, within: number, now: number): boolean {
   return now - at > within;
 }
 
@@ -37,6 +37,19 @@ function isStale(at: number | null, within: number, now: number): boolean {
  *
  * Separated from the route so the health rules can be tested without a Worker,
  * a request, or a live D1 instance.
+ *
+ * Three states, not two. A job that has run and then gone quiet is a real
+ * outage — `error`, `503`. A job that has *never* run is a different thing, and
+ * on a clean deploy it is the normal thing: the nightly cron is on `0 3 * * *`,
+ * so for up to a day there is no timestamp to be recent. Reporting that as
+ * `503` means the first thing an operator's monitor does on a fresh deploy is
+ * page them for nothing, which is how a monitor gets ignored. So it is
+ * `starting`, and `200`.
+ *
+ * `starting` is bounded rather than open-ended: the five-minute poll only gets
+ * that benefit of the doubt while the nightly has also never run. Once the
+ * nightly has fired, the Worker has demonstrably been alive for a day, and a
+ * poll with no timestamp is then a genuine failure.
  */
 export function buildHealthReport(input: {
   databaseOk: boolean;
@@ -46,11 +59,29 @@ export function buildHealthReport(input: {
   lastPollOkAt: number | null;
   now: number;
 }): HealthReport {
-  const cronStale = isStale(input.lastCronOkAt, CRON_STALE_SECONDS, input.now);
-  const pollStale = isStale(input.lastPollOkAt, POLL_STALE_SECONDS, input.now);
+  const cronRan = input.lastCronOkAt != null;
+  const pollRan = input.lastPollOkAt != null;
+
+  const cronStale = cronRan && isStale(input.lastCronOkAt as number, CRON_STALE_SECONDS, input.now);
+  const pollStale = pollRan && isStale(input.lastPollOkAt as number, POLL_STALE_SECONDS, input.now);
+
+  // A poll that has never run is only "not yet" while nothing else has run
+  // either. If the nightly has fired, the Worker has been up for a day and the
+  // five-minute poll has had ~288 chances.
+  const pollNeverRanButShouldHave = !pollRan && cronRan;
+
+  let status: HealthStatus;
+  if (!input.databaseOk || cronStale || pollStale || pollNeverRanButShouldHave) {
+    status = 'error';
+  } else if (!cronRan || !pollRan) {
+    status = 'starting';
+  } else {
+    status = 'ok';
+  }
 
   return {
-    ok: input.databaseOk && !cronStale && !pollStale,
+    ok: status === 'ok',
+    status,
     database: input.databaseOk ? 'ok' : 'error',
     accounts: { active: input.activeAccounts, needs_reconnect: input.needsReconnect },
     last_cron_ok_at: input.lastCronOkAt,
@@ -69,8 +100,11 @@ export const healthRoutes = new Hono<{ Bindings: Env }>();
  * a D1 failure message can carry a query, so the body says only `"error"` and
  * the detail stays in the Worker log.
  *
- * Two queries at most, both already used elsewhere, so a monitor polling every
- * 30 seconds stays inside a free-tier budget.
+ * Three small queries, none of which reads a token column, so a monitor polling
+ * every 60 seconds stays inside a free-tier budget.
+ *
+ * `503` only for `status: "error"`. `starting` answers `200`, because a monitor
+ * should not page for a deploy that is merely young.
  */
 healthRoutes.get('/health', async (c) => {
   const now = nowSeconds();
@@ -82,11 +116,9 @@ healthRoutes.get('/health', async (c) => {
   let lastPollOkAt: number | null = null;
 
   try {
-    const accounts = await listAccounts(c.env.DB);
-    activeAccounts = accounts.filter((a) => a.active === 1).length;
-    needsReconnect = accounts.filter(
-      (a) => a.needs_reconnect === 1 || a.token_expires_at <= now,
-    ).length;
+    const counts = await countAccountHealth(c.env.DB, now);
+    activeAccounts = counts.active;
+    needsReconnect = counts.needsReconnect;
 
     lastCronOkAt = readTimestamp(await systemGet(c.env.DB, 'last_cron_ok_at'));
     lastPollOkAt = readTimestamp(await systemGet(c.env.DB, 'last_poll_ok_at'));
@@ -107,5 +139,5 @@ healthRoutes.get('/health', async (c) => {
 
   c.header('X-Robots-Tag', 'noindex');
   c.header('Cache-Control', 'no-store, max-age=0');
-  return c.json(report, report.ok ? 200 : 503);
+  return c.json(report, report.status === 'error' ? 503 : 200);
 });

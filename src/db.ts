@@ -36,6 +36,31 @@ export async function listAccounts(db: D1Database): Promise<Account[]> {
   return results ?? [];
 }
 
+/**
+ * Counts for `/health`, without reading a single encrypted token.
+ *
+ * `/health` is unauthenticated and a monitor hits it constantly, so it must not
+ * pull `access_token_enc` into memory just to length a list. One aggregate row
+ * instead. `needs_reconnect` counts every account in that state, active or not,
+ * which is what the operator has to act on.
+ */
+export async function countAccountHealth(
+  db: D1Database,
+  now: number,
+): Promise<{ active: number; needsReconnect: number }> {
+  const row = await db
+    .prepare(
+      `SELECT
+         COALESCE(SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END), 0) AS active,
+         COALESCE(SUM(CASE WHEN needs_reconnect = 1 OR token_expires_at <= ? THEN 1 ELSE 0 END), 0)
+           AS needs_reconnect
+       FROM accounts`,
+    )
+    .bind(now)
+    .first<{ active: number; needs_reconnect: number }>();
+  return { active: row?.active ?? 0, needsReconnect: row?.needs_reconnect ?? 0 };
+}
+
 export async function upsertAccount(
   db: D1Database,
   row: {

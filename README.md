@@ -223,9 +223,7 @@ Then comment from a **different** Instagram account — a friend's phone works. 
 ### Monitor it from outside
 
 `GET /health` needs no authentication and is safe to point an uptime monitor at.
-It answers `200` when the database is reachable and both scheduled jobs have run
-recently, and `503` when they have not — so a monitor can alert without parsing
-the body.
+Poll it every 60 seconds; there is nothing here that changes faster.
 
 ```bash
 curl -i https://your-worker.workers.dev/health
@@ -234,12 +232,26 @@ curl -i https://your-worker.workers.dev/health
 ```json
 {
   "ok": true,
+  "status": "ok",
   "database": "ok",
   "accounts": { "active": 2, "needs_reconnect": 0 },
   "last_cron_ok_at": 1756400000,
   "last_poll_ok_at": 1756402000
 }
 ```
+
+A monitor can alert on the status code alone and never read the body:
+
+| `status` | code | meaning |
+|---|---|---|
+| `ok` | `200` | Database reachable, both scheduled jobs have run recently. |
+| `starting` | `200` | Nothing is wrong yet, but a job has not run for the first time. The nightly refresh is on `0 3 * * *`, so a freshly deployed copy sits here until 03:00 comes round. **Not** an alert. |
+| `error` | `503` | The database is unreachable, or a job that used to run has gone quiet. |
+
+`starting` does not hide a broken job forever. It only excuses the five-minute
+poll while the nightly has *also* never run — once the nightly has fired, the
+Worker has demonstrably been up for a day, and a poll with no timestamp becomes
+`error`.
 
 This is the answer to the silent failure in the table below: if the nightly
 refresh stops, nothing tells you until tokens expire and every account needs a
