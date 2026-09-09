@@ -119,7 +119,7 @@ export async function accountsNeedingRefresh(db: D1Database, expiresBefore: numb
 export async function listActiveRules(db: D1Database, igUserId: string): Promise<Rule[]> {
   const { results } = await db
     .prepare(
-      `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at
+      `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, match_all, active, created_at
        FROM rules WHERE ig_user_id = ? AND active = 1 ORDER BY id ASC`,
     )
     .bind(igUserId)
@@ -131,7 +131,7 @@ export async function listRules(db: D1Database, igUserId?: string): Promise<Rule
   if (igUserId) {
     const { results } = await db
       .prepare(
-        `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at
+        `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, match_all, active, created_at
          FROM rules WHERE ig_user_id = ? ORDER BY id DESC`,
       )
       .bind(igUserId)
@@ -140,7 +140,7 @@ export async function listRules(db: D1Database, igUserId?: string): Promise<Rule
   }
   const { results } = await db
     .prepare(
-      `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at
+      `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, match_all, active, created_at
        FROM rules ORDER BY id DESC`,
     )
     .all<Rule>();
@@ -150,7 +150,7 @@ export async function listRules(db: D1Database, igUserId?: string): Promise<Rule
 export async function getRule(db: D1Database, id: number): Promise<Rule | null> {
   return await db
     .prepare(
-      `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at
+      `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, match_all, active, created_at
        FROM rules WHERE id = ?`,
     )
     .bind(id)
@@ -166,15 +166,25 @@ export async function insertRule(
     media_id: string | null;
     dm_text: string;
     public_reply_text: string | null;
+    match_all?: number;
     created_at: number;
   },
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO rules (ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+      `INSERT INTO rules (ig_user_id, label, keywords, media_id, dm_text, public_reply_text, match_all, active, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
     )
-    .bind(row.ig_user_id, row.label, row.keywords, row.media_id, row.dm_text, row.public_reply_text, row.created_at)
+    .bind(
+      row.ig_user_id,
+      row.label,
+      row.keywords,
+      row.media_id,
+      row.dm_text,
+      row.public_reply_text,
+      row.match_all ? 1 : 0,
+      row.created_at,
+    )
     .run();
 }
 
@@ -188,15 +198,25 @@ export async function updateRule(
     media_id: string | null;
     dm_text: string;
     public_reply_text: string | null;
+    match_all?: number;
   },
 ): Promise<void> {
   await db
     .prepare(
       `UPDATE rules
-       SET ig_user_id = ?, label = ?, keywords = ?, media_id = ?, dm_text = ?, public_reply_text = ?
+       SET ig_user_id = ?, label = ?, keywords = ?, media_id = ?, dm_text = ?, public_reply_text = ?, match_all = ?
        WHERE id = ?`,
     )
-    .bind(row.ig_user_id, row.label, row.keywords, row.media_id, row.dm_text, row.public_reply_text, id)
+    .bind(
+      row.ig_user_id,
+      row.label,
+      row.keywords,
+      row.media_id,
+      row.dm_text,
+      row.public_reply_text,
+      row.match_all ? 1 : 0,
+      id,
+    )
     .run();
 }
 

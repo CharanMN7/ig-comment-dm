@@ -78,6 +78,9 @@ export function keywordMatches(normalizedComment: string, keyword: string): bool
 
 /**
  * Media-scoped rules (matching this post) win over rules with no media_id.
+ * On the same post, specific keyword rules take precedence over a match-all rule,
+ * allowing specific keywords to win while match-all serves as a fallback.
+ * Account-wide match-all is strictly disbarred.
  * First match inside that order wins; stop looking.
  */
 export function findMatchingRule(
@@ -86,13 +89,35 @@ export function findMatchingRule(
   mediaId: string | undefined,
 ): Rule | null {
   const normalized = normalizeCommentText(commentText);
-  const scoped = rules.filter((r) => r.media_id != null && r.media_id !== '' && r.media_id === mediaId);
-  const global = rules.filter((r) => r.media_id == null || r.media_id === '');
-  for (const rule of [...scoped, ...global]) {
+  // Scoped rules for this media
+  const scopedKeywords = rules.filter(
+    (r) => !r.match_all && r.media_id != null && r.media_id !== '' && r.media_id === mediaId,
+  );
+  const scopedMatchAll = rules.filter(
+    (r) => Boolean(r.match_all) && r.media_id != null && r.media_id !== '' && r.media_id === mediaId,
+  );
+  // Global rules (never match_all)
+  const globalKeywords = rules.filter((r) => !r.match_all && (r.media_id == null || r.media_id === ''));
+
+  // 1. Media-scoped keyword matches
+  for (const rule of scopedKeywords) {
     for (const kw of parseKeywords(rule.keywords)) {
       if (keywordMatches(normalized, kw)) return rule;
     }
   }
+
+  // 2. Media-scoped match-all rule (fallback for this post)
+  if (scopedMatchAll.length > 0) {
+    return scopedMatchAll[0]!;
+  }
+
+  // 3. Global keyword matches
+  for (const rule of globalKeywords) {
+    for (const kw of parseKeywords(rule.keywords)) {
+      if (keywordMatches(normalized, kw)) return rule;
+    }
+  }
+
   return null;
 }
 

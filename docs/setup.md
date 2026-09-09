@@ -171,9 +171,10 @@ Create the tables:
 ```bash
 npx wrangler d1 execute ig-comment-dm --remote --file=migrations/001_init.sql
 npx wrangler d1 execute ig-comment-dm --remote --file=migrations/002_webhook_events.sql
+npx wrangler d1 execute ig-comment-dm --remote --file=migrations/003_match_all.sql
 ```
 
-(Both of those are also `npm run db:migrate`.)
+(All of those are also `npm run db:migrate`.)
 
 Generate the four secrets you issue yourself:
 

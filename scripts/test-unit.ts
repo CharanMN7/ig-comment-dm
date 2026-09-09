@@ -177,6 +177,61 @@ describe('findMatchingRule', () => {
   it('returns null when nothing matches', () => {
     assert.equal(findMatchingRule([global], 'nice photo', undefined), null);
   });
+
+  it('matches any comment on scoped post when match_all is set', () => {
+    const matchAllRule = rule({
+      id: 3,
+      label: 'giveaway',
+      keywords: '[]',
+      media_id: 'GIVEAWAY_POST',
+      dm_text: 'here is your entry',
+      match_all: 1,
+    });
+    const hit = findMatchingRule([matchAllRule], 'completely random text', 'GIVEAWAY_POST');
+    assert.equal(hit?.id, 3);
+    assert.equal(hit?.dm_text, 'here is your entry');
+  });
+
+  it('does not match comments on a different post with match_all', () => {
+    const matchAllRule = rule({
+      id: 3,
+      label: 'giveaway',
+      keywords: '[]',
+      media_id: 'GIVEAWAY_POST',
+      dm_text: 'here is your entry',
+      match_all: 1,
+    });
+    const hit = findMatchingRule([matchAllRule], 'completely random text', 'OTHER_POST');
+    assert.equal(hit, null);
+  });
+
+  it('prioritizes specific keyword rules over match_all rule on the same post', () => {
+    const keywordRule = rule({
+      id: 4,
+      label: 'vip-keyword',
+      keywords: JSON.stringify(['vip']),
+      media_id: 'POST_WITH_BOTH',
+      dm_text: 'vip-dm',
+    });
+    const matchAllRule = rule({
+      id: 5,
+      label: 'general-match-all',
+      keywords: '[]',
+      media_id: 'POST_WITH_BOTH',
+      dm_text: 'standard-dm',
+      match_all: 1,
+    });
+
+    // Specific keyword comment gets the keyword rule
+    const vipHit = findMatchingRule([matchAllRule, keywordRule], 'I want the vip access', 'POST_WITH_BOTH');
+    assert.equal(vipHit?.id, 4);
+    assert.equal(vipHit?.dm_text, 'vip-dm');
+
+    // Other comment on the same post falls back to the match_all rule
+    const generalHit = findMatchingRule([matchAllRule, keywordRule], 'just leaving a note', 'POST_WITH_BOTH');
+    assert.equal(generalHit?.id, 5);
+    assert.equal(generalHit?.dm_text, 'standard-dm');
+  });
 });
 
 describe('oauthRedirectUri', () => {

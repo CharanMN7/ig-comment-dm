@@ -40,6 +40,7 @@ export type Rule = {
   media_id: string | null;
   dm_text: string;
   public_reply_text: string | null;
+  match_all?: number;
   active: number;
   created_at: number;
 };
