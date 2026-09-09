@@ -57,6 +57,32 @@ ADMIN_URL_SECRET=... WEBHOOK_VERIFY_TOKEN=... META_APP_SECRET=... ADMIN_PASSWORD
   npm run selftest -- http://localhost:8787
 ```
 
+### Adding a database migration
+
+Drop a new file in `migrations/`, named with the next number:
+
+```
+migrations/003_tracked_links.sql
+```
+
+`npm run db:migrate:local` (and `npm run db:migrate` for a deployed copy) picks
+it up automatically — no script to edit. Wrangler records what it has applied in
+a `d1_migrations` table and skips those files next time, so a migration runs
+exactly once per database.
+
+That means a migration may now **alter an existing table**:
+
+```sql
+ALTER TABLE rules ADD COLUMN match_mode TEXT NOT NULL DEFAULT 'word';
+```
+
+Two things to keep in mind:
+
+- Files apply in filename order, so keep the numeric prefix zero-padded and never
+  renumber a file that has already shipped — the recorded name is the identity.
+- A `NOT NULL` column added to a populated table needs a `DEFAULT`, or the
+  migration fails on any deployment that already has rows.
+
 ## Working on an issue
 
 Issues labelled [`good first issue`](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue)
