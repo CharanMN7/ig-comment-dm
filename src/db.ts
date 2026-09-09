@@ -265,24 +265,130 @@ export async function recentSent(db: D1Database, limit: number): Promise<(Sent &
   return results ?? [];
 }
 
-export async function todayCounters(
-  db: D1Database,
-  since: number,
-): Promise<{ triggers: number; sends: number; failures: number }> {
-  const row = await db
-    .prepare(
-      `SELECT
-         COUNT(*) AS triggers,
-         SUM(CASE WHEN dm_status = 'ok' THEN 1 ELSE 0 END) AS sends,
-         SUM(CASE WHEN dm_status = 'failed' THEN 1 ELSE 0 END) AS failures
-       FROM sent WHERE sent_at >= ?`,
-    )
-    .bind(since)
-    .first<{ triggers: number; sends: number | null; failures: number | null }>();
+/**
+ * The four windows the Home page reports on, longest-lived last.
+ *
+ * `all` starts at 0 rather than at a date, so "all time" needs no special case
+ * anywhere below -- it is just a window whose start is before every row.
+ */
+export const COUNTER_WINDOWS = ['today', 'week', 'month', 'all'] as const;
+
+export type CounterWindow = (typeof COUNTER_WINDOWS)[number];
+
+/**
+ * Where each window starts, in unix seconds.
+ *
+ * The week and month windows are whole days ending with today -- today plus the
+ * previous six, and today plus the previous twenty-nine -- rather than 7x86400
+ * seconds back from now. An operator reading "last 7 days" at 09:00 means seven
+ * days, not six days and nine hours, and day alignment is what makes
+ * today <= week <= month <= all hold on the page.
+ */
+export function counterWindowStarts(now: number): Record<CounterWindow, number> {
+  const dayStart = Math.floor(now / 86400) * 86400;
   return {
-    triggers: row?.triggers ?? 0,
-    sends: row?.sends ?? 0,
-    failures: row?.failures ?? 0,
+    today: dayStart,
+    week: dayStart - 6 * 86400,
+    month: dayStart - 29 * 86400,
+    all: 0,
+  };
+}
+
+export type CounterTotals = {
+  triggers: number;
+  sends: number;
+  skips: number;
+  failures: number;
+  recipients: number;
+};
+
+export type Counters = Record<CounterWindow, CounterTotals>;
+
+export type AccountCounters = { ig_user_id: string; counters: Counters };
+
+/**
+ * One aggregate expression per window per metric.
+ *
+ * Every window is counted in the same pass, so adding a fifth window costs
+ * columns rather than a query -- D1 charges per row read, and eight separate
+ * range queries would read the same rows eight times.
+ *
+ * `COUNT(DISTINCT CASE WHEN ... END)` is the one that has to be written this
+ * way: recipients cannot be summed across windows or across accounts, because
+ * the same commenter appears in more than one.
+ */
+function counterColumns(): string {
+  return COUNTER_WINDOWS.map(
+    (w) => `COUNT(CASE WHEN sent_at >= ? THEN 1 END) AS ${w}_triggers,
+         COUNT(CASE WHEN sent_at >= ? AND dm_status = 'ok' THEN 1 END) AS ${w}_sends,
+         COUNT(CASE WHEN sent_at >= ? AND dm_status = 'skipped' THEN 1 END) AS ${w}_skips,
+         COUNT(CASE WHEN sent_at >= ? AND dm_status = 'failed' THEN 1 END) AS ${w}_failures,
+         COUNT(DISTINCT CASE WHEN sent_at >= ? THEN commenter_id END) AS ${w}_recipients`,
+  ).join(',\n         ');
+}
+
+const COUNTER_BINDS_PER_WINDOW = 5;
+
+function counterParams(starts: Record<CounterWindow, number>): number[] {
+  return COUNTER_WINDOWS.flatMap((w) =>
+    Array.from({ length: COUNTER_BINDS_PER_WINDOW }, () => starts[w]),
+  );
+}
+
+function readCounters(row: Record<string, number | null> | undefined): Counters {
+  const out = {} as Counters;
+  for (const w of COUNTER_WINDOWS) {
+    out[w] = {
+      triggers: row?.[`${w}_triggers`] ?? 0,
+      sends: row?.[`${w}_sends`] ?? 0,
+      skips: row?.[`${w}_skips`] ?? 0,
+      failures: row?.[`${w}_failures`] ?? 0,
+      recipients: row?.[`${w}_recipients`] ?? 0,
+    };
+  }
+  return out;
+}
+
+/**
+ * Totals for every window, overall and per account, in one statement.
+ *
+ * The per-account rows cannot simply be added up to make the overall row: one
+ * commenter may have commented on two accounts, and would be counted twice.
+ * So the overall row is aggregated over the whole table, as its own arm of a
+ * UNION ALL, and carries a NULL account id.
+ */
+export async function sendCounters(
+  db: D1Database,
+  now: number,
+): Promise<{ overall: Counters; byAccount: AccountCounters[] }> {
+  const starts = counterWindowStarts(now);
+  const columns = counterColumns();
+  const { results } = await db
+    .prepare(
+      `SELECT NULL AS ig_user_id,
+         ${columns}
+       FROM sent
+       UNION ALL
+       SELECT ig_user_id,
+         ${columns}
+       FROM sent
+       GROUP BY ig_user_id`,
+    )
+    .bind(...counterParams(starts), ...counterParams(starts))
+    .all<Record<string, number | null> & { ig_user_id: string | null }>();
+
+  const rows = results ?? [];
+  const overallRow = rows.find((r) => r.ig_user_id === null);
+  return {
+    overall: readCounters(overallRow),
+    // Ordered here rather than in SQL: a compound SELECT only accepts output
+    // column names or ordinals in ORDER BY, so `ig_user_id IS NOT NULL` is
+    // rejected outright, and one account per connected Instagram account is
+    // never a list worth sorting in the database.
+    byAccount: rows
+      .filter((r): r is typeof r & { ig_user_id: string } => r.ig_user_id !== null)
+      .map((r) => ({ ig_user_id: r.ig_user_id, counters: readCounters(r) }))
+      .sort((a, b) => b.counters.all.sends - a.counters.all.sends),
   };
 }
 
