@@ -41,6 +41,11 @@ button.danger { background: #a11; }
 pre.raw { background: #111; color: #eee; padding: 0.6rem 0.7rem; overflow: auto; font-size: 0.78rem; }
 .actions form { display: inline; }
 code { font-size: 0.88em; }
+.templates-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr)); gap: 0.75rem; margin: 1rem 0 1.5rem; }
+.template-card { background: #fff; border: 1px solid #e4e4e0; padding: 0.75rem; display: flex; flex-direction: column; justify-content: space-between; }
+.template-card h3 { font-size: 0.95rem; margin: 0 0 0.25rem; }
+.template-card p { font-size: 0.85rem; color: #555; margin: 0 0 0.6rem; }
+.template-card .btn { align-self: flex-start; }
 `;
 
 export function csrfField(token: string) {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  DM_TEXT_MAX,
   hmacSha256Hex,
   timingSafeEqualString,
   verifyHmacSha256Hex,
@@ -19,6 +20,7 @@ import {
   keywordMatches,
   normalizeCommentText,
 } from '../src/match.ts';
+import { RULE_TEMPLATES } from '../src/templates.ts';
 import type { Rule } from '../src/types.ts';
 
 function rule(partial: Partial<Rule> & Pick<Rule, 'id' | 'keywords' | 'label'>): Rule {
@@ -363,3 +365,36 @@ describe('login throttle', () => {
     assert.equal(lockRemaining({ fails: 0, lockedUntil: 0 }, 1_000), 0);
   });
 });
+
+describe('RULE_TEMPLATES', () => {
+  it('provides between 6 and 8 well-structured starter templates', () => {
+    assert.ok(RULE_TEMPLATES.length >= 6 && RULE_TEMPLATES.length <= 8);
+  });
+
+  it('ensures each template is valid against rule constraints', () => {
+    const ids = new Set<string>();
+    for (const t of RULE_TEMPLATES) {
+      assert.ok(!ids.has(t.id), `duplicate template id: ${t.id}`);
+      ids.add(t.id);
+      assert.ok(t.name.trim().length > 0, `template ${t.id} missing name`);
+      assert.ok(t.description.trim().length > 0, `template ${t.id} missing description`);
+      assert.ok(t.label.trim().length > 0, `template ${t.id} missing label`);
+      assert.ok(t.keywords.length > 0, `template ${t.id} has no keywords`);
+      for (const kw of t.keywords) {
+        assert.ok(kw.trim().length >= 3, `keyword "${kw}" in ${t.id} must be >= 3 chars`);
+      }
+      assert.ok(t.dm_text.trim().length > 0, `template ${t.id} missing dm_text`);
+      assert.ok(
+        t.dm_text.length <= DM_TEXT_MAX,
+        `template ${t.id} dm_text exceeds ${DM_TEXT_MAX} chars`,
+      );
+      if (t.public_reply_text) {
+        assert.ok(
+          t.public_reply_text.length <= DM_TEXT_MAX,
+          `template ${t.id} public_reply_text exceeds ${DM_TEXT_MAX} chars`,
+        );
+      }
+    }
+  });
+});
+
