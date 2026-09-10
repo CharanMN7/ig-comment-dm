@@ -34,6 +34,7 @@ import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '.
 import { KEYWORD_TOO_SHORT_MESSAGE, findMatchingRule, parseKeywords } from '../match.ts';
 import { listRecentMedia, oauthRedirectUri } from '../meta.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
+import { RULE_TEMPLATES } from '../templates.ts';
 import {
   clearFailures,
   describeLock,
@@ -610,7 +611,23 @@ adminRoutes.get('/rules', async (c) => {
         <p class="muted">When a comment matches a keyword, we send that person one private message.</p>
         <p><a class="btn" href="${base}/rules/new">New rule</a></p>
         ${rules.length === 0
-          ? html`<p>No rules yet.</p>`
+          ? html`
+              <p>No rules yet. Start from scratch with a new rule, or pick a template below to get started faster:</p>
+              <h2>Rule templates</h2>
+              <div class="templates-grid">
+                ${RULE_TEMPLATES.map(
+                  (t) => html`
+                    <div class="template-card">
+                      <div>
+                        <h3>${t.name}</h3>
+                        <p>${t.description}</p>
+                      </div>
+                      <a class="btn secondary" href="${base}/rules/new?template=${encodeURIComponent(t.id)}">Use template</a>
+                    </div>
+                  `,
+                )}
+              </div>
+            `
           : html`
               <table>
                 <thead>
@@ -668,6 +685,8 @@ adminRoutes.get('/rules/new', async (c) => {
       }),
     );
   }
+  const templateId = c.req.query('template');
+  const template = templateId ? RULE_TEMPLATES.find((t) => t.id === templateId) : undefined;
   return c.html(
     layout({
       title: 'New rule',
@@ -680,11 +699,11 @@ adminRoutes.get('/rules/new', async (c) => {
         action: `${base}/rules`,
         values: {
           ig_user_id: accounts[0]!.ig_user_id,
-          label: '',
-          keywords: '',
+          label: template?.label ?? '',
+          keywords: template ? template.keywords.join('\n') : '',
           media_id: '',
-          dm_text: '',
-          public_reply_text: '',
+          dm_text: template?.dm_text ?? '',
+          public_reply_text: template?.public_reply_text ?? '',
         },
         posts: await recentMediaOptions(c.env),
       })}`,
