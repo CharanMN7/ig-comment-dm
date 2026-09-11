@@ -300,7 +300,7 @@ describe('login throttle', () => {
 
 describe('web app manifest and mobile installability', () => {
   it('renders theme-color, manifest link, and icons in admin layout', async () => {
-    const { layout, APP_ICON_SVG } = await import('../src/html.ts');
+    const { layout, APP_ICON_SVG, APPLE_TOUCH_ICON_DATA_URI } = await import('../src/html.ts');
     const { html } = await import('hono/html');
 
     const adminHtml = (
@@ -314,7 +314,7 @@ describe('web app manifest and mobile installability', () => {
     assert.ok(adminHtml.includes('<meta name="theme-color" content="#111111" />'));
     assert.ok(adminHtml.includes('<link rel="manifest" href="/a/secret123/manifest.webmanifest" />'));
     assert.ok(adminHtml.includes('<link rel="icon" type="image/svg+xml" href="/a/secret123/icon.svg" />'));
-    assert.ok(adminHtml.includes('<link rel="apple-touch-icon" href="/a/secret123/icon.svg" />'));
+    assert.ok(adminHtml.includes(`<link rel="apple-touch-icon" href="${APPLE_TOUCH_ICON_DATA_URI}" />`));
     assert.ok(adminHtml.includes('<meta name="mobile-web-app-capable" content="yes" />'));
     assert.ok(APP_ICON_SVG.startsWith('<svg') && APP_ICON_SVG.includes('</svg>'));
   });

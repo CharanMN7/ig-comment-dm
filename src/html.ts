@@ -10,6 +10,8 @@ export const APP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 
 </svg>`;
 
 export const APP_ICON_DATA_URI = `data:image/svg+xml;utf8,${encodeURIComponent(APP_ICON_SVG)}`;
+// iOS requires a PNG for apple-touch-icon; it does not use SVG manifest icons.
+export const APPLE_TOUCH_ICON_DATA_URI = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAALQAAAC0CAYAAAA9zQYyAAABaUlEQVR42u3SMQ0AAAzDsFIof7Abh52TDxOIkrYDX0QEDA2GBkODoTE0GBoMDYYGQ2NoMDQYGgwNhsbQYGgwNBgaDI2hwdBgaDA0GBpDg6HB0GBoMDSGBkODocHQYGgMDYYGQ4OhMbQQGBoMDYYGQ2NoMDQYGgwNhsbQYGgwNBgaDI2hwdBgaDA0GBpDg6HB0GBoMDSGBkODocHQYGgMDYYGQ4OhwdAYGgwNhgZDY2gwNBgaDA2GxtBgaDA0GBoMjaHB0GBoMDQYGkODocHQYGgwNIYGQ4OhwdBgaAwNhgZDg6HB0BgaDA2GBkNjaBEwNBgaDA0GBoMjaHB0GBoMDQYGkODocHQYGgwNIYGQ4OhwdBgaAwNhgZDg6HB0BgaDA2GBkODoTE0GBoMDYbG0GBoMDQYGgyNocHQYGgwNBgaQ4OhwdBgaDA0hgZDg6HB0GBoDA2GBkODocHQGBoMDYaGuwXQbFD6sbzZCwAAAABJRU5ErkJggg==';
 
 const CSS = `
 :root { color: #111; background: #f6f6f4; font: 15px/1.45 system-ui, sans-serif; }
@@ -73,6 +75,7 @@ export function layout(opts: {
   body: HtmlEscapedString | Promise<HtmlEscapedString>;
 }) {
   const iconHref = opts.base ? `${opts.base}/icon.svg` : APP_ICON_DATA_URI;
+  const appleTouchIconHref = APPLE_TOUCH_ICON_DATA_URI;
   const manifestLink = opts.base
     ? html`<link rel="manifest" href="${opts.base}/manifest.webmanifest" />`
     : html``;
@@ -103,7 +106,7 @@ export function layout(opts: {
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="Comment DM" />
         <link rel="icon" type="image/svg+xml" href="${iconHref}" />
-        <link rel="apple-touch-icon" href="${iconHref}" />
+        <link rel="apple-touch-icon" href="${appleTouchIconHref}" />
         ${manifestLink}
         <title>${opts.title}</title>
         <style>
