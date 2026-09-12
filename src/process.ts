@@ -10,7 +10,7 @@ import {
   updateSent,
 } from './db.ts';
 import { isSelfComment } from './guard.ts';
-import { findMatchingRule } from './match.ts';
+import { matchRule } from './match.ts';
 import { sendPrivateReply, sendPublicReply } from './meta.ts';
 import type { Env } from './types.ts';
 
@@ -138,13 +138,20 @@ export async function processComment(
   if (!claimed) return;
 
   const rules = await listActiveRules(env.DB, account.ig_user_id);
-  const rule = findMatchingRule(rules, text, mediaId);
+  const outcome = matchRule(rules, text, mediaId);
+  const rule = outcome.rule;
   if (!rule) {
+    // Name the exclusion when there was one. "no matching rule" on a comment
+    // that plainly contains the keyword reads as a broken rule; saying which
+    // word skipped it makes the Sends list explain itself.
+    const blocked = outcome.excluded[0];
     await updateSent(env.DB, commentId, {
-      rule_id: null,
+      rule_id: blocked ? blocked.rule.id : null,
       dm_status: 'skipped',
       reply_status: null,
-      error: 'no matching rule',
+      error: blocked
+        ? `excluded by "${blocked.keyword}" on rule "${blocked.rule.label}"`
+        : 'no matching rule',
       sent_at: nowSeconds(),
     });
     return;

@@ -31,7 +31,7 @@ import {
 } from '../db.ts';
 import { findConfigProblems } from '../config.ts';
 import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
-import { KEYWORD_TOO_SHORT_MESSAGE, findMatchingRule, parseKeywords } from '../match.ts';
+import { KEYWORD_TOO_SHORT_MESSAGE, matchRule, parseKeywords } from '../match.ts';
 import { listRecentMedia, oauthRedirectUri } from '../meta.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
 import {
@@ -524,6 +524,16 @@ function parseKeywordLines(raw: string): { ok: true; keywords: string[] } | { ok
   return { ok: true, keywords };
 }
 
+/** Exclusions are optional, so an empty box is valid -- unlike `keywords`. */
+function parseExcludeLines(raw: string): { ok: true; keywords: string[] } | { ok: false; error: string } {
+  const keywords = raw
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (keywords.some((k) => k.length < 3)) return { ok: false, error: KEYWORD_TOO_SHORT_MESSAGE };
+  return { ok: true, keywords };
+}
+
 function ruleForm(opts: {
   base: string;
   csrf: string;
@@ -533,6 +543,7 @@ function ruleForm(opts: {
     ig_user_id: string;
     label: string;
     keywords: string;
+    exclude_keywords: string;
     media_id: string;
     dm_text: string;
     public_reply_text: string;
@@ -561,6 +572,13 @@ function ruleForm(opts: {
       <label for="keywords">Keywords (one per line)</label>
       <textarea id="keywords" name="keywords" required placeholder="guide&#10;freebie">${v.keywords}</textarea>
       <p class="muted">A comment matches if it contains any of these as whole words.</p>
+      <label for="exclude_keywords">Skip these words (optional, one per line)</label>
+      <textarea id="exclude_keywords" name="exclude_keywords" placeholder="how much&#10;price&#10;not interested"
+        >${v.exclude_keywords}</textarea>
+      <p class="muted">
+        If a comment contains any of these, this rule does not fire and nothing is sent — useful for
+        “how much is it?” or “already have it”. Other rules are still tried.
+      </p>
       <label for="media_id">Which posts</label>
       <select id="media_id" name="media_id">
         <option value="" ${!v.media_id ? 'selected' : ''}>All posts and reels (recommended)</option>
@@ -682,6 +700,7 @@ adminRoutes.get('/rules/new', async (c) => {
           ig_user_id: accounts[0]!.ig_user_id,
           label: '',
           keywords: '',
+          exclude_keywords: '',
           media_id: '',
           dm_text: '',
           public_reply_text: '',
@@ -699,9 +718,11 @@ function readRuleFields(form: Record<string, string>) {
   const ig = (form.ig_user_id ?? '').trim();
   const media = (form.media_id ?? '').trim();
   const pub = (form.public_reply_text ?? '').trim();
+  const excluded = parseExcludeLines(form.exclude_keywords ?? '');
   if (!label) return { error: 'Give this rule a name.' };
   if (!ig) return { error: 'Pick an Instagram account.' };
   if (!parsed.ok) return { error: parsed.error };
+  if (!excluded.ok) return { error: excluded.error };
   if (!dm) return { error: 'Write the private message to send.' };
   if (dm.length > DM_TEXT_MAX) return { error: 'The private message must be 1,000 characters or fewer.' };
   if (media && looksLikePostUrl(media)) {
@@ -715,6 +736,7 @@ function readRuleFields(form: Record<string, string>) {
       ig_user_id: ig,
       label,
       keywords: JSON.stringify(parsed.keywords),
+      exclude_keywords: JSON.stringify(excluded.keywords),
       media_id: media || null,
       dm_text: dm,
       public_reply_text: pub || null,
@@ -742,6 +764,7 @@ adminRoutes.post('/rules', async (c) => {
             ig_user_id: f.ig_user_id ?? '',
             label: f.label ?? '',
             keywords: f.keywords ?? '',
+            exclude_keywords: f.exclude_keywords ?? '',
             media_id: f.media_id ?? '',
             dm_text: f.dm_text ?? '',
             public_reply_text: f.public_reply_text ?? '',
@@ -777,6 +800,7 @@ adminRoutes.get('/rules/:id/edit', async (c) => {
           ig_user_id: rule.ig_user_id,
           label: rule.label,
           keywords: parseKeywords(rule.keywords).join('\n'),
+          exclude_keywords: parseKeywords(rule.exclude_keywords ?? '[]').join('\n'),
           media_id: rule.media_id ?? '',
           dm_text: rule.dm_text,
           public_reply_text: rule.public_reply_text ?? '',
@@ -810,6 +834,7 @@ adminRoutes.post('/rules/:id', async (c) => {
             ig_user_id: f.ig_user_id ?? '',
             label: f.label ?? '',
             keywords: f.keywords ?? '',
+            exclude_keywords: f.exclude_keywords ?? '',
             media_id: f.media_id ?? '',
             dm_text: f.dm_text ?? '',
             public_reply_text: f.public_reply_text ?? '',
@@ -878,7 +903,8 @@ adminRoutes.post('/test', async (c) => {
   const text = form.text ?? '';
   const media = form.media_id?.trim() || undefined;
   const rules = (await listRules(c.env.DB, ig)).filter((r) => r.active === 1);
-  const match = findMatchingRule(rules, text, media);
+  const outcome = matchRule(rules, text, media);
+  const match = outcome.rule;
   const base = c.get('adminBase');
   return c.html(
     layout({
@@ -899,6 +925,23 @@ adminRoutes.post('/test', async (c) => {
                 : html`<p class="muted">No public reply for this rule.</p>`}
             `
           : html`<p>No rule would match this comment. Nothing would be sent.</p>`}
+        ${outcome.excluded.length > 0
+          ? html`
+              <h2>Rules skipped by a "skip these words" entry</h2>
+              <ul>
+                ${outcome.excluded.map(
+                  (e) =>
+                    html`<li>
+                      <b>${e.rule.label}</b> matched, but was skipped because the comment contains
+                      <b>${e.keyword}</b>.
+                    </li>`,
+                )}
+              </ul>
+              <p class="muted">
+                A skip only affects the rule that declares it — the rules after it were still tried.
+              </p>
+            `
+          : html``}
         <p><a href="${base}/test">Test another</a></p>
       `,
     }),
