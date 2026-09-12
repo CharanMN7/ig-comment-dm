@@ -60,7 +60,8 @@ code { font-size: 0.88em; }
   header.top nav { gap: 0.5rem; padding: 0.5rem 0.75rem; }
   header.top form { width: 100%; margin-left: 0; margin-top: 0.25rem; }
   header.top form button { width: 100%; }
-  table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  main { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { min-width: 32rem; }
 }
 `;
 
