@@ -28,6 +28,11 @@ input[type=text], input[type=password], textarea, select {
   width: 100%; padding: 0.4rem 0.5rem; font: inherit; border: 1px solid #ccc; background: #fff;
 }
 textarea { min-height: 6rem; }
+fieldset { border: 1px solid #ccc; background: #fff; padding: 0.35rem 0.85rem 0.8rem; margin: 0.85rem 0 0; }
+legend { font-weight: 650; padding: 0 0.3rem; }
+fieldset label { display: flex; gap: 0.45rem; align-items: baseline; font-weight: 400; margin: 0.6rem 0 0; }
+fieldset input[type=radio], fieldset input[type=checkbox] { width: auto; margin: 0; flex: none; }
+fieldset .muted { margin: 0.15rem 0 0 1.5rem; }
 .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-top: 0.75rem; }
 button, .btn {
   background: #111; color: #fff; border: 0; padding: 0.42rem 0.8rem; font: inherit; cursor: pointer;
