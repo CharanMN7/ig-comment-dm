@@ -57,6 +57,46 @@ ADMIN_URL_SECRET=... WEBHOOK_VERIFY_TOKEN=... META_APP_SECRET=... ADMIN_PASSWORD
   npm run selftest -- http://localhost:8787
 ```
 
+### Adding a database migration
+
+Migrations live in `migrations/` and are applied by wrangler's own runner,
+which records each one in a `d1_migrations` table and never runs it twice.
+
+Add a file. That is the whole process — no script to edit:
+
+```
+migrations/003_rule_match_mode.sql
+```
+
+Name it `NNN_short_description.sql`, with `NNN` one higher than the last file.
+The runner orders by that number, so the prefix is what decides when your
+migration runs.
+
+Then apply it:
+
+```bash
+npm run db:migrate:local     # your local D1
+npm run db:migrate           # the deployed database
+```
+
+`npm run db:migrate:list:local` (or `db:migrate:list`) shows what has not been
+applied yet, without applying anything.
+
+Two things to know when writing one:
+
+- **A migration runs exactly once, so it may change an existing table.**
+  `ALTER TABLE rules ADD COLUMN ...` is fine, and is the normal way to add a
+  column. `CREATE TABLE IF NOT EXISTS` is no longer required — write a plain
+  `CREATE TABLE` for a new one.
+- **A migration is never edited after it ships.** Anyone who has already
+  applied it will not see the change. Add another file instead.
+
+`001_init.sql` and `002_webhook_events.sql` predate this runner and were
+applied by hand. They are written entirely as `CREATE TABLE IF NOT EXISTS`, so
+the runner replays them harmlessly on a database that already has those tables
+and then records them. An existing deployment needs nothing beyond running
+`npm run db:migrate` once.
+
 ## Working on an issue
 
 Issues labelled [`good first issue`](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue)
