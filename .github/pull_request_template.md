@@ -1,3 +1,6 @@
+<!-- Pull requests are reviewed only when you are assigned to the issue this closes.
+     Unassigned PRs are closed automatically. See CONTRIBUTING.md. -->
+
 ## What this changes
 
 <!-- One or two sentences. What behaviour is different after this PR? -->
@@ -8,6 +11,8 @@
      that made this necessary? Meta's docs and Meta's behaviour disagree often. -->
 
 Closes #
+
+- [ ] I am assigned to this issue
 
 ## How it was verified
 
