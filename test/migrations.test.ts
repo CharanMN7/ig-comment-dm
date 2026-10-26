@@ -97,6 +97,12 @@ describe('migrations', () => {
     }
   });
 
+  it('leaves rules saved before match-all needing a keyword', async () => {
+    await oldDeploymentThenMigrate();
+    const rule = await env.DB.prepare('SELECT match_all FROM rules WHERE id = 7').first<{ match_all: number }>();
+    expect(rule).toEqual({ match_all: 0 });
+  });
+
   it('gives rules saved before exclusions an empty list', async () => {
     await oldDeploymentThenMigrate();
     const rule = await env.DB.prepare('SELECT exclude_keywords FROM rules WHERE id = 7').first<{ exclude_keywords: string }>();

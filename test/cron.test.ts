@@ -125,6 +125,25 @@ describe('the 5-minute comment poll', () => {
     expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'ok', rule_id: fallback })]);
   });
 
+  it('answers recent comments on a match-all post, inside the lookback and the per-sweep cap', async () => {
+    await seedAccount();
+    await seedRule({ keywords: [], matchAll: true, mediaId: 'giveaway-reel' });
+    meta.on(
+      'GET',
+      '/:id/comments',
+      commentsByMedia({
+        'giveaway-reel': [
+          ...Array.from({ length: 11 }, (_, i) => comment(`c${String(i).padStart(2, '0')}`, `entry ${i}`)),
+          comment('c-self', 'thanks everyone', { from: IG_USER }),
+          comment('c-old', 'me too', { at: NOW - 73 * 60 * 60 }),
+        ],
+      }),
+    );
+    await runScheduled(POLL);
+    expect(dmTargets()).toEqual(Array.from({ length: 10 }, (_, i) => `c${String(i).padStart(2, '0')}`));
+    expect(meta.callsTo('GET', '/me/media')).toEqual([]);
+  });
+
   it('does not DM a comment the webhook already handled', async () => {
     await seedAccount();
     await seedRule();
