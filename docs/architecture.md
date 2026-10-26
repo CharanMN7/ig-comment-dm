@@ -53,9 +53,9 @@ Follow-up DMs are out of scope. They need the person to reply first (24h window)
 | GET | `/privacy`, `/terms`, `/data-deletion` | Static HTML for Meta Publish. |
 | GET | `/webhook` | Meta verify handshake. Right `hub.verify_token` → echo `hub.challenge`. Wrong → 403. |
 | POST | `/webhook` | Verify signature (either secret), log event, return **200 immediately**, process in `waitUntil`. |
-| GET | `/connect` | Checklist: exact OAuth redirect URIs + Instagram App ID, then continue. `?reconnect=1` is passed through. |
-| GET | `/connect/start` | 302 to Instagram Business Login (`force_reauth` when `?reconnect=1`). |
-| GET | `/connect/callback` | Code → short-lived → long-lived token, fetch `user_id`/`username`, encrypt, **upsert** account. |
+| GET | `/connect` | Logged-in admin session required, else a plain `403` page. Checklist: exact OAuth redirect URIs + Instagram App ID, then continue. `?reconnect=1` is passed through. |
+| GET | `/connect/start` | Logged-in admin session required, else `403`. Sets a signed, 10-minute `state` and a matching `igcdm_connect` cookie, then 302 to Instagram Business Login (`force_reauth` when `?reconnect=1`). |
+| GET | `/connect/callback` | Requires a valid, unexpired `state` and the `igcdm_connect` cookie that matches it, before any call to Instagram. Code → short-lived → long-lived token, fetch `user_id`/`username`, encrypt, **upsert** account. |
 | GET/POST | `/a/:secret/*` | Admin. `:secret` is `ADMIN_URL_SECRET` (32-char). Wrong secret → 404. |
 
 Admin pages (password + CSRF on POSTs): `/` dashboard, `/rules`, `/rules/:id/delete` (confirmation page, then POST), `/test` (dry run, sends nothing, picks the rule through the same `chooseRule` as the pipeline), `/accounts`, first-run `/setup`, `/login`, `/logout`, `POST /run-cron`.
@@ -103,6 +103,7 @@ Mounted at `/a/:secret`. The unguessable URL is a layer, not the auth.
 - First visit: create password (PBKDF2). No email reset. Recovery: delete `admin_password_hash` / `admin_password_salt` via `wrangler d1 execute` (see README).
 - Signed session cookie, 30 days.
 - CSRF on every mutating form, including logout.
+- Connect needs the same logged-in session. The session cookie is `SameSite=Strict`, so the browser leaves it off Instagram's cross-site redirect to `/connect/callback`. `/connect/start` checks the session instead, then issues a signed `state` (10-minute expiry) and an `igcdm_connect` cookie (`HttpOnly`, `SameSite=Lax`, `Path=/connect`) holding an HMAC of the state's nonce. The callback refuses unless both verify, and clears the cookie. Neither the refusal page nor the callback's error pages link to the admin path.
 
 Keyword save error (exact): `Keywords under 3 characters match inside other words — 'AI' would fire on 'again' and 'email'.`
 

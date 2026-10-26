@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FAKE_EXPIRES_IN, FAKE_ME, meta, type MetaReply } from './support/meta.ts';
 import { DAY, FROZEN_NOW_MS, NOW, accountRow, seedAccount, seedRule, sentRow, storedToken, systemValue } from './support/seed.ts';
-import { commentPayload, postWebhook, request, runScheduled } from './support/worker.ts';
+import { commentPayload, postWebhook, returnFromInstagram, runScheduled, signedInAdmin, startConnect } from './support/worker.ts';
 
 // Backoff sleeps up to two real seconds per call, so setTimeout is faked here
 // too. vi.mock can't stub the sleep instead: the pool loads the Worker's
@@ -121,10 +121,10 @@ describe('when Instagram cannot be reached at all', () => {
 
   it('reports a saved account as connected when only the comment subscription never gets an answer', async () => {
     meta.on('POST', '/:id/subscribed_apps', { networkError: true });
-    const start = await request('/connect/start');
-    const state = new URL(start.location!).searchParams.get('state')!;
+    const admin = await signedInAdmin();
+    const state = await startConnect(admin);
 
-    const res = await withBackoffSkipped(request(`/connect/callback?code=c&state=${encodeURIComponent(state)}`));
+    const res = await withBackoffSkipped(returnFromInstagram(admin, { code: 'c', state }));
 
     expect(res.status).toBe(200);
     expect(res.text).toContain(`Connected @${FAKE_ME.username}`);

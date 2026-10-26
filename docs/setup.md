@@ -114,8 +114,8 @@ Repeat for every extra creator account.
 
 When you click Connect, Instagram must be logged in as the account you just
 invited. A different account already logged in on that browser is the usual
-reason one profile works and another doesn't — use a private window if
-needed.
+reason one profile works and another doesn't. If that happens, open a private
+window, log in to your admin page there, and click Connect from that window.
 
 If Meta refuses to add the username because it already has a role on the
 business that owns the app, that's a different block — worth flagging so it
@@ -277,7 +277,7 @@ If you only see **Facebook Login → Valid OAuth Redirect URIs**, that's the
 wrong screen. Stay on the Instagram product, not Facebook Login — they are
 different settings pages even though they sound similar.
 
-Save, then click Connect and continue to Instagram.
+Save. You'll click **Connect** from the admin panel in Part 6.
 
 If you still see **Invalid redirect_uri**, the usual cause is the Facebook
 App ID instead of the **Instagram App ID** (same Business login settings
