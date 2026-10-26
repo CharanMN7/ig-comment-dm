@@ -57,7 +57,7 @@ Follow-up DMs are out of scope. They need the person to reply first (24h window)
 | GET | `/connect/callback` | Code → short-lived → long-lived token, fetch `user_id`/`username`, encrypt, **upsert** account. |
 | GET/POST | `/a/:secret/*` | Admin. `:secret` is `ADMIN_URL_SECRET` (32-char). Wrong secret → 404. |
 
-Admin pages (password + CSRF on POSTs): `/` dashboard, `/rules`, `/test` (dry run, sends nothing), `/accounts`, first-run `/setup`, `/login`, `/logout`, `POST /run-cron`.
+Admin pages (password + CSRF on POSTs): `/` dashboard, `/rules`, `/rules/:id/delete` (confirmation page, then POST), `/test` (dry run, sends nothing, picks the rule through the same `chooseRule` as the pipeline), `/accounts`, first-run `/setup`, `/login`, `/logout`, `POST /run-cron`.
 
 Unlisted, session-gated, used by `scripts/selftest.ts`:
 
@@ -72,13 +72,13 @@ Unlisted, session-gated, used by `scripts/selftest.ts`:
 2. Self-comment guard. Stop, no `sent` row.
 3. Age check. Older than 7 days → claim `sent` as `skipped`, stop.
 4. Atomic claim: `INSERT INTO sent … ON CONFLICT DO NOTHING`. `changes === 0` → already handled, stop.
-5. Active rules. `media_id` set → that post only; `NULL` → all posts. Media-scoped rules win. First match wins.
+5. Active rules, oldest first (`chooseRule` in `src/process.ts`). `media_id` set → that post only; `NULL` → all posts. Media-scoped rules win. First match wins.
 6. Normalize comment: lowercase, strip emoji, strip punctuation, collapse whitespace.
 7. Word-boundary regex per keyword (metacharacters escaped). Keywords under 3 characters are rejected at **save** time in admin, not here.
 8. Decrypt token.
 9. `POST https://graph.instagram.com/v23.0/{ig_user_id}/messages` with `{ recipient: { comment_id }, message: { text } }`.
-10. If `public_reply_text`, `POST /{comment-id}/replies`.
-11. `UPDATE sent` with both outcomes (`ok` / `failed` / `skipped`).
+10. If `public_reply_text` and the DM went through, `POST /{comment-id}/replies`. If the DM failed, the public reply is not posted and `reply_status` is `skipped`: "Sent you a DM!" would be false.
+11. `UPDATE sent` with both outcomes (`ok` / `failed` / `skipped`). A send that never reaches Meta (network failure on every retry) is `failed`, never left `pending`.
 
 ## Token refresh (cron `0 3 * * *`) and comment poll (cron `*/5 * * * *`)
 
@@ -105,7 +105,7 @@ Mounted at `/a/:secret`. The unguessable URL is a layer, not the auth.
 
 Keyword save error (exact): `Keywords under 3 characters match inside other words — 'AI' would fire on 'again' and 'email'.`
 
-DM text: live character count vs 1,000; server rejects above that.
+DM text: `maxlength="1000"` and a static hint (no client JS runs under the CSP); the server rejects above that and says how long the text was. Line breaks count as one character on both sides, though browsers submit them as CRLF.
 
 ## Selftest
 

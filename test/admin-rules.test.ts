@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { KEYWORD_TOO_SHORT_MESSAGE } from '../src/match.ts';
 import { meta } from './support/meta.ts';
-import { ACCESS_TOKEN, IG_USER, NOW, accountRow, ruleRows, seedAccount, seedRule } from './support/seed.ts';
-import { adminPath, signedInAdmin } from './support/worker.ts';
+import { ACCESS_TOKEN, IG_USER, NOW, accountRow, ruleRows, seedAccount, seedRule, sentRows } from './support/seed.ts';
+import { adminPath, commentPayload, postWebhook, signedInAdmin } from './support/worker.ts';
 
 /** The escaping hono/html applies, so expectations can name what the page must contain. */
 function escaped(s: string): string {
@@ -110,6 +110,25 @@ describe('creating a rule from the admin form', () => {
     const res = await admin.submit(adminPath('/rules'), { ...validRule, dm_text: 'x'.repeat(1000) });
     expect(res.status).toBe(302);
   });
+
+  it('limits DM text in the browser with maxlength and a plain hint, and says how long a rejected one was', async () => {
+    const admin = await adminWithAccount();
+    const form = await admin.get(adminPath('/rules/new'));
+    expect(form.text).toMatch(/<textarea id="dm_text" name="dm_text" required maxlength="1000">/);
+    expect(form.text).toContain('Up to 1,000 characters.');
+    const res = await admin.submit(adminPath('/rules'), { ...validRule, dm_text: 'x'.repeat(1234) });
+    expect(res.status).toBe(400);
+    expect(res.text).toContain('The private message must be 1,000 characters or fewer. This one is 1,234.');
+  });
+
+  it('counts a line break as one character, as maxlength does, though the browser sends CRLF', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const lines = Array.from({ length: 11 }, () => 'x'.repeat(90));
+    const res = await admin.submit(adminPath('/rules'), { ...validRule, dm_text: lines.join('\r\n') });
+    expect(res.status).toBe(302);
+    expect(await ruleRows()).toMatchObject([{ dm_text: lines.join('\n') }]);
+  });
 });
 
 describe('editing, pausing and deleting rules', () => {
@@ -154,12 +173,41 @@ describe('editing, pausing and deleting rules', () => {
     expect(await ruleRows()).toEqual([expect.objectContaining({ active: 1 })]);
   });
 
-  it('deletes a rule', async () => {
+  it('deletes a rule only after a confirmation page, with no script involved', async () => {
     const admin = await adminWithAccount();
     const keep = await seedRule({ label: 'Keep' });
-    const drop = await seedRule({ label: 'Drop' });
-    await admin.submit(adminPath(`/rules/${drop}/delete`));
+    const drop = await seedRule({ label: 'Drop', keywords: ['recipe', 'menu'] });
+
+    const list = await admin.get(adminPath('/rules'));
+    expect(list.text).toContain(`<a class="btn danger" href="${adminPath(`/rules/${drop}/delete`)}">Delete</a>`);
+    expect(list.text).not.toContain(`action="${adminPath(`/rules/${drop}/delete`)}"`);
+
+    const confirm = await admin.get(adminPath(`/rules/${drop}/delete`));
+    expect(confirm.status).toBe(200);
+    expect(confirm.text).toContain('Delete this rule?');
+    expect(confirm.text).toContain('Drop');
+    expect(confirm.text).toContain('recipe, menu');
+    expect(confirm.text).toContain(`<form method="post" action="${adminPath(`/rules/${drop}/delete`)}">`);
+    expect(confirm.text).toContain(`href="${adminPath('/rules')}">Keep it</a>`);
+    expect(await ruleRows()).toHaveLength(2);
+
+    const res = await admin.submit(adminPath(`/rules/${drop}/delete`));
+    expect(res.status).toBe(302);
+    expect(res.location).toBe(adminPath('/rules'));
     expect((await ruleRows()).map((r) => r.id)).toEqual([keep]);
+  });
+
+  it('answers 404 when asked to confirm deleting a rule that does not exist', async () => {
+    const admin = await adminWithAccount();
+    expect((await admin.get(adminPath('/rules/999/delete'))).status).toBe(404);
+  });
+
+  it('refuses a delete without the CSRF token', async () => {
+    const admin = await adminWithAccount();
+    const id = await seedRule();
+    const res = await admin.post(adminPath(`/rules/${id}/delete`), {});
+    expect(res.status).toBe(403);
+    expect(await ruleRows()).toHaveLength(1);
   });
 });
 
@@ -228,6 +276,21 @@ describe('the dry-run test page', () => {
     await admin.get(adminPath('/test'));
     const page = await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'guide', media_id: '' });
     expect(page.text).toContain('No rule would match this comment.');
+  });
+
+  it('names the same rule a real comment fires when two rules match', async () => {
+    const admin = await adminWithAccount();
+    const first = await seedRule({ label: 'First rule', keywords: ['guide'] });
+    await seedRule({ label: 'Second rule', keywords: ['guide', 'pdf'] });
+
+    await postWebhook(commentPayload({ text: 'guide pdf please' }));
+    const [sent] = await sentRows();
+    expect(sent).toMatchObject({ dm_status: 'ok', rule_id: first });
+
+    await admin.get(adminPath('/test'));
+    const page = await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'guide pdf please', media_id: '' });
+    expect(page.text).toContain('This would match the rule <b>First rule</b>');
+    expect(page.text).not.toContain('Second rule');
   });
 });
 

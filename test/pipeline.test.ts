@@ -223,13 +223,15 @@ describe('when Meta or the stored token fails', () => {
     expect(row?.error).toContain(`DM: ${JSON.stringify(error)}`);
   });
 
-  it('still posts the public reply when the DM fails', async () => {
+  it('holds back the public reply when the DM fails, and records it as skipped', async () => {
     await seedAccount();
     await seedRule({ publicReply: 'Check your DMs' });
     meta.on('POST', '/:id/messages', { status: 400, json: { error: { message: 'nope' } } });
     await postWebhook(commentPayload());
-    expect(replyCalls()).toHaveLength(1);
-    expect(await sentRow('17900000000000001')).toMatchObject({ dm_status: 'failed', reply_status: 'ok' });
+    expect(replyCalls()).toEqual([]);
+    const row = await sentRow('17900000000000001');
+    expect(row).toMatchObject({ dm_status: 'failed', reply_status: 'skipped' });
+    expect(row?.error).toBe('DM: {"error":{"message":"nope"}}');
   });
 
   it('records a failed public reply alongside a successful DM', async () => {
@@ -244,11 +246,11 @@ describe('when Meta or the stored token fails', () => {
 
   it('records a token that no longer decrypts as failed and calls Meta for nothing', async () => {
     await seedAccount({ encryptionKey: btoa(String.fromCharCode(...new Uint8Array(32).fill(9))) });
-    await seedRule();
+    await seedRule({ publicReply: 'Check your DMs' });
     await postWebhook(commentPayload());
     expect(meta.calls).toEqual([]);
     const row = await sentRow('17900000000000001');
-    expect(row).toMatchObject({ dm_status: 'failed' });
+    expect(row).toMatchObject({ dm_status: 'failed', reply_status: 'skipped' });
     expect(row?.error).toMatch(/^could not decrypt access token/);
   });
 });
