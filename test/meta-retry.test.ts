@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { meta, type MetaReply } from './support/meta.ts';
-import { FROZEN_NOW_MS, seedAccount, seedRule, sentRow } from './support/seed.ts';
-import { commentPayload, postWebhook } from './support/worker.ts';
+import { FAKE_EXPIRES_IN, FAKE_ME, meta, type MetaReply } from './support/meta.ts';
+import { DAY, FROZEN_NOW_MS, NOW, accountRow, seedAccount, seedRule, sentRow, storedToken, systemValue } from './support/seed.ts';
+import { commentPayload, postWebhook, request, runScheduled } from './support/worker.ts';
 
 // Backoff sleeps up to two real seconds per call, so setTimeout is faked here
 // too. vi.mock can't stub the sleep instead: the pool loads the Worker's
@@ -82,5 +82,43 @@ describe('Meta retry policy', () => {
     const row = await deliverMatchingComment();
     expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(3);
     expect(row).toMatchObject({ dm_status: 'failed' });
+  });
+});
+
+describe('when Instagram cannot be reached at all', () => {
+  it('still refreshes the other accounts and records the daily run when one refresh never gets an answer', async () => {
+    await seedAccount({ igUserId: '17841400000000001', token: 'token-unreachable', expiresAt: NOW + 3 * DAY, lastRefreshedAt: NOW - 57 * DAY });
+    await seedAccount({ igUserId: '17841400000000002', token: 'token-fine', expiresAt: NOW + 5 * DAY, lastRefreshedAt: NOW - 55 * DAY });
+    meta.on('GET', '/refresh_access_token', (call) =>
+      call.query.access_token === 'token-unreachable'
+        ? { networkError: true }
+        : { json: { access_token: 'refreshed-token', token_type: 'bearer', expires_in: FAKE_EXPIRES_IN } },
+    );
+
+    await withBackoffSkipped(runScheduled('0 3 * * *'));
+
+    expect(meta.callsTo('GET', '/refresh_access_token').map((c) => c.query.access_token)).toEqual([
+      'token-unreachable',
+      'token-unreachable',
+      'token-unreachable',
+      'token-fine',
+    ]);
+    expect(await storedToken('17841400000000002')).toBe('refreshed-token');
+    expect(await accountRow('17841400000000001')).toMatchObject({ needs_reconnect: 1, token_expires_at: NOW + 3 * DAY });
+    // The skipped backoff moves the fake clock on by a second or two.
+    expect(Number(await systemValue('last_cron_ok_at'))).toBeGreaterThanOrEqual(NOW);
+  });
+
+  it('reports a saved account as connected when only the comment subscription never gets an answer', async () => {
+    meta.on('POST', '/:id/subscribed_apps', { networkError: true });
+    const start = await request('/connect/start');
+    const state = new URL(start.location!).searchParams.get('state')!;
+
+    const res = await withBackoffSkipped(request(`/connect/callback?code=c&state=${encodeURIComponent(state)}`));
+
+    expect(res.status).toBe(200);
+    expect(res.text).toContain(`Connected @${FAKE_ME.username}`);
+    expect(res.text).toContain('Comment notifications may not be on yet.');
+    expect(await accountRow(FAKE_ME.user_id)).toMatchObject({ username: FAKE_ME.username, active: 1 });
   });
 });
