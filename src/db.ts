@@ -1,4 +1,4 @@
-import type { Account, Rule, Sent, WebhookEvent } from './types.ts';
+import type { Account, MatchMode, Rule, Sent, WebhookEvent } from './types.ts';
 
 export async function systemGet(db: D1Database, key: string): Promise<string | null> {
   const row = await db.prepare('SELECT value FROM system WHERE key = ?').bind(key).first<{ value: string | null }>();
@@ -162,11 +162,15 @@ export async function accountsNeedingRefresh(db: D1Database, expiresBefore: numb
   return results ?? [];
 }
 
+// Every reader selects the same columns, so a migration that adds one to
+// `rules` is a one-line change here rather than four that can drift apart.
+const RULE_COLUMNS =
+  'id, ig_user_id, label, keywords, match_mode, media_id, dm_text, public_reply_text, active, created_at';
+
 export async function listActiveRules(db: D1Database, igUserId: string): Promise<Rule[]> {
   const { results } = await db
     .prepare(
-      `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at
-       FROM rules WHERE ig_user_id = ? AND active = 1 ORDER BY id ASC`,
+      `SELECT ${RULE_COLUMNS} FROM rules WHERE ig_user_id = ? AND active = 1 ORDER BY id ASC`,
     )
     .bind(igUserId)
     .all<Rule>();
@@ -177,8 +181,7 @@ export async function listRules(db: D1Database, igUserId?: string): Promise<Rule
   if (igUserId) {
     const { results } = await db
       .prepare(
-        `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at
-         FROM rules WHERE ig_user_id = ? ORDER BY id DESC`,
+        `SELECT ${RULE_COLUMNS} FROM rules WHERE ig_user_id = ? ORDER BY id DESC`,
       )
       .bind(igUserId)
       .all<Rule>();
@@ -186,8 +189,7 @@ export async function listRules(db: D1Database, igUserId?: string): Promise<Rule
   }
   const { results } = await db
     .prepare(
-      `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at
-       FROM rules ORDER BY id DESC`,
+      `SELECT ${RULE_COLUMNS} FROM rules ORDER BY id DESC`,
     )
     .all<Rule>();
   return results ?? [];
@@ -196,8 +198,7 @@ export async function listRules(db: D1Database, igUserId?: string): Promise<Rule
 export async function getRule(db: D1Database, id: number): Promise<Rule | null> {
   return await db
     .prepare(
-      `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at
-       FROM rules WHERE id = ?`,
+      `SELECT ${RULE_COLUMNS} FROM rules WHERE id = ?`,
     )
     .bind(id)
     .first<Rule>();
@@ -209,6 +210,7 @@ export async function insertRule(
     ig_user_id: string;
     label: string;
     keywords: string;
+    match_mode: MatchMode;
     media_id: string | null;
     dm_text: string;
     public_reply_text: string | null;
@@ -217,10 +219,19 @@ export async function insertRule(
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO rules (ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+      `INSERT INTO rules (ig_user_id, label, keywords, match_mode, media_id, dm_text, public_reply_text, active, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
     )
-    .bind(row.ig_user_id, row.label, row.keywords, row.media_id, row.dm_text, row.public_reply_text, row.created_at)
+    .bind(
+      row.ig_user_id,
+      row.label,
+      row.keywords,
+      row.match_mode,
+      row.media_id,
+      row.dm_text,
+      row.public_reply_text,
+      row.created_at,
+    )
     .run();
 }
 
@@ -231,6 +242,7 @@ export async function updateRule(
     ig_user_id: string;
     label: string;
     keywords: string;
+    match_mode: MatchMode;
     media_id: string | null;
     dm_text: string;
     public_reply_text: string | null;
@@ -239,10 +251,10 @@ export async function updateRule(
   await db
     .prepare(
       `UPDATE rules
-       SET ig_user_id = ?, label = ?, keywords = ?, media_id = ?, dm_text = ?, public_reply_text = ?
+       SET ig_user_id = ?, label = ?, keywords = ?, match_mode = ?, media_id = ?, dm_text = ?, public_reply_text = ?
        WHERE id = ?`,
     )
-    .bind(row.ig_user_id, row.label, row.keywords, row.media_id, row.dm_text, row.public_reply_text, id)
+    .bind(row.ig_user_id, row.label, row.keywords, row.match_mode, row.media_id, row.dm_text, row.public_reply_text, id)
     .run();
 }
 

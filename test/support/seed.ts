@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { decryptAesGcm, encryptAesGcm } from '../../src/crypto.ts';
 import { insertRule, setAccountActive, toggleRule, upsertAccount } from '../../src/db.ts';
-import type { Account, Rule, Sent } from '../../src/types.ts';
+import type { Account, MatchMode, Rule, Sent } from '../../src/types.ts';
 
 export const FROZEN_NOW_MS = Date.UTC(2026, 9, 1, 12, 0, 0);
 export const NOW = Math.floor(FROZEN_NOW_MS / 1000);
@@ -45,6 +45,7 @@ export async function seedRule(
     igUserId?: string;
     label?: string;
     keywords?: string[];
+    matchMode?: MatchMode;
     mediaId?: string | null;
     dmText?: string;
     publicReply?: string | null;
@@ -55,6 +56,7 @@ export async function seedRule(
     ig_user_id: opts.igUserId ?? IG_USER,
     label: opts.label ?? 'Free guide',
     keywords: JSON.stringify(opts.keywords ?? ['guide']),
+    match_mode: opts.matchMode ?? 'word',
     media_id: opts.mediaId ?? null,
     dm_text: opts.dmText ?? 'Here is your guide: https://example.com/guide',
     public_reply_text: opts.publicReply ?? null,

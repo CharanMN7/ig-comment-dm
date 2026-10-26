@@ -13,6 +13,7 @@ const validRule = {
   ig_user_id: IG_USER,
   label: 'Free guide',
   keywords: 'guide\nfreebie',
+  match_mode: 'word',
   media_id: '',
   dm_text: 'Here it is: https://example.com/guide',
   public_reply_text: '',
@@ -91,6 +92,10 @@ describe('creating a rule from the admin form', () => {
     ['no name', { label: ' ' }, 'Give this rule a name.'],
     ['no keywords', { keywords: '\n \n' }, 'Add at least one keyword, one per line.'],
     ['a keyword under 3 characters', { keywords: 'guide\nAI' }, KEYWORD_TOO_SHORT_MESSAGE],
+    ['a keyword under 3 characters once punctuation goes', { keywords: 'guide\nAI!!' }, KEYWORD_TOO_SHORT_MESSAGE],
+    ['a keyword under 3 characters in contains mode', { keywords: 'launch\nAI', match_mode: 'contains' }, KEYWORD_TOO_SHORT_MESSAGE],
+    ['a keyword with no letters or numbers', { keywords: 'guide\n🔥🔥🔥' }, '“🔥🔥🔥” has no letters or numbers.'],
+    ['an unknown match mode', { match_mode: 'regex' }, 'Choose how to look for keywords'],
     ['no DM text', { dm_text: '   ' }, 'Write the private message to send.'],
     ['DM text over 1,000 characters', { dm_text: 'x'.repeat(1001) }, 'The private message must be 1,000 characters or fewer.'],
     ['a post link instead of an id', { media_id: 'https://www.instagram.com/reel/abc/' }, 'That looks like a link, not a post ID.'],
@@ -128,6 +133,52 @@ describe('creating a rule from the admin form', () => {
     const res = await admin.submit(adminPath('/rules'), { ...validRule, dm_text: lines.join('\r\n') });
     expect(res.status).toBe(302);
     expect(await ruleRows()).toMatchObject([{ dm_text: lines.join('\n') }]);
+  });
+});
+
+describe('choosing how keywords match', () => {
+  const checked = (page: string, mode: string) =>
+    new RegExp(`name="match_mode" value="${mode}"\\s+checked`).test(page);
+
+  it('offers whole words first, already chosen, on a new rule', async () => {
+    const admin = await adminWithAccount();
+    const page = (await admin.get(adminPath('/rules/new'))).text;
+    expect(checked(page, 'word')).toBe(true);
+    expect(checked(page, 'contains')).toBe(false);
+    expect(page).toContain('Contains also catches #launch2026, but “art” would match “start”.');
+  });
+
+  it('saves contains mode, shows it chosen when editing, and saves a switch back', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    await admin.submit(adminPath('/rules'), { ...validRule, keywords: 'launch', match_mode: 'contains' });
+    expect(await ruleRows()).toMatchObject([{ keywords: '["launch"]', match_mode: 'contains' }]);
+
+    const list = (await admin.get(adminPath('/rules'))).text;
+    expect(list).toContain('Anywhere in the comment');
+
+    const form = (await admin.get(adminPath('/rules/1/edit'))).text;
+    expect(checked(form, 'contains')).toBe(true);
+    expect(checked(form, 'word')).toBe(false);
+
+    await admin.submit(adminPath('/rules/1'), { ...validRule, keywords: 'launch', match_mode: 'word' });
+    expect(await ruleRows()).toMatchObject([{ match_mode: 'word' }]);
+  });
+
+  it('treats a form with no choice as whole words, as every older rule is', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const { match_mode: _, ...noMode } = validRule;
+    expect((await admin.submit(adminPath('/rules'), noMode)).status).toBe(302);
+    expect(await ruleRows()).toMatchObject([{ match_mode: 'word' }]);
+  });
+
+  it('keeps the chosen mode when the form comes back with an error', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const res = await admin.submit(adminPath('/rules'), { ...validRule, label: '', match_mode: 'contains' });
+    expect(res.status).toBe(400);
+    expect(checked(res.text, 'contains')).toBe(true);
   });
 });
 
@@ -276,6 +327,27 @@ describe('the dry-run test page', () => {
     await admin.get(adminPath('/test'));
     const page = await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'guide', media_id: '' });
     expect(page.text).toContain('No rule would match this comment.');
+  });
+
+  it('shows the keyword it found and how the rule looks for it', async () => {
+    const admin = await adminWithAccount();
+    await seedRule({ label: 'Launch', keywords: ['guide', 'Launch'], matchMode: 'contains' });
+    await admin.get(adminPath('/test'));
+    const page = (await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'So ready for #LAUNCH2026!', media_id: '' })).text;
+    expect(page).toContain('This would match the rule <b>Launch</b>');
+    expect(page).toContain('<th>Keyword found</th><td>Launch</td>');
+    expect(page).toContain('<th>Matching</th><td>Anywhere in the comment</td>');
+    expect(page).toContain('<td>so ready for launch2026</td>');
+  });
+
+  it('says a whole-word rule would not fire inside a hashtag', async () => {
+    const admin = await adminWithAccount();
+    await seedRule({ label: 'Launch', keywords: ['launch'] });
+    await admin.get(adminPath('/test'));
+    const page = (await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: '#launch2026', media_id: '' })).text;
+    expect(page).toContain('No rule would match this comment.');
+    expect(page).toContain('<td>launch2026</td>');
+    expect(page).toContain('<b>Whole words only</b> skip keywords inside longer words and hashtags');
   });
 
   it('names the same rule a real comment fires when two rules match', async () => {

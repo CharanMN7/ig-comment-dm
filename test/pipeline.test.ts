@@ -190,6 +190,24 @@ describe('duplicate delivery', () => {
   });
 });
 
+describe('match modes', () => {
+  it('DMs a hashtag that contains the keyword when the rule matches anywhere', async () => {
+    await seedAccount();
+    const ruleId = await seedRule({ keywords: ['launch'], matchMode: 'contains', dmText: 'launch link' });
+    await postWebhook(commentPayload({ text: 'So ready for #launch2026 🚀' }));
+    expect(dmCalls()).toEqual([expect.objectContaining({ body: expect.objectContaining({ message: { text: 'launch link' } }) })]);
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'ok', rule_id: ruleId })]);
+  });
+
+  it('skips the same comment when the rule matches whole words only', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['launch'], matchMode: 'word' });
+    await postWebhook(commentPayload({ text: 'So ready for #launch2026 🚀' }));
+    expect(meta.calls).toEqual([]);
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'skipped', error: 'no matching rule' })]);
+  });
+});
+
 describe('media-scoped rules', () => {
   it('prefers a rule scoped to the post over an older all-posts rule', async () => {
     await seedAccount();

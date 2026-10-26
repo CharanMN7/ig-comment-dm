@@ -78,6 +78,17 @@ describe('the 5-minute comment poll', () => {
     expect(await systemValue('last_poll_ok_at')).toBe(String(NOW));
   });
 
+  it('matches each rule the way it is set to, as the webhook does', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['launch'], matchMode: 'contains' });
+    await seedRule({ keywords: ['guide'], matchMode: 'word' });
+    meta.on('GET', '/me/media', { json: { data: [{ id: 'm1' }] } });
+    meta.on('GET', '/:id/comments', commentsByMedia({ m1: [comment('c-tag', '#launch2026'), comment('c-plural', 'guides?')] }));
+    await runScheduled(POLL);
+    expect(dmTargets()).toEqual(['c-tag']);
+    expect((await sentRows()).map((r) => r.comment_id)).toEqual(['c-tag']);
+  });
+
   it('does not DM a comment the webhook already handled', async () => {
     await seedAccount();
     await seedRule();

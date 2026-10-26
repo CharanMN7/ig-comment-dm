@@ -28,6 +28,14 @@ input[type=text], input[type=password], textarea, select {
   width: 100%; padding: 0.4rem 0.5rem; font: inherit; border: 1px solid #ccc; background: #fff;
 }
 textarea { min-height: 6rem; }
+fieldset { min-width: 0; margin: 1.25rem 0 0; padding: 0.3rem 0.85rem 0.9rem; border: 1px solid #e4e4e0; background: #fff; }
+legend { font-weight: 650; padding: 0 0.3rem; }
+fieldset.choices { margin: 0.85rem 0 0; padding: 0; border: 0; background: none; }
+fieldset.choices legend { padding: 0; margin-bottom: 0.15rem; }
+label.choice { display: flex; gap: 0.6rem; align-items: flex-start; min-height: 44px; margin: 0; padding: 0.5rem 0; font-weight: 400; cursor: pointer; }
+label.choice input { flex: none; width: 1.2rem; height: 1.2rem; margin: 0.1rem 0 0; }
+label.choice .muted { display: block; }
+.rule-form input[type=text], .rule-form select, .rule-form button { min-height: 44px; }
 .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-top: 0.75rem; }
 button, .btn {
   background: #111; color: #fff; border: 0; padding: 0.42rem 0.8rem; font: inherit; cursor: pointer;

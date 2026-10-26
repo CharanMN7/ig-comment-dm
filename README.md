@@ -199,12 +199,13 @@ You can connect several Instagram accounts to one deployment. Each one needs to 
 | Field | What to put |
 |---|---|
 | **Name** | For you only. `Free guide`. |
-| **Keywords** | One per line. **At least 3 characters** — `AI` would fire on "again" and "email". |
+| **Keywords** | One per line. **At least 3 characters**, counted after emoji and punctuation are dropped — `AI` would fire on "again" and "email". |
+| **How to look for them** | **Whole words only** (the default): `guide` matches "Guide please!" but not "guides". **Anywhere in the comment**: also catches `#launch2026` and "guides", but `art` would match "start". |
 | **The DM** | Under 1,000 characters. Put everything they need here. |
 | **Public reply** | Optional. Shows under the comment, only once the DM has gone through. |
 | **Which posts** | All posts and reels, or pick one from the dropdown. |
 
-Matching ignores case, emoji, and punctuation, and matches whole words. A rule scoped to a specific post beats a rule that applies to everything.
+Matching ignores case, emoji, punctuation, and accents on Latin letters, on both the keyword and the comment. A whole-words rule needs the keyword to stand on its own; switch a rule to **Anywhere in the comment** for hashtag and brand campaigns. A rule scoped to a specific post beats a rule that applies to everything.
 
 > [!TIP]
 > **Put everything in that one message.** Instagram allows exactly one private reply per comment, ever. You do not get a follow-up unless they reply to you first.
@@ -261,6 +262,7 @@ Instagram's rules, not ours. Each of these is enforced by Meta and cost someone 
 - [x] Comment → one official Instagram private reply, end to end
 - [x] Optional public reply under the comment
 - [x] Keyword rules with case, emoji, and punctuation normalisation, matched on word boundaries
+- [x] Per-rule choice of whole-word or anywhere-in-the-comment matching, for hashtag campaigns
 - [x] Post-scoped rules take priority over account-wide rules
 - [x] Reel and post picker, so nobody has to hunt for a Graph media id
 - [x] Self-comment guard — never DMs the account owner
@@ -337,7 +339,6 @@ Everything below is [an open issue](https://github.com/CharanMN7/ig-comment-dm/i
 |:--|---|---|
 | [#19](https://github.com/CharanMN7/ig-comment-dm/issues/19) | **Non-Latin script matching** | Word-boundary matching silently drops Cyrillic, Arabic, and CJK today |
 | [#20](https://github.com/CharanMN7/ig-comment-dm/issues/20) | **Latin diacritic folding** | `PREÇO` should match a `preco` keyword |
-| [#21](https://github.com/CharanMN7/ig-comment-dm/issues/21) | **Whole-word vs. partial toggle** | Hashtag campaigns need substring matching |
 
 </details>
 

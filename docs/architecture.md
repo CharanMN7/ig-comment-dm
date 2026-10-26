@@ -75,7 +75,7 @@ Unlisted, session-gated, used by `scripts/selftest.ts`:
 4. Atomic claim: `INSERT INTO sent … ON CONFLICT DO NOTHING`. `changes === 0` → already handled, stop.
 5. Active rules, oldest first (`chooseRule` in `src/process.ts`). `media_id` set → that post only; `NULL` → all posts. Media-scoped rules win. First match wins.
 6. Normalize comment: lowercase, strip emoji, strip punctuation, collapse whitespace.
-7. Word-boundary regex per keyword (metacharacters escaped). Keywords under 3 characters are rejected at **save** time in admin, not here.
+7. Each rule's `match_mode`: `word` (default) is a Unicode word-boundary regex per keyword (metacharacters escaped); `contains` is a substring test on the normalised text. Both normalise the keyword the same way, once per isolate. Keywords under 3 characters after normalising, or with no letter or digit, are rejected at **save** time in admin, not here.
 8. Decrypt token.
 9. `POST https://graph.instagram.com/v23.0/{ig_user_id}/messages` with `{ recipient: { comment_id }, message: { text } }`.
 10. If `public_reply_text` and the DM went through, `POST /{comment-id}/replies`. If the DM failed, the public reply is not posted and `reply_status` is `skipped`: "Sent you a DM!" would be false.
