@@ -5,7 +5,7 @@
 <p>
   <a href="#quick-start"><img src="https://img.shields.io/badge/deploy_in-6_minutes-FD1D1D?style=for-the-badge&labelColor=1a1a1a" alt="Deploy in 6 minutes" /></a>
   <a href="#roadmap"><img src="https://img.shields.io/badge/roadmap-30%2B_planned-833AB4?style=for-the-badge&labelColor=1a1a1a" alt="Roadmap" /></a>
-  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-FCB045?style=for-the-badge&labelColor=1a1a1a" alt="PRs welcome" /></a>
+  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-claim_an_issue_first-FCB045?style=for-the-badge&labelColor=1a1a1a" alt="PRs: claim an issue first" /></a>
 </p>
 
 <p>
@@ -396,7 +396,7 @@ Everything below is [an open issue](https://github.com/CharanMN7/ig-comment-dm/i
 
 ## Contributing
 
-Issues and pull requests are welcome. [`good first issue`](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue) items are self-contained and describe the approach.
+Issues and pull requests are welcome. Claim an issue and wait to be assigned before you open a PR; unassigned PRs are closed automatically ([why](CONTRIBUTING.md#working-on-an-issue)). [`good first issue`](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue) items are self-contained and describe the approach.
 
 ```bash
 npm install
