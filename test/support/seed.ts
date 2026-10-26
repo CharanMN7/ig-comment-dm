@@ -66,6 +66,8 @@ export async function seedRule(
   return id;
 }
 
+// Compare rows with toMatchObject, not toEqual: a migration that adds a column
+// should not have to touch tests that never look at it.
 export async function sentRows(): Promise<Sent[]> {
   const { results } = await env.DB.prepare('SELECT * FROM sent ORDER BY comment_id').all<Sent>();
   return results;

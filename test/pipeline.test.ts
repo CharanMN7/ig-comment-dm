@@ -33,7 +33,7 @@ describe('a comment that matches an active rule', () => {
         body: { message: 'Sent you a DM!' },
       }),
     ]);
-    expect(await sentRow('17900000000000042')).toEqual({
+    expect(await sentRow('17900000000000042')).toMatchObject({
       comment_id: '17900000000000042',
       ig_user_id: IG_USER,
       rule_id: ruleId,
@@ -108,7 +108,7 @@ describe('comments that must not trigger a DM', () => {
     await seedRule();
     await postWebhook(commentPayload({ time: NOW - 7 * DAY - 1 }));
     expect(meta.calls).toEqual([]);
-    expect(await sentRows()).toEqual([
+    expect(await sentRows()).toMatchObject([
       expect.objectContaining({ dm_status: 'skipped', error: 'comment older than 7 days — Instagram will not accept a private reply' }),
     ]);
   });

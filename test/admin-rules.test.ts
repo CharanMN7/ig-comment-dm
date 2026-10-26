@@ -38,7 +38,7 @@ describe('creating a rule from the admin form', () => {
 
     expect(res.status).toBe(302);
     expect(res.location).toBe(adminPath('/rules'));
-    expect(await ruleRows()).toEqual([
+    expect(await ruleRows()).toMatchObject([
       {
         id: 1,
         ig_user_id: IG_USER,
@@ -123,7 +123,7 @@ describe('editing, pausing and deleting rules', () => {
 
     const res = await admin.submit(adminPath(`/rules/${id}`), { ...validRule, label: 'New', keywords: 'recipe', media_id: '18000000000000777' });
     expect(res.status).toBe(302);
-    expect(await ruleRows()).toEqual([
+    expect(await ruleRows()).toMatchObject([
       expect.objectContaining({ id, label: 'New', keywords: '["recipe"]', media_id: '18000000000000777', public_reply_text: null }),
     ]);
   });
