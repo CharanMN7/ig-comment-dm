@@ -201,11 +201,14 @@ You can connect several Instagram accounts to one deployment. Each one needs to 
 | **Name** | For you only. `Free guide`. |
 | **Keywords** | One per line. **At least 3 characters**, counted after emoji and punctuation are dropped — `AI` would fire on "again" and "email". |
 | **How to look for them** | **Whole words only** (the default): `guide` matches "Guide please!" but not "guides". **Anywhere in the comment**: also catches `#launch2026` and "guides", but `art` would match "start". |
+| **Exclusions** | Optional, one per line. A comment containing any of them is skipped by this rule even when a keyword matches: `how much`, `already have it`, `not interested`. |
 | **The DM** | Under 1,000 characters. Put everything they need here. |
 | **Public reply** | Optional. Shows under the comment, only once the DM has gone through. |
 | **Which posts** | All posts and reels, or pick one from the dropdown. |
 
 Matching ignores case, emoji, punctuation, and accents on Latin letters, on both the keyword and the comment. A whole-words rule needs the keyword to stand on its own; switch a rule to **Anywhere in the comment** for hashtag and brand campaigns. A rule scoped to a specific post beats a rule that applies to everything.
+
+Exclusions are found the same way as the rule's keywords, and they belong to that rule alone. When a comment trips one, matching carries on to the next rule, so another rule without that exclusion can still reply. If no rule replies because of an exclusion, Home lists the comment as `Skipped: matched exclusion “how much”`, and the five-minute check leaves it alone from then on.
 
 > [!TIP]
 > **Put everything in that one message.** Instagram allows exactly one private reply per comment, ever. You do not get a follow-up unless they reply to you first.
@@ -263,6 +266,7 @@ Instagram's rules, not ours. Each of these is enforced by Meta and cost someone 
 - [x] Optional public reply under the comment
 - [x] Keyword rules with case, emoji, and punctuation normalisation, matched on word boundaries
 - [x] Per-rule choice of whole-word or anywhere-in-the-comment matching, for hashtag campaigns
+- [x] Per-rule exclusions, so "how much is the guide?" does not burn the one private reply
 - [x] Post-scoped rules take priority over account-wide rules
 - [x] Reel and post picker, so nobody has to hunt for a Graph media id
 - [x] Self-comment guard — never DMs the account owner
@@ -326,7 +330,6 @@ Everything below is [an open issue](https://github.com/CharanMN7/ig-comment-dm/i
 | [#34](https://github.com/CharanMN7/ig-comment-dm/issues/34) | **Ad-comment to organic-post mapping** | Boosted posts report a different media id and silently miss |
 | [#35](https://github.com/CharanMN7/ig-comment-dm/issues/35) | **Per-account rate limiting** | Stay under Meta's 750 private replies per hour |
 | [#36](https://github.com/CharanMN7/ig-comment-dm/issues/36) | **Send every matching rule's public reply** | Today the second matching rule is silently dropped |
-| [#22](https://github.com/CharanMN7/ig-comment-dm/issues/22) | **Negative keywords** | Skip "not interested", "how much is the guide" |
 | [#37](https://github.com/CharanMN7/ig-comment-dm/issues/37) | **Bulk rule import from CSV** | Set up thirty posts without thirty forms |
 | [#38](https://github.com/CharanMN7/ig-comment-dm/issues/38) | **Rule templates** | Working starting points per niche |
 

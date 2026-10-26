@@ -10,7 +10,7 @@ import {
   updateSent,
 } from './db.ts';
 import { isSelfComment } from './guard.ts';
-import { type RuleMatch, matchComment } from './match.ts';
+import { type MatchVerdict, exclusionSkipReason, matchComment } from './match.ts';
 import { type MetaCallResult, sendPrivateReply, sendPublicReply } from './meta.ts';
 import type { Env } from './types.ts';
 
@@ -107,7 +107,7 @@ export async function chooseRule(
   igUserId: string,
   text: string,
   mediaId: string | undefined,
-): Promise<RuleMatch | null> {
+): Promise<MatchVerdict> {
   return matchComment(await listActiveRules(db, igUserId), text, mediaId);
 }
 
@@ -174,17 +174,21 @@ export async function processComment(
   });
   if (!claimed) return;
 
-  const rule = (await chooseRule(env.DB, account.ig_user_id, text, mediaId))?.rule;
-  if (!rule) {
+  const { match, excluded } = await chooseRule(env.DB, account.ig_user_id, text, mediaId);
+  if (!match) {
+    // When several rules were excluded, the first in matching order is the one
+    // that would have fired, so that is the rule and the reason Home shows.
+    const passedOver = excluded[0];
     await updateSent(env.DB, commentId, {
-      rule_id: null,
+      rule_id: passedOver?.rule.id ?? null,
       dm_status: 'skipped',
       reply_status: null,
-      error: 'no matching rule',
+      error: passedOver ? exclusionSkipReason(passedOver) : 'no matching rule',
       sent_at: nowSeconds(),
     });
     return;
   }
+  const { rule } = match;
 
   const publicText = rule.public_reply_text?.trim();
 

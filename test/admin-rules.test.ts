@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { KEYWORD_TOO_SHORT_MESSAGE } from '../src/match.ts';
+import { EXCLUSION_TOO_SHORT_MESSAGE, KEYWORD_TOO_SHORT_MESSAGE } from '../src/match.ts';
 import { meta } from './support/meta.ts';
 import { ACCESS_TOKEN, IG_USER, NOW, accountRow, ruleRows, seedAccount, seedRule, sentRows } from './support/seed.ts';
 import { adminPath, commentPayload, postWebhook, signedInAdmin } from './support/worker.ts';
@@ -14,6 +14,7 @@ const validRule = {
   label: 'Free guide',
   keywords: 'guide\nfreebie',
   match_mode: 'word',
+  exclude_keywords: '',
   media_id: '',
   dm_text: 'Here it is: https://example.com/guide',
   public_reply_text: '',
@@ -96,6 +97,13 @@ describe('creating a rule from the admin form', () => {
     ['a keyword under 3 characters in contains mode', { keywords: 'launch\nAI', match_mode: 'contains' }, KEYWORD_TOO_SHORT_MESSAGE],
     ['a keyword with no letters or numbers', { keywords: 'guide\n🔥🔥🔥' }, '“🔥🔥🔥” has no letters or numbers.'],
     ['an unknown match mode', { match_mode: 'regex' }, 'Choose how to look for keywords'],
+    ['an exclusion under 3 characters', { exclude_keywords: 'how much\nno' }, EXCLUSION_TOO_SHORT_MESSAGE],
+    ['an exclusion with no letters or numbers', { exclude_keywords: '👎👎👎' }, '“👎👎👎” has no letters or numbers.'],
+    [
+      'an exclusion inside a keyword',
+      { keywords: 'free guide\npdf', exclude_keywords: 'guide' },
+      'The keyword “free guide” could never get a message, because it contains the exclusion “guide”.',
+    ],
     ['no DM text', { dm_text: '   ' }, 'Write the private message to send.'],
     ['DM text over 1,000 characters', { dm_text: 'x'.repeat(1001) }, 'The private message must be 1,000 characters or fewer.'],
     ['a post link instead of an id', { media_id: 'https://www.instagram.com/reel/abc/' }, 'That looks like a link, not a post ID.'],
@@ -179,6 +187,46 @@ describe('choosing how keywords match', () => {
     const res = await admin.submit(adminPath('/rules'), { ...validRule, label: '', match_mode: 'contains' });
     expect(res.status).toBe(400);
     expect(checked(res.text, 'contains')).toBe(true);
+  });
+});
+
+describe('exclusions on the rule form', () => {
+  it('saves one exclusion per line, shows them when editing and in the list, and clears them', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const res = await admin.submit(adminPath('/rules'), { ...validRule, exclude_keywords: ' how much \r\n\r\nalready have it\n' });
+    expect(res.status).toBe(302);
+    expect(await ruleRows()).toMatchObject([{ exclude_keywords: '["how much","already have it"]' }]);
+
+    expect((await admin.get(adminPath('/rules'))).text).toContain('Exclusions: how much, already have it');
+    expect((await admin.get(adminPath('/rules/1/edit'))).text).toContain('>how much\nalready have it</textarea>');
+
+    await admin.submit(adminPath('/rules/1'), { ...validRule, exclude_keywords: '  ' });
+    expect(await ruleRows()).toMatchObject([{ exclude_keywords: '[]' }]);
+  });
+
+  it('stores an empty list when the field is left out', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const { exclude_keywords: _, ...noExclusions } = validRule;
+    expect((await admin.submit(adminPath('/rules'), noExclusions)).status).toBe(302);
+    expect(await ruleRows()).toMatchObject([{ exclude_keywords: '[]' }]);
+  });
+
+  it('keeps typed exclusions when the form comes back with an error', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const res = await admin.submit(adminPath('/rules'), { ...validRule, label: '', exclude_keywords: 'how much' });
+    expect(res.status).toBe(400);
+    expect(res.text).toContain('>how much</textarea>');
+  });
+
+  it('escapes exclusions in the list and the edit form', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    await admin.submit(adminPath('/rules'), { ...validRule, exclude_keywords: '<b>price</b>' });
+    expect((await admin.get(adminPath('/rules'))).text).toContain('Exclusions: &lt;b&gt;price&lt;/b&gt;');
+    expect((await admin.get(adminPath('/rules/1/edit'))).text).toContain('>&lt;b&gt;price&lt;/b&gt;</textarea>');
   });
 });
 
@@ -348,6 +396,30 @@ describe('the dry-run test page', () => {
     expect(page).toContain('No rule would match this comment.');
     expect(page).toContain('<td>launch2026</td>');
     expect(page).toContain('<b>Whole words only</b> skip keywords inside longer words and hashtags');
+  });
+
+  it('shows which exclusion stopped a rule, and the keyword it found', async () => {
+    const admin = await adminWithAccount();
+    await seedRule({ label: 'Free guide', keywords: ['guide'], excludeKeywords: ['how much'] });
+    await admin.get(adminPath('/test'));
+    meta.clearCalls();
+    const page = (await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'How much is the guide?', media_id: '' })).text;
+    expect(page).toContain('Nothing would be sent.');
+    expect(page).toContain('Skipped because of an exclusion');
+    expect(page).toContain('<tr><td>Free guide</td><td>guide</td><td>how much</td></tr>');
+    expect(page).not.toContain('This would match the rule');
+    expect(meta.calls).toEqual([]);
+  });
+
+  it('shows the rule that replies instead when another rule excluded the comment', async () => {
+    const admin = await adminWithAccount();
+    await seedRule({ label: 'Strict guide', keywords: ['guide'], excludeKeywords: ['how much'] });
+    await seedRule({ label: 'Any guide', keywords: ['guide'] });
+    await admin.get(adminPath('/test'));
+    const page = (await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'how much is the guide', media_id: '' })).text;
+    expect(page).toContain('This would match the rule <b>Any guide</b>');
+    expect(page).toContain('Passed over first');
+    expect(page).toContain('<tr><td>Strict guide</td><td>guide</td><td>how much</td></tr>');
   });
 
   it('names the same rule a real comment fires when two rules match', async () => {

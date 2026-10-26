@@ -31,6 +31,15 @@ describe('the admin home page', () => {
     expect(page).toMatch(/Failures today<\/span><b>1<\/b>/);
   });
 
+  it('shows a comment skipped by an exclusion, with the rule and the exclusion that matched', async () => {
+    await seedAccount();
+    await seedRule({ label: 'Free guide', keywords: ['guide'], excludeKeywords: ['how much'] });
+    await postWebhook(commentPayload({ text: 'how much is the guide' }));
+    const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
+    expect(page).toMatch(/<td>Free guide<\/td>\s*<td>Skipped<\/td>/);
+    expect(page).toContain('Skipped: matched exclusion “how much”');
+  });
+
   it("escapes Meta's error text when it shows a failed send", async () => {
     await seedAccount();
     await seedRule();

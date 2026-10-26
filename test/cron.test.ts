@@ -89,6 +89,42 @@ describe('the 5-minute comment poll', () => {
     expect((await sentRows()).map((r) => r.comment_id)).toEqual(['c-tag']);
   });
 
+  it('records an excluded comment as skipped, exactly as the webhook would, and never revisits it', async () => {
+    await seedAccount();
+    const ruleId = await seedRule({ keywords: ['guide'], excludeKeywords: ['how much'] });
+    meta.on('GET', '/me/media', { json: { data: [{ id: 'm1' }] } });
+    meta.on(
+      'GET',
+      '/:id/comments',
+      commentsByMedia({ m1: [comment('c-price', 'how much is the guide?'), comment('c-guide', 'guide please'), comment('c-other', 'lovely')] }),
+    );
+
+    await runScheduled(POLL);
+
+    expect(dmTargets()).toEqual(['c-guide']);
+    expect(await sentRows()).toEqual([
+      expect.objectContaining({ comment_id: 'c-guide', dm_status: 'ok', rule_id: ruleId }),
+      expect.objectContaining({ comment_id: 'c-price', dm_status: 'skipped', rule_id: ruleId, error: 'Skipped: matched exclusion “how much”' }),
+    ]);
+
+    meta.clearCalls();
+    await runScheduled(POLL);
+    expect(dmTargets()).toEqual([]);
+    expect(await sentRows()).toHaveLength(2);
+  });
+
+  it('lets another rule answer a comment one rule excludes, as the webhook does', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'], mediaId: 'm1', excludeKeywords: ['how much'], dmText: 'reel guide' });
+    const fallback = await seedRule({ keywords: ['guide'], dmText: 'price list' });
+    meta.on('GET', '/:id/comments', commentsByMedia({ m1: [comment('c-price', 'how much is the guide?')] }));
+    await runScheduled(POLL);
+    expect(meta.callsTo('POST', '/:id/messages').map((c) => c.body)).toEqual([
+      { recipient: { comment_id: 'c-price' }, message: { text: 'price list' } },
+    ]);
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'ok', rule_id: fallback })]);
+  });
+
   it('does not DM a comment the webhook already handled', async () => {
     await seedAccount();
     await seedRule();
