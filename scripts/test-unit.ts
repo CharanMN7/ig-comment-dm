@@ -64,6 +64,63 @@ describe('normalizeCommentText', () => {
   });
 });
 
+describe('normalizeCommentText: stroke and bar letters', () => {
+  // NFD has nothing to split in these, so the combining-mark fold alone left
+  // them as they were. Escapes keep the two look-alike capitals apart.
+  const letters: Array<[string, string, string]> = [
+    ['\u0111', 'd', 'đ U+0111'],
+    ['\u0110', 'd', 'Đ U+0110 (Vietnamese, Croatian)'],
+    ['\u0142', 'l', 'ł U+0142'],
+    ['\u0141', 'l', 'Ł U+0141'],
+    ['\u00F8', 'o', 'ø U+00F8'],
+    ['\u00D8', 'o', 'Ø U+00D8'],
+    ['\u00DF', 'ss', 'ß U+00DF'],
+    ['\u1E9E', 'ss', 'ẞ U+1E9E'],
+    ['\u00F0', 'd', 'ð U+00F0'],
+    ['\u00D0', 'd', 'Ð U+00D0 (Icelandic eth)'],
+    ['\u00FE', 'th', 'þ U+00FE'],
+    ['\u00DE', 'th', 'Þ U+00DE'],
+  ];
+
+  for (const [letter, folded, name] of letters) {
+    it(`folds ${name} to ${folded}`, () => {
+      assert.equal(normalizeCommentText(letter), folded);
+    });
+  }
+
+  it('folds a precomposed letter whose NFD base is a stroke letter', () => {
+    // ǿ decomposes to ø plus a combining acute, so the acute only goes if ø
+    // has already become o by the time combining marks are stripped.
+    assert.equal(normalizeCommentText('\u01FF'), 'o');
+    assert.equal(normalizeCommentText('\u01FE'), 'o');
+  });
+
+  it('folds whole words in Latin-script languages', () => {
+    assert.equal(normalizeCommentText('Điện thoại'), 'dien thoai');
+    assert.equal(normalizeCommentText('Đà Nẵng, tiếng Việt'), 'da nang tieng viet');
+    assert.equal(normalizeCommentText('Smørrebrød i København'), 'smorrebrod i kobenhavn');
+    assert.equal(normalizeCommentText('ØL'), 'ol');
+    assert.equal(normalizeCommentText('Łódź'), 'lodz');
+    assert.equal(normalizeCommentText('STRAẞE Straße'), 'strasse strasse');
+    assert.equal(normalizeCommentText('Þórður'), 'thordur');
+  });
+
+  it('leaves non-Latin letters and their combining marks untouched', () => {
+    const unchanged: Array<[string, string]> = [
+      ['Cyrillic й (и plus breve)', 'й'],
+      ['Cyrillic ђ (looks like đ)', 'ђорђе'],
+      ['Devanagari nukta and virama', 'ज़रूर नमस्ते'],
+      ['Thai tone marks', 'คู่มือ ภาษาไทย'],
+      ['Japanese dakuten and handakuten', 'ガイドください パン'],
+      ['Greek tonos', 'οδηγός ελληνικά'],
+      ['Arabic harakat', 'مَرْحَبًا الدليل'],
+    ];
+    for (const [name, text] of unchanged) {
+      assert.equal(normalizeCommentText(text), text, name);
+    }
+  });
+});
+
 describe('keyword matching', () => {
   it('matches a whole word after normalize', () => {
     const n = normalizeCommentText('Please send the GUIDE!');
@@ -74,6 +131,23 @@ describe('keyword matching', () => {
     const n = normalizeCommentText('email me again');
     assert.equal(keywordMatches(n, 'AI'), false);
     assert.equal(keywordMatches(n, 'mail'), false);
+  });
+
+  it('matches across stroke and bar letters in either direction', () => {
+    const pairs: Array<[string, string]> = [
+      ['dien', 'Điện thoại mới'],
+      ['lodz', 'jadę do Łodzi, łódź'],
+      ['strasse', 'in der Straße 5'],
+      ['thing', 'ÞING'],
+    ];
+    for (const [plain, accented] of pairs) {
+      assert.equal(keywordMatches(normalizeCommentText(accented), plain), true, `${plain} in ${accented}`);
+    }
+    assert.equal(keywordMatches(normalizeCommentText('dien thoai moi'), 'điện'), true);
+    assert.equal(keywordMatches(normalizeCommentText('lodz please'), 'łódź'), true);
+    assert.equal(keywordMatches(normalizeCommentText('Straße'), 'strasse'), true);
+    assert.equal(keywordMatches(normalizeCommentText('strasse'), 'Straße'), true);
+    assert.equal(keywordMatches(normalizeCommentText('thing'), 'ÞING'), true);
   });
 
   it('escapes regex metacharacters in keywords', () => {

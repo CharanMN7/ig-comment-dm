@@ -1,8 +1,22 @@
 import type { Rule } from './types.ts';
 
+// These letters are single code points with no NFD decomposition, so stripping
+// combining marks never reaches them: `dien` would not match `điện` otherwise.
+const STROKE_LETTER_FOLD: Readonly<Record<string, string>> = {
+  'đ': 'd', 'Đ': 'D', // U+0111, U+0110
+  'ð': 'd', 'Ð': 'D', // U+00F0, U+00D0: Icelandic eth, not the Đ above
+  'ł': 'l', 'Ł': 'L',
+  'ø': 'o', 'Ø': 'O',
+  'ß': 'ss', 'ẞ': 'SS',
+  'þ': 'th', 'Þ': 'TH',
+};
+const STROKE_LETTER = new RegExp(`[${Object.keys(STROKE_LETTER_FOLD).join('')}]`, 'g');
+
 export function normalizeCommentText(text: string): string {
   return text
     .normalize('NFD')
+    // Before the mark strip, so ǿ (ø plus a combining acute) loses its acute too.
+    .replace(STROKE_LETTER, (c) => STROKE_LETTER_FOLD[c] ?? c)
     .replace(/([A-Za-z])\p{Diacritic}+/gu, '$1')
     .normalize('NFC')
     .toLowerCase()
