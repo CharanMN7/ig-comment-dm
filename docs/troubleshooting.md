@@ -27,6 +27,7 @@ and it still does not work.
 - [The admin page shows 404](#the-admin-page-shows-404)
 - [Locked out of the admin page](#locked-out-of-the-admin-page)
 - [Creating the first password returns a 500](#creating-the-first-password-returns-a-500)
+- [Errors mention "no such column" after an update](#errors-mention-no-such-column-after-an-update)
 - [The DM failed but the public reply worked](#the-dm-failed-but-the-public-reply-worked)
 - [Red banner: an account needs reconnecting](#red-banner-an-account-needs-reconnecting)
 - [Red banner: the daily check has not run](#red-banner-the-daily-check-has-not-run)
@@ -345,6 +346,18 @@ npx wrangler deploy
 **"The database tables are missing."** The migrations never ran.
 
 ```bash
+npm run db:migrate
+```
+
+---
+
+## Errors mention "no such column" after an update
+
+The new code went live without its database migrations, usually because it was
+deployed with `npx wrangler deploy` instead of `npm run deploy`. Apply them:
+
+```bash
+npm run db:migrate:list   # shows the ones that are missing
 npm run db:migrate
 ```
 
