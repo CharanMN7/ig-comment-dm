@@ -400,7 +400,7 @@ Issues and pull requests are welcome. [`good first issue`](https://github.com/Ch
 
 ```bash
 npm install
-npm test          # 30 unit tests, no network, no database
+npm test          # unit + integration tests, fully local, no network
 npm run typecheck
 npm run dev       # http://localhost:8787
 ```

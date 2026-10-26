@@ -109,7 +109,7 @@ DM text: live character count vs 1,000; server rejects above that.
 
 ## Selftest
 
-`scripts/selftest.ts` against a deployed or `wrangler dev` URL. `scripts/test-unit.ts` covers the guard, matching, and HMAC verify without a network.
+`scripts/selftest.ts` against a deployed or `wrangler dev` URL. `scripts/test-unit.ts` covers the guard, matching, and HMAC verify without a network. `test/*.test.ts` runs the real Worker in workerd against a fresh local D1 per test, with every Meta host faked (`npm run test:integration`).
 
 Live checks: handshake 200, wrong verify token 403, bad signature 401, synthetic comment creates one `sent` row, duplicate delivery still one row, self-comment creates no row, admin login page + wrong password rejected, cron writes `last_cron_ok_at`.
 

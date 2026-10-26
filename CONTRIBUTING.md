@@ -44,11 +44,23 @@ You need a real Meta app only to test Connect (OAuth) or a live DM.
 ### Verifying your change
 
 ```bash
-npm test            # unit tests — no network, no database
-npm run typecheck   # tsc --noEmit
+npm test            # both suites below, a few seconds, no network
+npm run typecheck   # tsc over src/ and test/
 ```
 
-Both must pass. CI runs exactly these two commands plus a secret scan.
+Both must pass. CI runs them, a `wrangler deploy --dry-run`, and a secret scan.
+
+`npm test` is two suites you can also run alone:
+
+- `npm run test:unit` — `scripts/test-unit.ts`, pure functions on Node's built-in runner.
+- `npm run test:integration` — `test/*.test.ts`, the real Worker running in workerd
+  with a fresh local D1 per test and every file in `migrations/` applied. Meta is
+  faked in `test/support/meta.ts`: no request leaves the machine, and tests assert
+  exactly what the Worker sent. A Meta call with no fake fails the test, so if your
+  change adds one, add a route there.
+
+You need no Meta app and no `.dev.vars` for either. If you fix a bug in the webhook,
+admin panel or cron, add an integration test that fails without your fix.
 
 There is also a live end-to-end check that drives a running Worker:
 

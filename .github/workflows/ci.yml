@@ -31,12 +31,31 @@ jobs:
         run: npm run typecheck
 
       - name: Unit tests
-        run: npm test
+        run: npm run test:unit
 
       - name: Worker builds and starts
         run: npx wrangler deploy --dry-run --outdir /tmp/worker-build
         env:
           CLOUDFLARE_API_TOKEN: ""
+
+  integration:
+    name: Integration tests
+    # A separate job so a PR shows at a glance whether the Worker still
+    # behaves end to end, independent of typecheck or unit failures.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Worker, D1 and admin panel in workerd, Meta faked
+        run: npm run test:integration
 
   secrets:
     name: Secret scan
