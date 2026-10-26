@@ -18,6 +18,7 @@ import {
   getRule,
   getSent,
   insertRule,
+  latestSignedWebhookStatus,
   listAccounts,
   listRules,
   recentSent,
@@ -56,7 +57,7 @@ export const adminRoutes = new Hono<{ Bindings: Env; Variables: Vars }>({ strict
 adminRoutes.onError((err, c) => {
   console.error(err);
   const detail = err instanceof Error ? err.message : String(err);
-  const d1 = /no such table|D1/i.test(detail);
+  const d1 = /no such table/i.test(detail);
   const key = /SESSION_SIGNING_KEY|TOKEN_ENCRYPTION_KEY|32 random bytes/i.test(detail);
   const plain = d1
     ? 'The database tables are missing. Run the D1 migration, then try again.'
@@ -293,8 +294,10 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   c.executionCtx.waitUntil(ensureCommentSubscriptions(c.env));
   const sends = await recentSent(c.env.DB, 20);
   let events: Awaited<ReturnType<typeof recentWebhookEvents>> = [];
+  let latestSigned: string | null = null;
   try {
     events = await recentWebhookEvents(c.env.DB, 8);
+    latestSigned = await latestSignedWebhookStatus(c.env.DB);
   } catch {
     events = [];
   }
@@ -306,7 +309,6 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   const lastPollN = lastPoll ? parseInt(lastPoll, 10) : NaN;
   const cronStale = !Number.isFinite(lastCronN) || now - lastCronN > CRON_STALE_SECONDS;
   const reconnect = accounts.filter((a) => a.needs_reconnect === 1 || a.token_expires_at <= now);
-  const latestEvent = events[0];
   const configProblems = findConfigProblems(c.env);
 
   const banners = [];
@@ -347,7 +349,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
       </div>
     `);
   }
-  if (latestEvent?.status === 'bad_sig') {
+  if (latestSigned === 'bad_sig') {
     banners.push(html`
       <div class="banner">
         Instagram reached this program but the signing secret did not match. Add
@@ -466,7 +468,9 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                         ? 'Reached us'
                         : e.status === 'bad_sig'
                           ? 'Wrong secret'
-                          : e.status}</td>
+                          : e.status === 'unsigned'
+                            ? 'Not signed'
+                            : e.status}</td>
                       <td class="muted">${e.error ?? e.object ?? ''}</td>
                     </tr>`,
                   )}

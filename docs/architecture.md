@@ -40,9 +40,9 @@ Follow-up DMs are out of scope. They need the person to reply first (24h window)
 - **One private reply per comment, ever.** Meta rejects the second attempt. Dedupe anyway.
 - **At-least-once delivery.** Duplicate POSTs are normal. Dedupe is `INSERT … ON CONFLICT DO NOTHING` on `sent.comment_id`; if `meta.changes` is 0, stop. Claim a `pending` row first, then `UPDATE` the outcome. No SELECT-then-INSERT.
 - **Private reply only works for comments ≤ 7 days old.** Skip older; do not call Meta.
-- **Verify every POST** against `X-Hub-Signature-256` using the **raw body text**, before `JSON.parse`. Re-serializing breaks HMAC. Accept either Facebook or Instagram app secret. 401 on mismatch; still insert a `webhook_events` row so Home is not silent.
+- **Verify every POST** against `X-Hub-Signature-256` using the **raw body text**, before `JSON.parse`. Re-serializing breaks HMAC. Accept either Facebook or Instagram app secret. 401 on mismatch; still insert a `webhook_events` row so Home is not silent. A POST with no signature header is never Meta, so it is logged as `unsigned` and can't raise Home's "signing secret did not match" banner, which goes by the newest signed delivery.
 - **Long-lived tokens expire in 60 days.** Unrefreshed tokens die permanently. Refresh requires the token to be ≥ 24h old and not yet expired.
-- **~200 calls per account per hour.** No tight retry loops. 5xx and 429: exponential backoff, 3 attempts, jittered. Other 4xx: never retry; log the body verbatim.
+- **~200 calls per account per hour.** No tight retry loops. 5xx and 429: exponential backoff, 3 attempts, jittered. Each attempt times out after 10 s, and a timeout is retried like any network failure. Other 4xx: never retry; log the body verbatim.
 
 ## Routes
 
@@ -79,13 +79,13 @@ Unlisted, session-gated, used by `scripts/selftest.ts`:
 8. Decrypt token.
 9. `POST https://graph.instagram.com/v23.0/{ig_user_id}/messages` with `{ recipient: { comment_id }, message: { text } }`.
 10. If `public_reply_text` and the DM went through, `POST /{comment-id}/replies`. If the DM failed, the public reply is not posted and `reply_status` is `skipped`: "Sent you a DM!" would be false.
-11. `UPDATE sent` with both outcomes (`ok` / `failed` / `skipped`). A send that never reaches Meta (network failure on every retry) is `failed`, never left `pending`.
+11. `UPDATE sent` with both outcomes (`ok` / `failed` / `skipped`). A send that never reaches Meta (network failure or timeout on every retry) is `failed`, never left `pending`. If the Worker is stopped mid-send, the daily job marks the row `failed` once it has been `pending` for 15 minutes. It never sends it again, because the DM may have gone out.
 
 ## Token refresh (cron `0 3 * * *`) and comment poll (cron `*/5 * * * *`)
 
 Cloudflare cron has **no retries**. A missed tick is gone until tomorrow.
 
-1. Select accounts with `token_expires_at < now + 10 days` (about ten chances if a run is missed).
+1. Select accounts with `token_expires_at < now + 10 days` (about ten chances if a run is missed), paused ones included. Pausing stops DMs, not token upkeep.
 2. Skip tokens younger than 24h (`last_refreshed_at` or `connected_at`).
 3. `GET https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=…`
 4. Success: re-encrypt, update `token_expires_at` and `last_refreshed_at`, clear `needs_reconnect`.
@@ -93,6 +93,8 @@ Cloudflare cron has **no retries**. A missed tick is gone until tomorrow.
 6. On a clean run (whether or not there was work), write `last_cron_ok_at`. Admin banners if that is > 72h stale.
 
 Idempotent: running five times in a day is harmless.
+
+Before refreshing, the daily job marks `sent` rows that are still `pending` 15 minutes after their claim as `failed` ("The Worker stopped before this send finished…"). A send takes at most about 65 s, so such a row belongs to a Worker that was stopped mid-send. This runs daily rather than in the poll because it is a full scan of `sent`, which grows by a row per comment and has no index on `dm_status`.
 
 The 5-minute handler (`src/reconcile.ts`) lists a few recent media per active account, fetches newest comments, and calls `processComment` for keyword matches not already in `sent`. Caps: 3 media / account, 10 sends / sweep, 72-hour lookback. Free-plan CPU is tight; keep those caps.
 

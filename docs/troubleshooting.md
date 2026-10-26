@@ -197,6 +197,10 @@ and confirm the field is subscribed to **comments** with **Include values** on.
 Meta reached you, and the request was rejected because the HMAC signature did
 not match either app secret.
 
+A **Not signed** row is different: that request carried no signature at all, so
+it did not come from Meta. Scanners send these to every public URL. They are
+rejected, and they never trigger the red banner.
+
 This is nearly always a missing `FACEBOOK_APP_SECRET` — see cause 3 above.
 
 If it is already set, you have the wrong value. `META_APP_SECRET` and

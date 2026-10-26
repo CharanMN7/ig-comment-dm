@@ -10,7 +10,8 @@ import {
 import { findConfigProblems } from '../src/config.ts';
 import { FREE_ATTEMPTS, lockRemaining, lockSecondsFor } from '../src/throttle.ts';
 import type { Env } from '../src/types.ts';
-import { authorizeUrl, oauthRedirectUri } from '../src/meta.ts';
+import { META_CALL_MAX_MS, META_TIMEOUT_MS, authorizeUrl, oauthRedirectUri } from '../src/meta.ts';
+import { STALE_PENDING_SECONDS } from '../src/cron.ts';
 import { isSelfComment } from '../src/guard.ts';
 import { parseWebhookPayload } from '../src/process.ts';
 import {
@@ -329,6 +330,18 @@ describe('authorizeUrl', () => {
     assert.equal(url.searchParams.get('response_type'), 'code');
     assert.equal(url.searchParams.get('enable_fb_login'), 'false');
     assert.equal(url.searchParams.get('force_reauth'), null);
+  });
+});
+
+describe('stale pending sends', () => {
+  it('bounds one Meta call by three timeouts plus the longest backoffs', () => {
+    assert.equal(META_TIMEOUT_MS, 10_000);
+    assert.equal(META_CALL_MAX_MS, 3 * 10_000 + 750 + 1_500);
+  });
+
+  it('waits far longer than the slowest possible send before calling a pending row abandoned', () => {
+    const slowestSendMs = 2 * META_CALL_MAX_MS;
+    assert.ok(STALE_PENDING_SECONDS * 1000 >= 10 * slowestSendMs, `${STALE_PENDING_SECONDS}s vs ${slowestSendMs}ms`);
   });
 });
 

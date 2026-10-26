@@ -6,9 +6,28 @@ import {
   encryptAesGcm,
   nowSeconds,
 } from './crypto.ts';
-import { accountsNeedingRefresh, flagNeedsReconnect, listAccounts, pruneWebhookEvents, systemSet, updateAccountToken } from './db.ts';
+import {
+  accountsNeedingRefresh,
+  failStalePending,
+  flagNeedsReconnect,
+  listAccounts,
+  pruneWebhookEvents,
+  systemSet,
+  updateAccountToken,
+} from './db.ts';
 import { refreshLongLived, subscribeCommentWebhooks } from './meta.ts';
 import type { Env } from './types.ts';
+
+/**
+ * A send makes at most two Meta calls (DM, then public reply), so it ends
+ * within 2 x META_CALL_MAX_MS, about 65 s. A row still `pending` long after
+ * that was claimed by a Worker stopped mid-send: waitUntil's 30 s cap, a
+ * deploy, a crash. scripts/test-unit.ts keeps this above 10x that bound.
+ */
+export const STALE_PENDING_SECONDS = 15 * 60;
+
+export const STALE_PENDING_ERROR =
+  'The Worker stopped before this send finished. The DM may or may not have gone out, so it was not tried again.';
 
 export async function ensureCommentSubscriptions(env: Env): Promise<void> {
   const accounts = await listAccounts(env.DB);
@@ -28,8 +47,20 @@ export async function ensureCommentSubscriptions(env: Env): Promise<void> {
  * Daily token refresh. Idempotent: running it five times in a day is harmless.
  * Cloudflare cron has no retries, so we select tokens expiring within 10 days
  * (about ten chances) and skip anything refreshed in the last 24 hours.
+ * Paused accounts are refreshed too: pausing stops DMs, and a token left
+ * alone for 60 days can't be refreshed at all.
  */
 export async function runCron(env: Env): Promise<void> {
+  // Daily, not every 5 minutes: `sent` gains a row per comment, is never
+  // pruned and has no index on dm_status, so this is a full scan. Once a day
+  // costs about one Home visit; 288 times a day could use up the free plan's
+  // D1 reads. A stuck row already blocks a resend, so waiting only delays its
+  // label. First, so a slow Meta call can't keep it from running.
+  try {
+    await failStalePending(env.DB, nowSeconds() - STALE_PENDING_SECONDS, STALE_PENDING_ERROR);
+  } catch (err) {
+    console.error('fail stale pending sends failed', err instanceof Error ? err.message : err);
+  }
   await ensureCommentSubscriptions(env);
   const now = nowSeconds();
   const accounts = await accountsNeedingRefresh(env.DB, now + TOKEN_LOOKAHEAD_SECONDS);

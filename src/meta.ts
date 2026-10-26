@@ -17,22 +17,34 @@ export type MetaCallResult = {
 };
 
 const ATTEMPTS = 3;
+const BACKOFF_BASE_MS = 500;
+
+// Without a timeout a request Meta never answers holds the send until the
+// runtime kills the Worker, and the claimed row is left `pending`. Each
+// attempt gets its own budget; a timeout is retried like any network failure.
+export const META_TIMEOUT_MS = 10_000;
+
+/**
+ * The longest one Meta call can take: every attempt timing out, plus the
+ * backoffs between them, each under 1.5x its doubling base. About 32 s.
+ */
+export const META_CALL_MAX_MS = ATTEMPTS * META_TIMEOUT_MS + 1.5 * BACKOFF_BASE_MS * (2 ** (ATTEMPTS - 1) - 1);
 
 async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
   let lastRes: Response | undefined;
   let lastErr: unknown;
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     try {
-      const res = await fetch(url, init);
+      const res = await fetch(url, { ...init, signal: AbortSignal.timeout(META_TIMEOUT_MS) });
       if (res.status === 429 || res.status >= 500) {
         lastRes = res;
-        if (attempt < ATTEMPTS - 1) await sleep(jitteredDelayMs(500 * 2 ** attempt));
+        if (attempt < ATTEMPTS - 1) await sleep(jitteredDelayMs(BACKOFF_BASE_MS * 2 ** attempt));
         continue;
       }
       return res;
     } catch (err) {
       lastErr = err;
-      if (attempt < ATTEMPTS - 1) await sleep(jitteredDelayMs(500 * 2 ** attempt));
+      if (attempt < ATTEMPTS - 1) await sleep(jitteredDelayMs(BACKOFF_BASE_MS * 2 ** attempt));
     }
   }
   if (lastRes) return lastRes;

@@ -178,6 +178,40 @@ describe('the daily token refresh', () => {
     expect((await admin.get(adminPath('/'))).text).toContain('Instagram needs reconnecting');
   });
 
+  it('refreshes a paused account too, since pausing stops DMs and not token upkeep', async () => {
+    await seedAccount({ token: 'token-paused', expiresAt: NOW + 5 * DAY, lastRefreshedAt: NOW - 55 * DAY, active: false });
+
+    await runScheduled(DAILY);
+
+    expect(meta.callsTo('GET', '/refresh_access_token')).toEqual([expect.objectContaining({ query: expect.objectContaining({ access_token: 'token-paused' }) })]);
+    expect(meta.callsTo('POST', '/:id/subscribed_apps')).toEqual([]);
+    expect(await storedToken()).toBe('refreshed-token');
+    expect(await accountRow()).toMatchObject({ active: 0, token_expires_at: NOW + FAKE_EXPIRES_IN, last_refreshed_at: NOW });
+  });
+
+  it('marks sends the Worker never finished as failed, without sending them again', async () => {
+    await seedAccount();
+    await seedRule();
+    const claim = (comment_id: string, dm_status: string, sent_at: number) =>
+      tryClaimComment(env.DB, { comment_id, ig_user_id: IG_USER, commenter_id: '9100000000000001', dm_status, error: null, sent_at });
+    await claim('c-stuck', 'pending', NOW - 2 * DAY);
+    await claim('c-stuck-recently', 'pending', NOW - 16 * 60);
+    await claim('c-in-flight', 'pending', NOW - 60);
+    await claim('c-sent', 'ok', NOW - 2 * DAY);
+
+    await runScheduled(DAILY);
+
+    const stopped = 'The Worker stopped before this send finished. The DM may or may not have gone out, so it was not tried again.';
+    expect((await sentRows()).map((r) => [r.comment_id, r.dm_status, r.error, r.sent_at])).toEqual([
+      ['c-in-flight', 'pending', null, NOW - 60],
+      ['c-sent', 'ok', null, NOW - 2 * DAY],
+      ['c-stuck', 'failed', stopped, NOW - 2 * DAY],
+      ['c-stuck-recently', 'failed', stopped, NOW - 16 * 60],
+    ]);
+    expect(meta.callsTo('POST', '/:id/messages')).toEqual([]);
+    expect(meta.callsTo('POST', '/:id/replies')).toEqual([]);
+  });
+
   it('prunes webhook events older than 7 days', async () => {
     await insertWebhookEvent(env.DB, { received_at: NOW - 8 * DAY, status: 'received', object: 'instagram', preview: 'old', error: null });
     await insertWebhookEvent(env.DB, { received_at: NOW - 1 * DAY, status: 'received', object: 'instagram', preview: 'new', error: null });

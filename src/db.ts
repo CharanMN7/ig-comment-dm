@@ -154,7 +154,7 @@ export async function accountsNeedingRefresh(db: D1Database, expiresBefore: numb
       `SELECT ig_user_id, username, access_token_enc, token_iv, token_expires_at,
               active, connected_at, last_refreshed_at, needs_reconnect
        FROM accounts
-       WHERE active = 1 AND token_expires_at < ?
+       WHERE token_expires_at < ?
        ORDER BY token_expires_at ASC`,
     )
     .bind(expiresBefore)
@@ -296,6 +296,17 @@ export async function updateSent(
     .run();
 }
 
+/**
+ * Fails `pending` rows claimed before `claimedBefore`. Only `pending` is
+ * touched, so a send that does finish late still records its real outcome.
+ */
+export async function failStalePending(db: D1Database, claimedBefore: number, error: string): Promise<void> {
+  await db
+    .prepare(`UPDATE sent SET dm_status = 'failed', error = ? WHERE dm_status = 'pending' AND sent_at < ?`)
+    .bind(error, claimedBefore)
+    .run();
+}
+
 export async function recentSent(db: D1Database, limit: number): Promise<(Sent & { rule_label: string | null })[]> {
   const { results } = await db
     .prepare(
@@ -362,6 +373,22 @@ export async function recentWebhookEvents(db: D1Database, limit: number): Promis
     .bind(limit)
     .all<WebhookEvent>();
   return results ?? [];
+}
+
+/**
+ * The newest delivery that carried a signature, so unsigned POSTs from
+ * scanners can neither raise the "secret did not match" banner nor hide it.
+ */
+export async function latestSignedWebhookStatus(db: D1Database): Promise<string | null> {
+  const row = await db
+    .prepare(
+      `SELECT status FROM webhook_events
+       WHERE status IN ('received', 'bad_sig')
+       ORDER BY received_at DESC, id DESC
+       LIMIT 1`,
+    )
+    .first<{ status: string }>();
+  return row?.status ?? null;
 }
 
 export async function pruneWebhookEvents(db: D1Database, olderThan: number): Promise<void> {

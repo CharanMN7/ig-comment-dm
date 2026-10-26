@@ -59,6 +59,24 @@ describe('the admin home page', () => {
     expect(page).toContain('Wrong secret');
   });
 
+  it('does not blame the signing secret for a POST that carried no signature at all', async () => {
+    await postWebhook(commentPayload(), { signature: null });
+    const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
+    expect(page).not.toContain('the signing secret did not match');
+    expect(page).toContain('Not signed');
+  });
+
+  it('judges the signing secret by the newest signed delivery, whatever unsigned noise came after it', async () => {
+    const admin = await signedInAdmin();
+    await postWebhook(commentPayload(), { secret: 'wrong' });
+    for (let i = 0; i < 10; i++) await postWebhook('{}', { signature: null });
+    expect((await admin.get(adminPath('/'))).text).toContain('the signing secret did not match');
+
+    await postWebhook({ object: 'instagram', entry: [] });
+    await postWebhook('{}', { signature: null });
+    expect((await admin.get(adminPath('/'))).text).not.toContain('the signing secret did not match');
+  });
+
   it('warns until the daily check has run in the last 3 days', async () => {
     const admin = await signedInAdmin();
     expect((await admin.get(adminPath('/'))).text).toContain('hasn’t run in over 3 days');
@@ -79,5 +97,26 @@ describe('the admin home page', () => {
     const res = await request(adminPath('/'), { headers: { Cookie: admin.cookieHeader }, env: { FACEBOOK_APP_SECRET: '' } });
     expect(res.text).toContain('A Worker secret needs attention.');
     expect(res.text).toContain('<code>FACEBOOK_APP_SECRET</code>');
+  });
+});
+
+describe('the admin error page', () => {
+  it('says the tables are missing when one is', async () => {
+    const admin = await signedInAdmin();
+    await env.DB.prepare('DROP TABLE accounts').run();
+    const res = await admin.get(adminPath('/accounts'));
+    expect(res.status).toBe(500);
+    expect(res.text).toContain('The database tables are missing. Run the D1 migration, then try again.');
+    expect(res.text).toMatch(/<pre class="raw">[^<]*no such table: accounts/);
+  });
+
+  it('does not blame missing tables for any other database error, and shows the detail underneath', async () => {
+    const admin = await signedInAdmin();
+    await env.DB.prepare('ALTER TABLE accounts RENAME COLUMN username TO handle').run();
+    const res = await admin.get(adminPath('/accounts'));
+    expect(res.status).toBe(500);
+    expect(res.text).not.toContain('tables are missing');
+    expect(res.text).toContain('That failed. Try once more.');
+    expect(res.text).toMatch(/<pre class="raw">[^<]*D1_ERROR[^<]*no such column: username/);
   });
 });
