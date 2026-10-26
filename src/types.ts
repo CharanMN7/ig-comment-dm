@@ -43,6 +43,8 @@ export type Rule = {
   match_mode: MatchMode;
   /** JSON array, like `keywords`. Matched with the same normalisation and the same `match_mode`. */
   exclude_keywords: string;
+  /** 1: every comment on `media_id` matches and `keywords` are ignored. Never set without a `media_id`. */
+  match_all: number;
   media_id: string | null;
   dm_text: string;
   public_reply_text: string | null;

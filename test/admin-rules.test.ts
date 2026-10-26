@@ -230,6 +230,60 @@ describe('exclusions on the rule form', () => {
   });
 });
 
+describe('replying to every comment on a post', () => {
+  const giveaway = { ...validRule, label: 'Giveaway', keywords: '', media_id: '18000000000000777', match_all: '1' };
+
+  it('offers the box, keeps the all-posts option and its help, and leaves keywords optional in the browser', async () => {
+    const admin = await adminWithAccount();
+    const page = (await admin.get(adminPath('/rules/new'))).text;
+    expect(page).toContain('Reply to every comment on this post');
+    expect(page).toMatch(/<input type="checkbox" id="match_all" name="match_all" value="1"\s*\/>/);
+    expect(page).toContain('All posts and reels (recommended)');
+    expect(page).toContain('Leave this on <b>All posts and reels</b> unless you want one reel only.');
+    // Hidden by CSS when the box is ticked; a required field there would block the form.
+    expect(page).toMatch(/<textarea id="keywords" name="keywords" placeholder/);
+    expect(page).toContain('25 newest comments from the last 3 days');
+    expect(page).toContain('up to 10 messages per check');
+  });
+
+  it('saves without keywords, shows the box ticked when editing, and lists the rule as every comment', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const res = await admin.submit(adminPath('/rules'), { ...giveaway, keywords: 'leftover\nAI', match_mode: 'contains', exclude_keywords: 'already entered' });
+    expect(res.status).toBe(302);
+    expect(await ruleRows()).toMatchObject([
+      { match_all: 1, media_id: '18000000000000777', keywords: '[]', match_mode: 'word', exclude_keywords: '["already entered"]' },
+    ]);
+
+    expect((await admin.get(adminPath('/rules'))).text).toContain('Every comment on its post');
+    const form = (await admin.get(adminPath('/rules/1/edit'))).text;
+    expect(form).toMatch(/name="match_all" value="1"\s+checked/);
+
+    await admin.submit(adminPath('/rules/1'), { ...giveaway, match_all: '', keywords: 'guide' });
+    expect(await ruleRows()).toMatchObject([{ match_all: 0, keywords: '["guide"]' }]);
+  });
+
+  it('refuses one on all posts, says why, and keeps what was typed', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const res = await admin.submit(adminPath('/rules'), { ...giveaway, media_id: '' });
+    expect(res.status).toBe(400);
+    expect(res.text).toContain(escaped('“Reply to every comment” needs one post.'));
+    expect(res.text).toMatch(/name="match_all" value="1"\s+checked/);
+    expect(res.text).toContain(escaped(giveaway.dm_text));
+    expect(await ruleRows()).toEqual([]);
+  });
+
+  it('refuses one on all posts when editing too', async () => {
+    const admin = await adminWithAccount();
+    const id = await seedRule({ label: 'Old' });
+    await admin.get(adminPath(`/rules/${id}/edit`));
+    const res = await admin.submit(adminPath(`/rules/${id}`), { ...giveaway, media_id: '' });
+    expect(res.status).toBe(400);
+    expect(await ruleRows()).toMatchObject([{ label: 'Old', match_all: 0 }]);
+  });
+});
+
 describe('editing, pausing and deleting rules', () => {
   it('shows the saved rule in the edit form and saves changes', async () => {
     const admin = await adminWithAccount();
@@ -420,6 +474,20 @@ describe('the dry-run test page', () => {
     expect(page).toContain('This would match the rule <b>Any guide</b>');
     expect(page).toContain('Passed over first');
     expect(page).toContain('<tr><td>Strict guide</td><td>guide</td><td>how much</td></tr>');
+  });
+
+  it('shows a match-all hit on its own post, and nothing on all posts', async () => {
+    const admin = await adminWithAccount();
+    await seedRule({ label: 'Giveaway', keywords: [], matchAll: true, mediaId: 'reel-1', dmText: 'You are in!' });
+    await admin.get(adminPath('/test'));
+    const hit = (await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'so cool', media_id: 'reel-1' })).text;
+    expect(hit).toContain('This would match the rule <b>Giveaway</b>');
+    expect(hit).toContain('<th>Matched because</th><td>This rule replies to every comment on this post.</td>');
+    expect(hit).toContain('You are in!');
+    expect(hit).not.toContain('Keyword found');
+
+    const elsewhere = (await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'so cool', media_id: '' })).text;
+    expect(elsewhere).toContain('No rule would match this comment.');
   });
 
   it('names the same rule a real comment fires when two rules match', async () => {

@@ -36,6 +36,13 @@ label.choice { display: flex; gap: 0.6rem; align-items: flex-start; min-height: 
 label.choice input { flex: none; width: 1.2rem; height: 1.2rem; margin: 0.1rem 0 0; }
 label.choice .muted { display: block; }
 .rule-form input[type=text], .rule-form select, .rule-form button { min-height: 44px; }
+/* No client JS (the CSP has no script-src), so the rule form reacts to the
+   "every comment" box with :has(). A browser without :has() shows every field;
+   the server ignores keywords on such a rule, so nothing breaks. */
+.rule-form .when-all, .rule-form .needs-post { display: none; }
+.rule-form:has(#match_all:checked) .when-all { display: block; }
+.rule-form:has(#match_all:checked) .when-keywords { display: none; }
+.rule-form:has(#match_all:checked):has(#media_id option[value=""]:checked) .needs-post { display: block; }
 .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-top: 0.75rem; }
 button, .btn {
   background: #111; color: #fff; border: 0; padding: 0.42rem 0.8rem; font: inherit; cursor: pointer;

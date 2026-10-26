@@ -130,10 +130,11 @@ export function isMatchMode(value: string): value is MatchMode {
   return value === 'word' || value === 'contains';
 }
 
-export type RuleMatch = { rule: Rule; keyword: string };
+/** `keyword` is null when the rule replies to every comment on its post. */
+export type RuleMatch = { rule: Rule; keyword: string | null };
 
 /** A rule whose keyword matched, passed over because one of its exclusions matched too. */
-export type RuleExclusion = { rule: Rule; keyword: string; exclusion: string };
+export type RuleExclusion = { rule: Rule; keyword: string | null; exclusion: string };
 
 export type MatchVerdict = { match: RuleMatch | null; excluded: RuleExclusion[] };
 
@@ -148,15 +149,20 @@ function firstMatching(normalizedComment: string, keywords: string[], mode: Matc
  * The one matcher. The webhook, the 5-minute sweep and the Test page all go
  * through it, so a comment can never be skipped by one and answered by another.
  *
- * Media-scoped rules (matching this post) win over rules with no media_id, and
- * the first rule to match inside that order fires.
+ * Order: keyword rules scoped to this post, then keyword rules for all posts,
+ * then rules that reply to every comment on this post. The first to match
+ * fires. A match-all rule comes last so a specific keyword on the same post,
+ * or an account-wide keyword rule, still gets its own message out. A match-all
+ * rule with no post is never considered: account-wide it would DM every
+ * commenter on every post, and the admin form refuses to save one.
  *
- * Exclusions belong to their rule, not to the account. A rule whose keyword
- * matches but whose exclusion also matches is passed over, and matching carries
- * on in the same order, so a later rule without that exclusion can still fire.
- * That keeps a rule's effect readable from its own form: adding "how much" to
- * the guide rule cannot silently mute the launch rule. Every rule passed over is
- * returned, so a skip can say which exclusion caused it.
+ * Exclusions belong to their rule, not to the account, and apply to match-all
+ * rules too. A rule whose keyword matches but whose exclusion also matches is
+ * passed over, and matching carries on in the same order, so a later rule
+ * without that exclusion can still fire. That keeps a rule's effect readable
+ * from its own form: adding "how much" to the guide rule cannot silently mute
+ * the launch rule. Every rule passed over is returned, so a skip can say which
+ * exclusion caused it.
  */
 export function matchComment(
   rules: Rule[],
@@ -164,12 +170,19 @@ export function matchComment(
   mediaId: string | undefined,
 ): MatchVerdict {
   const normalized = normalizeCommentText(commentText);
-  const scoped = rules.filter((r) => r.media_id != null && r.media_id !== '' && r.media_id === mediaId);
-  const global = rules.filter((r) => r.media_id == null || r.media_id === '');
+  const hasPost = (r: Rule) => r.media_id != null && r.media_id !== '';
+  const scoped = rules.filter((r) => hasPost(r) && r.media_id === mediaId);
+  const global = rules.filter((r) => !hasPost(r));
+  const ordered = [
+    ...scoped.filter((r) => r.match_all !== 1),
+    ...global.filter((r) => r.match_all !== 1),
+    ...scoped.filter((r) => r.match_all === 1),
+  ];
   const excluded: RuleExclusion[] = [];
-  for (const rule of [...scoped, ...global]) {
-    const keyword = firstMatching(normalized, parseKeywords(rule.keywords), rule.match_mode);
-    if (keyword === null) continue;
+  for (const rule of ordered) {
+    const matchAll = rule.match_all === 1;
+    const keyword = matchAll ? null : firstMatching(normalized, parseKeywords(rule.keywords), rule.match_mode);
+    if (!matchAll && keyword === null) continue;
     const exclusion = firstMatching(normalized, parseKeywords(rule.exclude_keywords), rule.match_mode);
     if (exclusion !== null) {
       excluded.push({ rule, keyword, exclusion });

@@ -245,6 +245,59 @@ describe('exclusions', () => {
   });
 });
 
+describe('rules that reply to every comment on a post', () => {
+  it('DMs any comment on its post, with no keyword', async () => {
+    await seedAccount();
+    const ruleId = await seedRule({ keywords: [], matchAll: true, mediaId: 'reel-1', dmText: 'You are in the giveaway!' });
+    await postWebhook(commentPayload({ mediaId: 'reel-1', text: 'love this 😍' }));
+    expect(dmCalls()).toEqual([expect.objectContaining({ body: expect.objectContaining({ message: { text: 'You are in the giveaway!' } }) })]);
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'ok', rule_id: ruleId })]);
+  });
+
+  it('does nothing for comments on other posts', async () => {
+    await seedAccount();
+    await seedRule({ keywords: [], matchAll: true, mediaId: 'reel-1' });
+    await postWebhook(commentPayload({ mediaId: 'reel-2', text: 'love this' }));
+    expect(meta.calls).toEqual([]);
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'skipped', error: 'no matching rule' })]);
+  });
+
+  it('lets a keyword rule on the same post, or on all posts, win', async () => {
+    await seedAccount();
+    await seedRule({ keywords: [], matchAll: true, mediaId: 'reel-1', dmText: 'giveaway' });
+    await seedRule({ keywords: ['price'], dmText: 'price list' });
+    await seedRule({ keywords: ['guide'], mediaId: 'reel-1', dmText: 'reel guide' });
+    await postWebhook(commentPayload({ commentId: 'c-guide', mediaId: 'reel-1', text: 'guide please' }));
+    await postWebhook(commentPayload({ commentId: 'c-price', mediaId: 'reel-1', text: 'price?' }));
+    await postWebhook(commentPayload({ commentId: 'c-other', mediaId: 'reel-1', text: 'so cool' }));
+    expect(dmCalls().map((c) => (c.body as { message: { text: string } }).message.text)).toEqual(['reel guide', 'price list', 'giveaway']);
+  });
+
+  it('still ignores the operator, old comments and repeat deliveries', async () => {
+    await seedAccount();
+    await seedRule({ keywords: [], matchAll: true, mediaId: 'reel-1' });
+    await postWebhook(commentPayload({ commentId: 'c-self', mediaId: 'reel-1', fromId: IG_USER, text: 'thanks all!' }));
+    await postWebhook(commentPayload({ commentId: 'c-old', mediaId: 'reel-1', time: NOW - 7 * DAY - 1 }));
+    await postWebhook(commentPayload({ commentId: 'c-twice', mediaId: 'reel-1' }));
+    await postWebhook(commentPayload({ commentId: 'c-twice', mediaId: 'reel-1' }));
+    expect(dmCalls().map((c) => (c.body as { recipient: { comment_id: string } }).recipient.comment_id)).toEqual(['c-twice']);
+    expect((await sentRows()).map((r) => [r.comment_id, r.dm_status])).toEqual([
+      ['c-old', 'skipped'],
+      ['c-twice', 'ok'],
+    ]);
+  });
+
+  it('applies its exclusions', async () => {
+    await seedAccount();
+    const ruleId = await seedRule({ keywords: [], matchAll: true, mediaId: 'reel-1', excludeKeywords: ['already entered'] });
+    await postWebhook(commentPayload({ mediaId: 'reel-1', text: 'I already entered!' }));
+    expect(meta.calls).toEqual([]);
+    expect(await sentRows()).toEqual([
+      expect.objectContaining({ dm_status: 'skipped', rule_id: ruleId, error: 'Skipped: matched exclusion “already entered”' }),
+    ]);
+  });
+});
+
 describe('media-scoped rules', () => {
   it('prefers a rule scoped to the post over an older all-posts rule', async () => {
     await seedAccount();

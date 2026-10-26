@@ -28,6 +28,7 @@ import {
   matchComment,
   normalizeCommentText,
 } from '../src/match.ts';
+import { MATCH_ALL_NEEDS_POST_MESSAGE, readRuleFields } from '../src/routes/admin.ts';
 import type { Rule } from '../src/types.ts';
 
 function rule(partial: Partial<Rule> & Pick<Rule, 'id' | 'keywords' | 'label'>): Rule {
@@ -35,6 +36,7 @@ function rule(partial: Partial<Rule> & Pick<Rule, 'id' | 'keywords' | 'label'>):
     ig_user_id: 'acct',
     match_mode: 'word',
     exclude_keywords: '[]',
+    match_all: 0,
     media_id: null,
     dm_text: 'hello',
     public_reply_text: null,
@@ -481,6 +483,97 @@ describe('exclusions', () => {
       exclusionSkipReason({ rule: guide, keyword: 'guide', exclusion: 'how much' }),
       'Skipped: matched exclusion “how much”',
     );
+  });
+});
+
+describe('match-all rules', () => {
+  const giveaway = rule({ id: 30, label: 'giveaway', keywords: '[]', match_all: 1, media_id: 'REEL1' });
+
+  it('match every comment on their post, with no keyword', () => {
+    assert.deepEqual(matchComment([giveaway], 'love this 😍', 'REEL1'), { match: { rule: giveaway, keyword: null }, excluded: [] });
+    assert.equal(matchComment([giveaway], '🔥', 'REEL1').match?.rule.id, 30);
+    assert.equal(matchComment([giveaway], '', 'REEL1').match?.rule.id, 30);
+  });
+
+  it('ignore any keywords stored on the rule', () => {
+    const stale = { ...giveaway, keywords: JSON.stringify(['guide']) };
+    assert.equal(matchComment([stale], 'love this', 'REEL1').match?.rule.id, 30);
+  });
+
+  it('never fire on other posts, or when the post is unknown', () => {
+    assert.equal(matchComment([giveaway], 'love this', 'REEL2').match, null);
+    assert.equal(matchComment([giveaway], 'love this', undefined).match, null);
+  });
+
+  it('never fire without a post, even if one reached the database', () => {
+    const accountWide = { ...giveaway, media_id: null };
+    assert.deepEqual(matchComment([accountWide], 'love this', 'REEL1'), { match: null, excluded: [] });
+    assert.deepEqual(matchComment([{ ...giveaway, media_id: '' }], 'love this', 'REEL1'), { match: null, excluded: [] });
+  });
+
+  it('come after every keyword rule: post keyword, then all-posts keyword, then match-all', () => {
+    const postKeyword = rule({ id: 31, label: 'post keyword', keywords: JSON.stringify(['guide']), media_id: 'REEL1' });
+    const allPostsKeyword = rule({ id: 32, label: 'all posts keyword', keywords: JSON.stringify(['guide', 'price']) });
+    // Listed match-all first and oldest, to show precedence is not row order.
+    const rules = [giveaway, allPostsKeyword, postKeyword];
+    assert.equal(matchComment(rules, 'guide please', 'REEL1').match?.rule.id, 31);
+    assert.equal(matchComment(rules, 'price?', 'REEL1').match?.rule.id, 32);
+    assert.equal(matchComment(rules, 'love it', 'REEL1').match?.rule.id, 30);
+  });
+
+  it('honour their own exclusions, as whole words', () => {
+    const picky = { ...giveaway, exclude_keywords: JSON.stringify(['spam']) };
+    assert.deepEqual(matchComment([picky], 'this is SPAM', 'REEL1'), {
+      match: null,
+      excluded: [{ rule: picky, keyword: null, exclusion: 'spam' }],
+    });
+    assert.equal(matchComment([picky], 'no spammers here', 'REEL1').match?.rule.id, 30);
+  });
+
+  it("are not stopped by another rule's exclusion", () => {
+    const strict = rule({ id: 33, label: 'strict', keywords: JSON.stringify(['guide']), exclude_keywords: JSON.stringify(['how much']), media_id: 'REEL1' });
+    const verdict = matchComment([strict, giveaway], 'how much is the guide', 'REEL1');
+    assert.equal(verdict.match?.rule.id, 30);
+    assert.deepEqual(verdict.excluded.map((e) => e.rule.id), [33]);
+  });
+});
+
+describe('readRuleFields', () => {
+  const valid = {
+    ig_user_id: 'acct',
+    label: 'Giveaway',
+    keywords: '',
+    match_mode: 'word',
+    exclude_keywords: '',
+    media_id: 'REEL1',
+    dm_text: 'You are in!',
+    public_reply_text: '',
+  };
+
+  it('rejects a match-all rule with no post', () => {
+    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', media_id: '' }), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
+    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', media_id: '   ' }), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
+  });
+
+  it('accepts a match-all rule on one post without keywords, and keeps none', () => {
+    const read = readRuleFields({ ...valid, match_all: '1', keywords: 'AI\n🔥', match_mode: 'contains' });
+    assert.ok('row' in read);
+    assert.deepEqual(
+      { keywords: read.row.keywords, match_mode: read.row.match_mode, match_all: read.row.match_all, media_id: read.row.media_id },
+      { keywords: '[]', match_mode: 'word', match_all: 1, media_id: 'REEL1' },
+    );
+  });
+
+  it('still checks the exclusions of a match-all rule', () => {
+    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', exclude_keywords: 'no' }), { error: EXCLUSION_TOO_SHORT_MESSAGE });
+  });
+
+  it('needs keywords when the box is not ticked, and stores match_all 0', () => {
+    assert.deepEqual(readRuleFields(valid), { error: 'Add at least one keyword, one per line.' });
+    const read = readRuleFields({ ...valid, keywords: 'guide', media_id: '' });
+    assert.ok('row' in read);
+    assert.equal(read.row.match_all, 0);
+    assert.equal(read.row.media_id, null);
   });
 });
 

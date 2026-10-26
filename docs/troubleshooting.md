@@ -155,6 +155,9 @@ If the keyword sits inside a hashtag or a longer word, edit the rule and choose
 **Anywhere in the comment** under "How to look for them". That catches
 `#launch2026` for `launch`, at the cost of `art` also matching `start`.
 
+A rule set to **Reply to every comment on this post** fires only on that post.
+On the Test page, pick the post under "Which posts" to see it match.
+
 If Home says `Skipped: matched exclusion “…”`, the keyword did match, but the
 comment also contained one of that rule's exclusions. The Test page lists the
 rule, the keyword it found and the exclusion that stopped it.
