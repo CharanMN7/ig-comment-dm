@@ -1,4 +1,4 @@
-import type { Rule } from './types.ts';
+import type { MatchMode, Rule } from './types.ts';
 
 // These letters are single code points with no NFD decomposition, so stripping
 // combining marks never reaches them: `dien` would not match `điện` otherwise.
@@ -77,6 +77,10 @@ const SEPARATORLESS_CLASS =
 const BOUNDARY_BEFORE = `(?<=^|[^\\p{L}\\p{N}]|${SEPARATORLESS_CLASS})`;
 const BOUNDARY_AFTER = `(?=$|[^\\p{L}\\p{N}]|${SEPARATORLESS_CLASS})`;
 
+/**
+ * `re` is the whole-word pattern. A `contains` keyword needs no pattern, only
+ * its normalised text, so its `re` is always null.
+ */
 export type CompiledKeyword = { normalized: string; re: RegExp | null };
 
 /**
@@ -91,8 +95,11 @@ export type CompiledKeyword = { normalized: string; re: RegExp | null };
 export const KEYWORD_CACHE_MAX = 2000;
 const keywordCache = new Map<string, CompiledKeyword>();
 
-export function compileKeyword(keyword: string): CompiledKeyword {
-  const cached = keywordCache.get(keyword);
+export function compileKeyword(keyword: string, mode: MatchMode = 'word'): CompiledKeyword {
+  // The mode prefix is from a fixed set and ends at the first colon, so no
+  // keyword in one mode can collide with a different keyword in the other.
+  const key = `${mode}:${keyword}`;
+  const cached = keywordCache.get(key);
   if (cached) return cached;
   if (keywordCache.size >= KEYWORD_CACHE_MAX) keywordCache.clear();
   const normalized = normalizeCommentText(keyword);
@@ -101,38 +108,72 @@ export function compileKeyword(keyword: string): CompiledKeyword {
   // Never add the `g` or `y` flag: this one RegExp is shared by every comment,
   // and `test()` on either advances `lastIndex`, so a match would depend on
   // which comment came before it.
-  const re = normalized
+  const re = normalized && mode === 'word'
     ? new RegExp(`${BOUNDARY_BEFORE}${escapeRegex(normalized)}${BOUNDARY_AFTER}`, 'u')
     : null;
   const entry = { normalized, re };
-  keywordCache.set(keyword, entry);
+  keywordCache.set(key, entry);
   return entry;
 }
 
-export function keywordMatches(normalizedComment: string, keyword: string): boolean {
-  const { re } = compileKeyword(keyword);
+/**
+ * Both sides are normalised the same way, so in `contains` mode `#launch2026`
+ * is already `launch2026` here and a plain substring test is the whole match.
+ */
+export function keywordMatches(normalizedComment: string, keyword: string, mode: MatchMode = 'word'): boolean {
+  const { normalized, re } = compileKeyword(keyword, mode);
+  if (mode === 'contains') return normalized !== '' && normalizedComment.includes(normalized);
   return re !== null && re.test(normalizedComment);
 }
+
+export function isMatchMode(value: string): value is MatchMode {
+  return value === 'word' || value === 'contains';
+}
+
+export type RuleMatch = { rule: Rule; keyword: string };
 
 /**
  * Media-scoped rules (matching this post) win over rules with no media_id.
  * First match inside that order wins; stop looking.
  */
-export function findMatchingRule(
+export function matchComment(
   rules: Rule[],
   commentText: string,
   mediaId: string | undefined,
-): Rule | null {
+): RuleMatch | null {
   const normalized = normalizeCommentText(commentText);
   const scoped = rules.filter((r) => r.media_id != null && r.media_id !== '' && r.media_id === mediaId);
   const global = rules.filter((r) => r.media_id == null || r.media_id === '');
   for (const rule of [...scoped, ...global]) {
-    for (const kw of parseKeywords(rule.keywords)) {
-      if (keywordMatches(normalized, kw)) return rule;
+    for (const keyword of parseKeywords(rule.keywords)) {
+      if (keywordMatches(normalized, keyword, rule.match_mode)) return { rule, keyword };
     }
   }
   return null;
 }
 
+export const KEYWORD_MIN_LENGTH = 3;
+
 export const KEYWORD_TOO_SHORT_MESSAGE =
   "Keywords under 3 characters match inside other words — 'AI' would fire on 'again' and 'email'.";
+
+const HAS_LETTER_OR_NUMBER = /[\p{L}\p{N}]/u;
+
+/**
+ * Measured on the normalised keyword, because that is the text that gets
+ * matched: `AI!!` is four characters as typed and two once punctuation goes.
+ * Counted in code points so a character outside the BMP counts once.
+ *
+ * Normalising drops emoji and punctuation, so `🔥🔥🔥` or `!!!` would pass a
+ * raw length check and then never match anything. A stray combining mark can
+ * survive normalising without being a letter, hence the explicit test rather
+ * than only checking for an empty string.
+ */
+export function keywordProblem(keyword: string): string | null {
+  const normalized = normalizeCommentText(keyword);
+  if (!HAS_LETTER_OR_NUMBER.test(normalized)) {
+    return `“${keyword}” has no letters or numbers. Emoji and punctuation are ignored when matching, so it could never match. Use a word instead.`;
+  }
+  if ([...normalized].length < KEYWORD_MIN_LENGTH) return KEYWORD_TOO_SHORT_MESSAGE;
+  return null;
+}

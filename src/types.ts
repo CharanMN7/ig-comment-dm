@@ -32,11 +32,15 @@ export type Account = {
   needs_reconnect: number;
 };
 
+/** `word` needs the keyword to stand alone; `contains` finds it anywhere, inside hashtags and longer words too. */
+export type MatchMode = 'word' | 'contains';
+
 export type Rule = {
   id: number;
   ig_user_id: string;
   label: string;
   keywords: string;
+  match_mode: MatchMode;
   media_id: string | null;
   dm_text: string;
   public_reply_text: string | null;

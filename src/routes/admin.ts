@@ -32,7 +32,7 @@ import {
 } from '../db.ts';
 import { findConfigProblems } from '../config.ts';
 import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
-import { KEYWORD_TOO_SHORT_MESSAGE, parseKeywords } from '../match.ts';
+import { isMatchMode, keywordProblem, normalizeCommentText, parseKeywords } from '../match.ts';
 import { listRecentMedia, oauthRedirectUri } from '../meta.ts';
 import { chooseRule } from '../process.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
@@ -43,7 +43,7 @@ import {
   readThrottle,
   recordFailure,
 } from '../throttle.ts';
-import type { Env, SessionData } from '../types.ts';
+import type { Env, MatchMode, Rule, SessionData } from '../types.ts';
 
 type Vars = {
   adminBase: string;
@@ -527,71 +527,145 @@ function parseKeywordLines(raw: string): { ok: true; keywords: string[] } | { ok
     .map((s) => s.trim())
     .filter(Boolean);
   if (keywords.length === 0) return { ok: false, error: 'Add at least one keyword, one per line.' };
-  if (keywords.some((k) => k.length < 3)) return { ok: false, error: KEYWORD_TOO_SHORT_MESSAGE };
+  for (const keyword of keywords) {
+    const problem = keywordProblem(keyword);
+    if (problem) return { ok: false, error: problem };
+  }
   return { ok: true, keywords };
 }
+
+type RuleFormValues = {
+  ig_user_id: string;
+  label: string;
+  keywords: string;
+  match_mode: string;
+  media_id: string;
+  dm_text: string;
+  public_reply_text: string;
+};
+
+function formValuesFromRule(rule: Rule): RuleFormValues {
+  return {
+    ig_user_id: rule.ig_user_id,
+    label: rule.label,
+    keywords: parseKeywords(rule.keywords).join('\n'),
+    match_mode: rule.match_mode,
+    media_id: rule.media_id ?? '',
+    dm_text: rule.dm_text,
+    public_reply_text: rule.public_reply_text ?? '',
+  };
+}
+
+/** What the operator typed, echoed back unchanged when the form is rejected. */
+function formValuesFromPost(f: Record<string, string>): RuleFormValues {
+  return {
+    ig_user_id: f.ig_user_id ?? '',
+    label: f.label ?? '',
+    keywords: f.keywords ?? '',
+    match_mode: f.match_mode ?? 'word',
+    media_id: f.media_id ?? '',
+    dm_text: f.dm_text ?? '',
+    public_reply_text: f.public_reply_text ?? '',
+  };
+}
+
+const MATCH_MODE_WORDS: Record<MatchMode, string> = {
+  word: 'Whole words only',
+  contains: 'Anywhere in the comment',
+};
 
 function ruleForm(opts: {
   base: string;
   csrf: string;
   accounts: { ig_user_id: string; username: string }[];
   action: string;
-  values: {
-    ig_user_id: string;
-    label: string;
-    keywords: string;
-    media_id: string;
-    dm_text: string;
-    public_reply_text: string;
-  };
+  values: RuleFormValues;
   posts: Array<{ id: string; label: string }>;
   error?: string;
 }) {
   const v = opts.values;
   const known = new Set(opts.posts.map((p) => p.id));
+  const contains = v.match_mode === 'contains';
   return html`
-    ${opts.error ? html`<p class="err">${opts.error}</p>` : html``}
-    <form method="post" action="${opts.action}">
+    ${opts.error ? html`<p class="err" role="alert">${opts.error}</p>` : html``}
+    <form class="rule-form" method="post" action="${opts.action}">
       ${csrfField(opts.csrf)}
-      <label for="ig_user_id">Instagram account</label>
-      <select id="ig_user_id" name="ig_user_id" required>
-        ${opts.accounts.map(
-          (a) =>
-            html`<option value="${a.ig_user_id}" ${a.ig_user_id === v.ig_user_id ? 'selected' : ''}>
-              @${a.username}
-            </option>`,
-        )}
-      </select>
-      <label for="label">Name for this rule</label>
+      <label for="label">Rule name</label>
       <input id="label" name="label" type="text" required value="${v.label}" placeholder="Free guide" />
-      <label for="keywords">Keywords (one per line)</label>
-      <textarea id="keywords" name="keywords" required placeholder="guide&#10;freebie">${v.keywords}</textarea>
-      <p class="muted">A comment matches if it contains any of these as whole words.</p>
-      <label for="media_id">Which posts</label>
-      <select id="media_id" name="media_id">
-        <option value="" ${!v.media_id ? 'selected' : ''}>All posts and reels (recommended)</option>
-        ${opts.posts.map(
-          (p) =>
-            html`<option value="${p.id}" ${p.id === v.media_id ? 'selected' : ''}>${p.label}</option>`,
-        )}
-        ${v.media_id && !known.has(v.media_id)
-          ? html`<option value="${v.media_id}" selected>Saved ID · ${v.media_id}</option>`
-          : html``}
-      </select>
-      <p class="muted">
-        Leave this on <b>All posts and reels</b> unless you want one reel only. A reel’s ID is a long number
-        from Instagram, not the share link (<code>instagram.com/reel/…</code>). If the list is empty, leave it
-        on all posts — that still covers reels.
-      </p>
-      <label for="dm_text">Private message to send</label>
-      <textarea id="dm_text" name="dm_text" required maxlength="${String(DM_TEXT_MAX)}">${v.dm_text}</textarea>
-      <p class="muted">Up to 1,000 characters.</p>
-      <label for="public_reply_text">Public reply under the comment (optional)</label>
-      <textarea id="public_reply_text" name="public_reply_text">${v.public_reply_text}</textarea>
-      <p class="muted">
-        Leave blank to only send the private message, with no public reply. If the private message fails,
-        the public reply is not posted either.
-      </p>
+      <p class="muted">Only you see this. It helps you tell your rules apart.</p>
+
+      <fieldset class="group">
+        <legend>Where to watch</legend>
+        <label for="ig_user_id">Instagram account</label>
+        <select id="ig_user_id" name="ig_user_id" required>
+          ${opts.accounts.map(
+            (a) =>
+              html`<option value="${a.ig_user_id}" ${a.ig_user_id === v.ig_user_id ? 'selected' : ''}>
+                @${a.username}
+              </option>`,
+          )}
+        </select>
+        <label for="media_id">Which posts</label>
+        <select id="media_id" name="media_id">
+          <option value="" ${!v.media_id ? 'selected' : ''}>All posts and reels (recommended)</option>
+          ${opts.posts.map(
+            (p) =>
+              html`<option value="${p.id}" ${p.id === v.media_id ? 'selected' : ''}>${p.label}</option>`,
+          )}
+          ${v.media_id && !known.has(v.media_id)
+            ? html`<option value="${v.media_id}" selected>Saved ID · ${v.media_id}</option>`
+            : html``}
+        </select>
+        <p class="muted">
+          Leave this on <b>All posts and reels</b> unless you want one reel only. A reel’s ID is a long number
+          from Instagram, not the share link (<code>instagram.com/reel/…</code>). If the list is empty, leave it
+          on all posts — that still covers reels.
+        </p>
+      </fieldset>
+
+      <fieldset class="group">
+        <legend>Which comments get a message</legend>
+        <label for="keywords">Keywords</label>
+        <textarea id="keywords" name="keywords" required placeholder="guide&#10;freebie">${v.keywords}</textarea>
+        <p class="muted">
+          One per line. A comment with any of these gets your message. Capitals, accents, emoji and
+          punctuation don’t matter, so “GUIDE!!” counts as “guide”. Each keyword needs at least 3 letters.
+        </p>
+        <fieldset class="choices">
+          <legend>How to look for them</legend>
+          <label class="choice">
+            <input type="radio" name="match_mode" value="word" ${contains ? '' : 'checked'} />
+            <span>
+              <b>${MATCH_MODE_WORDS.word}</b> (recommended)
+              <span class="muted">“guide” matches “Guide please!” but not “guides” or “guidelines”.</span>
+            </span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="match_mode" value="contains" ${contains ? 'checked' : ''} />
+            <span>
+              <b>${MATCH_MODE_WORDS.contains}</b>
+              <span class="muted">Contains also catches #launch2026, but “art” would match “start”.</span>
+            </span>
+          </label>
+        </fieldset>
+      </fieldset>
+
+      <fieldset class="group">
+        <legend>What to send</legend>
+        <label for="dm_text">Private message</label>
+        <textarea id="dm_text" name="dm_text" required maxlength="${String(DM_TEXT_MAX)}">${v.dm_text}</textarea>
+        <p class="muted">
+          Up to 1,000 characters. Instagram allows one private message per comment, so put everything they
+          need in this one, link included.
+        </p>
+        <label for="public_reply_text">Public reply under their comment (optional)</label>
+        <textarea id="public_reply_text" name="public_reply_text">${v.public_reply_text}</textarea>
+        <p class="muted">
+          Everyone reading the comments sees this, for example “Sent you a DM!”. Leave it blank to reply
+          privately only. If the private message fails, the public reply is not posted either.
+        </p>
+      </fieldset>
+
       <div class="row"><button type="submit">Save rule</button></div>
     </form>
   `;
@@ -631,7 +705,12 @@ adminRoutes.get('/rules', async (c) => {
                     return html`<tr>
                       <td>${r.label}</td>
                       <td>@${accountMap.get(r.ig_user_id) ?? r.ig_user_id}</td>
-                      <td>${kws}</td>
+                      <td>
+                        ${kws}
+                        ${r.match_mode === 'contains'
+                          ? html`<div class="muted">${MATCH_MODE_WORDS.contains}</div>`
+                          : html``}
+                      </td>
                       <td>${r.active ? 'Yes' : 'Paused'}</td>
                       <td class="actions">
                         <a href="${base}/rules/${String(r.id)}/edit">Edit</a>
@@ -674,14 +753,7 @@ adminRoutes.get('/rules/new', async (c) => {
         csrf: c.get('session').csrf,
         accounts,
         action: `${base}/rules`,
-        values: {
-          ig_user_id: accounts[0]!.ig_user_id,
-          label: '',
-          keywords: '',
-          media_id: '',
-          dm_text: '',
-          public_reply_text: '',
-        },
+        values: { ...formValuesFromPost({}), ig_user_id: accounts[0]!.ig_user_id },
         posts: await recentMediaOptions(c.env),
       })}`,
     }),
@@ -698,9 +770,14 @@ function readRuleFields(form: Record<string, string>) {
   const ig = (form.ig_user_id ?? '').trim();
   const media = (form.media_id ?? '').trim();
   const pub = (form.public_reply_text ?? '').replace(/\r\n/g, '\n').trim();
+  // A form from before match modes existed sends no choice; that rule matched whole words.
+  const matchMode = form.match_mode ?? 'word';
   if (!label) return { error: 'Give this rule a name.' };
   if (!ig) return { error: 'Pick an Instagram account.' };
   if (!parsed.ok) return { error: parsed.error };
+  if (!isMatchMode(matchMode)) {
+    return { error: 'Choose how to look for keywords: whole words only, or anywhere in the comment.' };
+  }
   if (!dm) return { error: 'Write the private message to send.' };
   if (dm.length > DM_TEXT_MAX) {
     return {
@@ -718,6 +795,7 @@ function readRuleFields(form: Record<string, string>) {
       ig_user_id: ig,
       label,
       keywords: JSON.stringify(parsed.keywords),
+      match_mode: matchMode,
       media_id: media || null,
       dm_text: dm,
       public_reply_text: pub || null,
@@ -730,7 +808,6 @@ adminRoutes.post('/rules', async (c) => {
   const base = c.get('adminBase');
   if ('error' in fields) {
     const accounts = await listAccounts(c.env.DB);
-    const f = formOf(c);
     return c.html(
       layout({
         title: 'New rule',
@@ -741,14 +818,7 @@ adminRoutes.post('/rules', async (c) => {
           csrf: c.get('session').csrf,
           accounts,
           action: `${base}/rules`,
-          values: {
-            ig_user_id: f.ig_user_id ?? '',
-            label: f.label ?? '',
-            keywords: f.keywords ?? '',
-            media_id: f.media_id ?? '',
-            dm_text: f.dm_text ?? '',
-            public_reply_text: f.public_reply_text ?? '',
-          },
+          values: formValuesFromPost(formOf(c)),
           posts: await recentMediaOptions(c.env),
           error: fields.error,
         })}`,
@@ -776,14 +846,7 @@ adminRoutes.get('/rules/:id/edit', async (c) => {
         csrf: c.get('session').csrf,
         accounts,
         action: `${base}/rules/${String(rule.id)}`,
-        values: {
-          ig_user_id: rule.ig_user_id,
-          label: rule.label,
-          keywords: parseKeywords(rule.keywords).join('\n'),
-          media_id: rule.media_id ?? '',
-          dm_text: rule.dm_text,
-          public_reply_text: rule.public_reply_text ?? '',
-        },
+        values: formValuesFromRule(rule),
         posts: await recentMediaOptions(c.env),
       })}`,
     }),
@@ -798,7 +861,6 @@ adminRoutes.post('/rules/:id', async (c) => {
   const base = c.get('adminBase');
   if ('error' in fields) {
     const accounts = await listAccounts(c.env.DB);
-    const f = formOf(c);
     return c.html(
       layout({
         title: 'Edit rule',
@@ -809,14 +871,7 @@ adminRoutes.post('/rules/:id', async (c) => {
           csrf: c.get('session').csrf,
           accounts,
           action: `${base}/rules/${String(id)}`,
-          values: {
-            ig_user_id: f.ig_user_id ?? '',
-            label: f.label ?? '',
-            keywords: f.keywords ?? '',
-            media_id: f.media_id ?? '',
-            dm_text: f.dm_text ?? '',
-            public_reply_text: f.public_reply_text ?? '',
-          },
+          values: formValuesFromPost(formOf(c)),
           posts: await recentMediaOptions(c.env),
           error: fields.error,
         })}`,
@@ -916,6 +971,9 @@ adminRoutes.post('/test', async (c) => {
   const media = form.media_id?.trim() || undefined;
   const match = await chooseRule(c.env.DB, ig, text, media);
   const base = c.get('adminBase');
+  // Shown either way: when a test does not match, the cleaned-up text is
+  // usually the explanation (the hashtag symbol is gone, the accent folded).
+  const readAs = html`<tr><th>Comment, as matched</th><td>${normalizeCommentText(text) || '(nothing left)'}</td></tr>`;
   return c.html(
     layout({
       title: 'Test',
@@ -926,15 +984,27 @@ adminRoutes.post('/test', async (c) => {
         ${match
           ? html`
               <div class="ok">
-                This would match the rule <b>${match.label}</b>.
+                This would match the rule <b>${match.rule.label}</b>.
               </div>
+              <table>
+                <tr><th>Keyword found</th><td>${match.keyword}</td></tr>
+                <tr><th>Matching</th><td>${MATCH_MODE_WORDS[match.rule.match_mode]}</td></tr>
+                ${readAs}
+              </table>
               <h2>Private message that would be sent</h2>
-              <p>${match.dm_text}</p>
-              ${match.public_reply_text
-                ? html`<h2>Public reply that would be posted</h2><p>${match.public_reply_text}</p>`
+              <p>${match.rule.dm_text}</p>
+              ${match.rule.public_reply_text
+                ? html`<h2>Public reply that would be posted</h2><p>${match.rule.public_reply_text}</p>`
                 : html`<p class="muted">No public reply for this rule.</p>`}
             `
-          : html`<p>No rule would match this comment. Nothing would be sent.</p>`}
+          : html`
+              <p>No rule would match this comment. Nothing would be sent.</p>
+              <table>${readAs}</table>
+              <p class="muted">
+                Rules set to <b>${MATCH_MODE_WORDS.word}</b> skip keywords inside longer words and hashtags: “guide” does
+                not match “guides” or “#guide2026”. Paused rules are not tested.
+              </p>
+            `}
         <p><a href="${base}/test">Test another</a></p>
       `,
     }),

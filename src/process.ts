@@ -10,9 +10,9 @@ import {
   updateSent,
 } from './db.ts';
 import { isSelfComment } from './guard.ts';
-import { findMatchingRule } from './match.ts';
+import { type RuleMatch, matchComment } from './match.ts';
 import { type MetaCallResult, sendPrivateReply, sendPublicReply } from './meta.ts';
-import type { Env, Rule } from './types.ts';
+import type { Env } from './types.ts';
 
 type CommentValue = {
   id?: string | number;
@@ -107,8 +107,8 @@ export async function chooseRule(
   igUserId: string,
   text: string,
   mediaId: string | undefined,
-): Promise<Rule | null> {
-  return findMatchingRule(await listActiveRules(db, igUserId), text, mediaId);
+): Promise<RuleMatch | null> {
+  return matchComment(await listActiveRules(db, igUserId), text, mediaId);
 }
 
 /**
@@ -174,7 +174,7 @@ export async function processComment(
   });
   if (!claimed) return;
 
-  const rule = await chooseRule(env.DB, account.ig_user_id, text, mediaId);
+  const rule = (await chooseRule(env.DB, account.ig_user_id, text, mediaId))?.rule;
   if (!rule) {
     await updateSent(env.DB, commentId, {
       rule_id: null,

@@ -147,8 +147,13 @@ logged as skipped with the reason.
 lights up. This sends nothing to anyone.
 
 Matching ignores case, emoji, punctuation, and accents on Latin letters, and
-matches whole words — `guide` matches `Guide!` and `guide 🙏` but not `guides`,
-and `cafe` matches `café`.
+by default matches whole words — `guide` matches `Guide!` and `guide 🙏` but not
+`guides` or `#guide2026`, and `cafe` matches `café`. The Test page shows the
+comment as it was matched, with all of that stripped out.
+
+If the keyword sits inside a hashtag or a longer word, edit the rule and choose
+**Anywhere in the comment** under "How to look for them". That catches
+`#launch2026` for `launch`, at the cost of `art` also matching `start`.
 
 > [!NOTE]
 > Keywords work in any script, including Cyrillic, Arabic, Chinese and Japanese.
@@ -162,7 +167,10 @@ and `cafe` matches `café`.
 ### 8. The keyword is too short
 
 Keywords under 3 characters are rejected when you save the rule, because they
-match inside other words — `AI` would fire on "again" and "email".
+match inside other words — `AI` would fire on "again" and "email". The count is
+taken after emoji and punctuation are dropped, so `AI!!` is too short as well,
+and a keyword that is only emoji or punctuation (`🔥🔥🔥`) is refused because it
+could never match anything.
 
 ---
 

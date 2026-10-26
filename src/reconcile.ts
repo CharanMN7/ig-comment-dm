@@ -1,7 +1,7 @@
 import { COMMENT_MAX_AGE_SECONDS, decryptAesGcm, nowSeconds } from './crypto.ts';
 import { countSentByComment, listAccounts, listActiveRules, systemSet } from './db.ts';
 import { isSelfComment } from './guard.ts';
-import { findMatchingRule } from './match.ts';
+import { matchComment } from './match.ts';
 import { listMediaComments, listRecentMedia } from './meta.ts';
 import { processComment } from './process.ts';
 import type { Env } from './types.ts';
@@ -74,7 +74,7 @@ export async function reconcileComments(env: Env): Promise<void> {
         const ts = commentUnix(comment.timestamp);
         if (ts != null && (ts < since || now - ts > COMMENT_MAX_AGE_SECONDS)) continue;
         if (isSelfComment(comment.from?.id, account.ig_user_id)) continue;
-        if (!findMatchingRule(rules, comment.text, mediaId)) continue;
+        if (!matchComment(rules, comment.text, mediaId)) continue;
         if ((await countSentByComment(env.DB, comment.id)) > 0) continue;
         try {
           await processComment(env, account.ig_user_id, ts, {

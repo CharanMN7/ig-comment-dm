@@ -15,10 +15,13 @@ import { isSelfComment } from '../src/guard.ts';
 import { parseWebhookPayload } from '../src/process.ts';
 import {
   KEYWORD_CACHE_MAX,
+  KEYWORD_TOO_SHORT_MESSAGE,
   compileKeyword,
   escapeRegex,
-  findMatchingRule,
+  isMatchMode,
   keywordMatches,
+  keywordProblem,
+  matchComment,
   normalizeCommentText,
 } from '../src/match.ts';
 import type { Rule } from '../src/types.ts';
@@ -26,6 +29,7 @@ import type { Rule } from '../src/types.ts';
 function rule(partial: Partial<Rule> & Pick<Rule, 'id' | 'keywords' | 'label'>): Rule {
   return {
     ig_user_id: 'acct',
+    match_mode: 'word',
     media_id: null,
     dm_text: 'hello',
     public_reply_text: null,
@@ -240,6 +244,16 @@ describe('compiled keyword cache', () => {
     assert.equal(keywordMatches(normalizeCommentText('the guide'), 'guide'), true);
   });
 
+  it('caches contains mode separately, with its normalised text and no pattern', () => {
+    const contains = compileKeyword('#Launch', 'contains');
+    assert.deepEqual(contains, { normalized: 'launch', re: null });
+    assert.equal(compileKeyword('#Launch', 'contains'), contains);
+    keywordMatches('launch2026', '#Launch', 'contains');
+    assert.equal(compileKeyword('#Launch', 'contains'), contains);
+    assert.notEqual(compileKeyword('#Launch', 'word'), contains);
+    assert.ok(compileKeyword('#Launch', 'word').re);
+  });
+
   it('caches a keyword that normalises to nothing as one that never matches', () => {
     assert.deepEqual(compileKeyword('🙏!!'), { normalized: '', re: null });
     assert.equal(keywordMatches('anything at all', '🙏!!'), false);
@@ -254,7 +268,93 @@ describe('compiled keyword cache', () => {
   });
 });
 
-describe('findMatchingRule', () => {
+describe('contains mode', () => {
+  const contains = (comment: string, keyword: string) =>
+    keywordMatches(normalizeCommentText(comment), keyword, 'contains');
+
+  it('finds a keyword inside a hashtag or a longer word', () => {
+    assert.equal(contains('So ready for #launch2026!', 'launch'), true);
+    assert.equal(contains('Send me the guides', 'guide'), true);
+    assert.equal(contains('#LAUNCHDAY', 'launch'), true);
+  });
+
+  it('is the trade-off the form warns about', () => {
+    assert.equal(contains('where do I start', 'art'), true);
+  });
+
+  it('leaves whole-word mode as strict as before', () => {
+    assert.equal(keywordMatches(normalizeCommentText('So ready for #launch2026!'), 'launch', 'word'), false);
+    assert.equal(keywordMatches(normalizeCommentText('Send me the guides'), 'guide', 'word'), false);
+    assert.equal(keywordMatches(normalizeCommentText('Send me the guides'), 'guide'), false);
+    assert.equal(keywordMatches(normalizeCommentText('Send me the guide'), 'guide', 'word'), true);
+  });
+
+  it('normalises the keyword and the comment the same way', () => {
+    assert.equal(contains('PREÇOS por favor', 'preco'), true);
+    assert.equal(contains('in der Straßenbahn', 'strasse'), true);
+    assert.equal(contains('free-guide-pack', 'Free Guide'), true);
+  });
+
+  it('matches inside longer words in non-Latin scripts too', () => {
+    // Whole-word mode refuses each of these; contains mode is the opt-in.
+    const pairs: Array<[string, string]> = [
+      ['гид', 'нужен гидроцикл'],
+      ['가이드', '가이드북 주세요'],
+      ['الدليل', '#الدليل2026'],
+      ['οδηγ', 'θέλω τον οδηγό'],
+    ];
+    for (const [keyword, comment] of pairs) {
+      assert.equal(contains(comment, keyword), true, `${keyword} in ${comment}`);
+      assert.equal(keywordMatches(normalizeCommentText(comment), keyword, 'word'), false, `${keyword} as a word in ${comment}`);
+    }
+    assert.equal(contains('请发指南给我', '指南'), true);
+  });
+
+  it('does not match across a space the keyword lacks', () => {
+    assert.equal(contains('free guide', 'freeguide'), false);
+  });
+
+  it('never matches a keyword that normalises to nothing', () => {
+    assert.equal(contains('anything 🙏 at all', '🙏!!'), false);
+  });
+});
+
+describe('isMatchMode', () => {
+  it('accepts the two modes and nothing else', () => {
+    assert.equal(isMatchMode('word'), true);
+    assert.equal(isMatchMode('contains'), true);
+    for (const value of ['', 'Word', 'regex', 'partial']) assert.equal(isMatchMode(value), false, value);
+  });
+});
+
+describe('keywordProblem', () => {
+  it('accepts a keyword with at least 3 characters once normalised', () => {
+    for (const keyword of ['guide', 'Free guide', 'гид', 'ガイド', 'été']) {
+      assert.equal(keywordProblem(keyword), null, keyword);
+    }
+  });
+
+  it('measures the normalised keyword, not what was typed', () => {
+    assert.equal(keywordProblem('AI'), KEYWORD_TOO_SHORT_MESSAGE);
+    assert.equal(keywordProblem('AI!!'), KEYWORD_TOO_SHORT_MESSAGE);
+    assert.equal(keywordProblem('#ai'), KEYWORD_TOO_SHORT_MESSAGE);
+    assert.equal(keywordProblem('c++'), KEYWORD_TOO_SHORT_MESSAGE);
+    assert.equal(keywordProblem('ai🔥'), KEYWORD_TOO_SHORT_MESSAGE);
+  });
+
+  it('refuses a keyword with no letter or number, which could never match', () => {
+    for (const keyword of ['🔥🔥🔥', '!!!', '#️⃣#️⃣#️⃣', '...', '\u0301\u0301\u0301']) {
+      assert.match(keywordProblem(keyword) ?? '', /has no letters or numbers/, JSON.stringify(keyword));
+    }
+  });
+
+  it('counts digits as characters', () => {
+    assert.equal(keywordProblem('2026'), null);
+    assert.equal(keywordProblem('#42'), KEYWORD_TOO_SHORT_MESSAGE);
+  });
+});
+
+describe('matchComment', () => {
   const global = rule({ id: 1, label: 'global', keywords: JSON.stringify(['guide']), dm_text: 'global-dm' });
   const scoped = rule({
     id: 2,
@@ -265,25 +365,38 @@ describe('findMatchingRule', () => {
   });
 
   it('prefers a media-scoped rule over a global rule', () => {
-    const hit = findMatchingRule([global, scoped], 'guide please', 'MEDIA1');
-    assert.equal(hit?.id, 2);
-    assert.equal(hit?.dm_text, 'scoped-dm');
+    const hit = matchComment([global, scoped], 'guide please', 'MEDIA1');
+    assert.equal(hit?.rule.id, 2);
+    assert.equal(hit?.rule.dm_text, 'scoped-dm');
   });
 
   it('falls back to a global rule on other posts', () => {
-    const hit = findMatchingRule([global, scoped], 'guide please', 'OTHER');
-    assert.equal(hit?.id, 1);
+    const hit = matchComment([global, scoped], 'guide please', 'OTHER');
+    assert.equal(hit?.rule.id, 1);
   });
 
   it('returns the first matching rule and stops', () => {
     const a = rule({ id: 10, label: 'a', keywords: JSON.stringify(['hello']) });
     const b = rule({ id: 11, label: 'b', keywords: JSON.stringify(['hello']) });
-    const hit = findMatchingRule([a, b], 'hello there', undefined);
-    assert.equal(hit?.id, 10);
+    const hit = matchComment([a, b], 'hello there', undefined);
+    assert.equal(hit?.rule.id, 10);
   });
 
   it('returns null when nothing matches', () => {
-    assert.equal(findMatchingRule([global], 'nice photo', undefined), null);
+    assert.equal(matchComment([global], 'nice photo', undefined), null);
+  });
+
+  it('names the keyword that matched, as the operator typed it', () => {
+    const r = rule({ id: 3, label: 'launch', keywords: JSON.stringify(['Guide', 'LAUNCH']), match_mode: 'contains' });
+    assert.deepEqual(matchComment([r], 'so ready for #launch2026', undefined), { rule: r, keyword: 'LAUNCH' });
+  });
+
+  it('uses each rule\'s own match mode', () => {
+    const word = rule({ id: 4, label: 'word', keywords: JSON.stringify(['launch']) });
+    const contains = rule({ id: 5, label: 'contains', keywords: JSON.stringify(['launch']), match_mode: 'contains' });
+    assert.equal(matchComment([word, contains], '#launch2026', undefined)?.rule.id, 5);
+    assert.equal(matchComment([word, contains], 'launch day', undefined)?.rule.id, 4);
+    assert.equal(matchComment([word], '#launch2026', undefined), null);
   });
 });
 
