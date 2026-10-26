@@ -14,6 +14,52 @@ export async function systemSet(db: D1Database, key: string, value: string): Pro
     .run();
 }
 
+export type HealthSnapshot = {
+  lastCronOkAt: number | null;
+  lastPollOkAt: number | null;
+  firstSeenAt: number | null;
+  activeAccounts: number;
+  needsReconnect: number;
+};
+
+export const HEALTH_FIRST_SEEN_KEY = 'health_first_seen_at';
+
+/**
+ * Everything `/health` reports, in one statement, so a monitor polling every
+ * 30 seconds costs one D1 read. `needs_reconnect` counts what the admin
+ * banner counts: flagged by the nightly job, or already expired.
+ */
+export async function healthSnapshot(db: D1Database, now: number): Promise<HealthSnapshot> {
+  const row = await db
+    .prepare(
+      `SELECT
+         (SELECT value FROM system WHERE key = 'last_cron_ok_at') AS last_cron_ok_at,
+         (SELECT value FROM system WHERE key = 'last_poll_ok_at') AS last_poll_ok_at,
+         (SELECT value FROM system WHERE key = ?) AS first_seen_at,
+         (SELECT COUNT(*) FROM accounts WHERE active = 1) AS active,
+         (SELECT COUNT(*) FROM accounts WHERE needs_reconnect = 1 OR token_expires_at <= ?) AS needs_reconnect`,
+    )
+    .bind(HEALTH_FIRST_SEEN_KEY, now)
+    .first<{
+      last_cron_ok_at: string | null;
+      last_poll_ok_at: string | null;
+      first_seen_at: string | null;
+      active: number;
+      needs_reconnect: number;
+    }>();
+  const int = (value: string | null | undefined): number | null => {
+    const n = Number.parseInt(value ?? '', 10);
+    return Number.isFinite(n) ? n : null;
+  };
+  return {
+    lastCronOkAt: int(row?.last_cron_ok_at),
+    lastPollOkAt: int(row?.last_poll_ok_at),
+    firstSeenAt: int(row?.first_seen_at),
+    activeAccounts: row?.active ?? 0,
+    needsReconnect: row?.needs_reconnect ?? 0,
+  };
+}
+
 export async function getAccount(db: D1Database, igUserId: string): Promise<Account | null> {
   return await db
     .prepare(
