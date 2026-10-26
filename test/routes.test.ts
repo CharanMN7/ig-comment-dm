@@ -23,7 +23,7 @@ describe('public routes', () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain(heading);
     expect(res.headers.get('Content-Security-Policy')).toBe(
-      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "default-src 'none'; style-src 'unsafe-inline'; manifest-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
     );
     expect(res.headers.get('Referrer-Policy')).toBe('no-referrer');
     expect(res.headers.get('X-Frame-Options')).toBe('DENY');

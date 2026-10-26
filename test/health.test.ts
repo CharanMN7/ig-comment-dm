@@ -92,7 +92,7 @@ describe('GET /health', () => {
     expect(res.headers.get('Cache-Control')).toBe('no-store');
     expect(res.headers.get('X-Robots-Tag')).toBe('noindex');
     expect(res.headers.get('Content-Security-Policy')).toBe(
-      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "default-src 'none'; style-src 'unsafe-inline'; manifest-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
     );
     expect(res.headers.get('Referrer-Policy')).toBe('no-referrer');
     expect(res.headers.get('X-Frame-Options')).toBe('DENY');
