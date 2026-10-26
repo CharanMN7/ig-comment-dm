@@ -1,12 +1,14 @@
 # Docs
 
-| File | What it is |
-|---|---|
-| [setup.md](setup.md) | The full manual walkthrough — every Meta dashboard screen and every trap in it. `npm run setup` automates the parts that can be automated; this covers the rest. |
-| [troubleshooting.md](troubleshooting.md) | Symptom-first. Start here when something does not work. |
-| [architecture.md](architecture.md) | Stack, Meta constraints, routes, processing pipeline, cron, crypto, admin, selftest, and intentional deviations. |
-| [phase-1.md](phase-1.md) | The original Phase 1 dump: schema, secrets, bindings, CLI contract. Kept verbatim as a historical record. |
+The docs live at **[charanmn7.github.io/ig-comment-dm/docs](https://charanmn7.github.io/ig-comment-dm/docs/)**. Their source is in
+[`site/content/docs/`](../site/content/docs/).
 
-The [README](../README.md) is the front door. [CONTRIBUTING.md](../CONTRIBUTING.md)
-covers development, and [SECURITY.md](../SECURITY.md) covers the threat model and
-private vulnerability reporting.
+| Old file | Now |
+|---|---|
+| [setup.md](setup.md) | [Self-setup guide](https://charanmn7.github.io/ig-comment-dm/docs/setup/) and [agent setup guide](https://charanmn7.github.io/ig-comment-dm/docs/agent-setup/) |
+| [troubleshooting.md](troubleshooting.md) | [Troubleshooting](https://charanmn7.github.io/ig-comment-dm/docs/troubleshooting/) |
+| [architecture.md](architecture.md) | [Architecture](https://charanmn7.github.io/ig-comment-dm/docs/architecture/) |
+| [phase-1.md](phase-1.md) | Git history, plus the [Architecture reference](https://charanmn7.github.io/ig-comment-dm/docs/architecture/#reference) |
+
+[CONTRIBUTING.md](../CONTRIBUTING.md) keeps the rules for pull requests, and [SECURITY.md](../SECURITY.md) covers
+the threat model and private vulnerability reporting.

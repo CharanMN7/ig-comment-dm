@@ -1,0 +1,90 @@
+---
+description: Have Claude Code run the terminal side and Claude in Chrome click through Meta's dashboard. You still log in, approve each permission and handle every secret yourself.
+---
+
+Most of the [self-setup guide](/setup) is typing commands and clicking through Meta's developer dashboard. Claude Code can do the first part in your terminal, and with the Claude in Chrome extension it can do most of the second in your browser. You stay at the keyboard for the parts that are yours: logins, approvals, and every secret.
+
+It's for people who'd rather approve each step than hunt for the right screen in Meta's dashboard.
+
+## What you need
+
+- [Claude Code](https://code.claude.com/docs/en/quickstart), signed in with `/login` on a Pro, Max, Team or Enterprise plan. Chrome integration stays off if you sign in with an API key.
+- The [Claude in Chrome extension](https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn), version 1.0.36 or later, in Chrome, Edge or another Chromium browser. It doesn't work from WSL.
+- Everything in [Before you start](/setup#before-you-start): an Instagram professional account, free Cloudflare and Meta for Developers accounts, and Node.js 20 or newer.
+
+Start Claude Code with the browser connected:
+
+```bash
+claude --chrome
+```
+
+Run `/chrome` to check it. It should say **Status: Enabled** and **Extension: Installed**. Claude opens its own tabs in a tab group and uses your browser's logins, so sign in to Cloudflare and Facebook in that browser first, or wait for it to ask.
+
+## Who does what
+
+| Step | Claude | You |
+|---|---|---|
+| Clone the repo, `npm install` | Runs it | |
+| Log in to Cloudflare, Facebook and Instagram, 2FA, CAPTCHAs | Pauses and asks you | Log in |
+| Part 1: create the Meta app, add Instagram | Clicks through it | |
+| Copy the two app secrets | Shows you where they are, never clicks **Show** | Reveal and paste them into `npm run setup` |
+| Part 2: add Instagram Testers | Fills in the usernames | Approve the role change |
+| Accept the tester invite on instagram.com | | Accept it, logged in as that account |
+| `npx wrangler login` and `npm run setup` | | Run them in your own terminal and click **Allow** for Cloudflare |
+| Part 4: redirect URIs, webhook URL, `comments` field | Fills them in from your Worker URL | Paste the verify token yourself |
+| Webhook subscription toggle per account | Flips it | Confirm if Meta asks for a token, and leave the token alone |
+| Part 5: legal URLs | Fills them in | Click **Publish** |
+| Part 6: connect an account, write a rule | | Open your admin URL yourself |
+
+Your Worker URL (`https://ig-comment-dm.YOURNAME.workers.dev`) is public, so it's fine to give it to Claude. Your admin URL is not: it contains `ADMIN_URL_SECRET`. Open the admin panel yourself rather than letting Claude read it from a tab.
+
+## The prompt
+
+Paste this into Claude Code and fill in your Instagram usernames.
+
+```text
+Set up ig-comment-dm for me: a self-hosted Instagram comment-to-DM Worker on my own Cloudflare account.
+
+Use the terminal for the repo and Chrome for Meta's developer dashboard. The manual guide is site/content/docs/setup.mdx in the repo. Follow it, and stop and ask me whenever a screen doesn't match it.
+
+1. Check that Node.js is version 20 or newer. Clone https://github.com/CharanMN7/ig-comment-dm.git and run npm install.
+2. In Chrome, open https://developers.facebook.com/apps/ and do Part 1: create the app and add the Instagram product. Show me where the Instagram App ID, the Instagram App Secret and the Facebook App Secret are, then wait.
+3. Do Part 2 for these Instagram usernames: <your usernames>. Then remind me to accept each tester invite myself.
+4. Tell me to run "npx wrangler login" and then "npm run setup" in my own terminal, outside this chat. Wait until I give you my Worker URL.
+5. Do Part 4 with that Worker URL: the redirect URL popup, both OAuth redirect URIs, the webhook callback URL, the comments field with Include values on, and the Webhook subscription toggle for each account. Leave the Verify token field empty for me.
+6. Do Part 5 up to the Publish button, then stop and let me click it.
+7. Run npm run doctor and tell me what it reports.
+
+Rules:
+- Never ask me for a secret, and never type, read out or repeat one. That covers both app secrets, the webhook verify token, my admin URL and any access token. Never click Show next to a secret.
+- Never click Generate token unless Meta refuses to flip the Webhook subscription switch without it, and never copy the token it shows.
+- Ask me before anything that grants access, changes roles or publishes the app.
+- When you reach a login page, a 2FA prompt or a CAPTCHA, stop and let me handle it.
+- Use Instagram's own settings pages, never Facebook Login → Valid OAuth Redirect URIs.
+```
+
+`npm run doctor` is safe to run through Claude: it reads secret names, never values, and it checks the database and the cron jobs.
+
+## Approving actions
+
+Depending on your permission mode, Claude Code asks before a browser action with a prompt that starts **Claude in Chrome wants to**. The prompt offers to allow every action on that site for the rest of the session.
+
+<Frame caption="Claude Code asking before it acts on developers.facebook.com.">
+  <div className="shot" data-shot="agent-15-chrome-permission.png">Screenshot coming</div>
+</Frame>
+
+Allowing developers.facebook.com for the session saves a lot of prompts in Parts 1 and 4. Approve instagram.com and dash.cloudflare.com one action at a time: actions there touch your real account.
+
+## What the agent can't or shouldn't do
+
+**Handle your secrets.** Anything Claude reads goes into the conversation. The app secrets go from Meta's page straight into the `npm run setup` prompt in your own terminal; the verify token goes from that terminal into Meta's Verify token field. If a secret does end up in the chat, rotate it: [Rotating a secret](/security#rotating-a-secret) has the commands, and for an app secret, reset it in Meta's dashboard first.
+
+**Run `npm run setup` for you.** It reads the Meta values from interactive prompts, and its last screen prints your admin URL and verify token. Both belong in your terminal, not in a transcript.
+
+**Grant permissions on your behalf.** Accepting a tester invite gives the app access to that Instagram account. Clicking **Allow** on Cloudflare's login page gives `wrangler` access to your Cloudflare account. **Publish** makes the app Live. Each of these is your click.
+
+**Get past logins.** When Claude in Chrome reaches a login page or a CAPTCHA, it pauses and asks you to handle it.
+
+**Keep up with Meta's dashboard by guessing.** Meta renames screens often. The guide names the screens as they were when it was written; if Claude can't find one, it should stop and ask you rather than use a similarly named Facebook Login page, which is a different product.
+
+When it's done, carry on from [Part 6](/setup#6-connect-and-send-your-first-dm): connect your account and write a rule, in your own browser tab.

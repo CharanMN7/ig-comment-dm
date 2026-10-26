@@ -190,7 +190,7 @@ Your secrets live in Cloudflare, so updating never touches them.
 
 Open your admin URL (printed by `npm run setup` — bookmark it) and create a password on the first visit. Then **Accounts → Connect a new account**.
 
-You can connect several Instagram accounts to one deployment. Each one needs to be an [Instagram Tester](docs/setup.md#part-2--instagram-tester-invites) on your Meta app.
+You can connect several Instagram accounts to one deployment. Each one needs to be an [Instagram Tester](https://charanmn7.github.io/ig-comment-dm/docs/setup/#2-invite-each-instagram-account-as-a-tester) on your Meta app.
 
 ### Write a rule
 
@@ -238,7 +238,7 @@ The red banners only help if someone opens the panel. Point any uptime monitor a
 https://ig-comment-dm.YOURNAME.workers.dev/health
 ```
 
-It answers `200` while the database responds and both scheduled jobs are running, and `503` when either has stalled, so you hear about a dead nightly refresh before tokens start expiring. It needs no login and shows no usernames, ids or secrets: only account counts and the time each job last ran. [What a 503 means](docs/troubleshooting.md#health-answers-503).
+It answers `200` while the database responds and both scheduled jobs are running, and `503` when either has stalled, so you hear about a dead nightly refresh before tokens start expiring. It needs no login and shows no usernames, ids or secrets: only account counts and the time each job last ran. [What a 503 means](https://charanmn7.github.io/ig-comment-dm/docs/troubleshooting/#health-answers-503).
 
 ---
 
