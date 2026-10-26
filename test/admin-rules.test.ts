@@ -95,6 +95,9 @@ describe('creating a rule from the admin form', () => {
     ['a keyword under 3 characters', { keywords: 'guide\nAI' }, KEYWORD_TOO_SHORT_MESSAGE],
     ['a keyword under 3 characters once punctuation goes', { keywords: 'guide\nAI!!' }, KEYWORD_TOO_SHORT_MESSAGE],
     ['a keyword under 3 characters in contains mode', { keywords: 'launch\nAI', match_mode: 'contains' }, KEYWORD_TOO_SHORT_MESSAGE],
+    ['a one-character Chinese keyword', { keywords: 'guide\n指' }, KEYWORD_TOO_SHORT_MESSAGE],
+    ['a two-character keyword mixing Latin and Chinese', { keywords: 'guide\na指' }, KEYWORD_TOO_SHORT_MESSAGE],
+    ['a two-code-point Thai keyword', { keywords: 'guide\nดี' }, KEYWORD_TOO_SHORT_MESSAGE],
     ['a keyword with no letters or numbers', { keywords: 'guide\n🔥🔥🔥' }, '“🔥🔥🔥” has no letters or numbers.'],
     ['an unknown match mode', { match_mode: 'regex' }, 'Choose how to look for keywords'],
     ['an exclusion under 3 characters', { exclude_keywords: 'how much\nno' }, EXCLUSION_TOO_SHORT_MESSAGE],
@@ -182,6 +185,19 @@ describe('creating a rule from the admin form', () => {
     const res = await admin.submit(adminPath('/rules'), { ...validRule, dm_text: lines.join('\r\n') });
     expect(res.status).toBe(302);
     expect(await ruleRows()).toMatchObject([{ dm_text: lines.join('\n') }]);
+  });
+
+  it('saves a two-character Chinese keyword and DMs a comment that has it mid-sentence', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const res = await admin.submit(adminPath('/rules'), { ...validRule, keywords: '指南' });
+    expect(res.status).toBe(302);
+    expect(await ruleRows()).toMatchObject([{ keywords: '["指南"]', match_mode: 'word' }]);
+
+    await postWebhook(commentPayload({ text: '请发指南给我' }));
+
+    expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
+    expect(await sentRows()).toMatchObject([{ rule_id: 1, dm_status: 'ok' }]);
   });
 });
 

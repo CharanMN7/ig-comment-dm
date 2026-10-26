@@ -104,7 +104,7 @@ If Home says `Skipped: matched exclusion “…”`, the keyword did match, but 
 
 ### 8. The keyword is too short
 
-Keywords under 3 characters are rejected when you save the rule, because they match inside other words: `AI` would fire on "again" and "email". The count is taken after emoji and punctuation are dropped, so `AI!!` is too short as well, and a keyword that is only emoji or punctuation (`🔥🔥🔥`) is refused because it could never match anything.
+Keywords under 3 characters are rejected when you save the rule, because they match inside other words: `AI` would fire on "again" and "email". The count is taken after emoji and punctuation are dropped, so `AI!!` is too short as well, and a keyword that is only emoji or punctuation (`🔥🔥🔥`) is refused because it could never match anything. Chinese and Japanese need only 2 characters, so `指南` is fine and `指` is refused.
 
 ## "Did Instagram reach us?" is empty
 

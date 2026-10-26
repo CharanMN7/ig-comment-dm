@@ -381,6 +381,39 @@ describe('keywordProblem', () => {
     assert.equal(keywordProblem('2026'), null);
     assert.equal(keywordProblem('#42'), KEYWORD_TOO_SHORT_MESSAGE);
   });
+
+  it('accepts two characters in Chinese and Japanese', () => {
+    for (const keyword of ['指南', '链接', 'メモ', 'いい', '指南!!', '#指南']) {
+      assert.equal(keywordProblem(keyword), null, keyword);
+    }
+    assert.equal(keywordProblem('指南', EXCLUSION_TOO_SHORT_MESSAGE), null);
+  });
+
+  it('still refuses a single Chinese or Japanese character', () => {
+    for (const keyword of ['指', 'メ', '指!!', '指🔥']) {
+      assert.equal(keywordProblem(keyword), KEYWORD_TOO_SHORT_MESSAGE, keyword);
+    }
+    assert.equal(keywordProblem('不', EXCLUSION_TOO_SHORT_MESSAGE), EXCLUSION_TOO_SHORT_MESSAGE);
+  });
+
+  it('holds Thai and the other scripts whose marks are code points to 3, since 2 is often one syllable', () => {
+    // ดี ("good") is ด plus a vowel mark, and would fire inside สวัสดี ("hello").
+    for (const keyword of ['ดี', 'ลด', 'ก', 'ໄປ']) {
+      assert.equal(keywordProblem(keyword), KEYWORD_TOO_SHORT_MESSAGE, keyword);
+    }
+    for (const keyword of ['ฟรี', 'คู่มือ']) {
+      assert.equal(keywordProblem(keyword), null, keyword);
+    }
+  });
+
+  it('holds a keyword that mixes in any other script to 3 characters', () => {
+    for (const keyword of ['a指', '指1', '指ก', 'ai']) {
+      assert.equal(keywordProblem(keyword), KEYWORD_TOO_SHORT_MESSAGE, keyword);
+    }
+    for (const keyword of ['ai指', '指南a']) {
+      assert.equal(keywordProblem(keyword), null, keyword);
+    }
+  });
 });
 
 describe('matchComment', () => {
