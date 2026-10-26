@@ -202,8 +202,8 @@ You can connect several Instagram accounts to one deployment. Each one needs to 
 | **Keywords** | One per line. **At least 3 characters**, counted after emoji and punctuation are dropped — `AI` would fire on "again" and "email". |
 | **How to look for them** | **Whole words only** (the default): `guide` matches "Guide please!" but not "guides". **Anywhere in the comment**: also catches `#launch2026` and "guides", but `art` would match "start". |
 | **Exclusions** | Optional, one per line. A comment containing any of them is skipped by this rule even when a keyword matches: `how much`, `already have it`, `not interested`. |
-| **The DM** | Under 1,000 characters. Put everything they need here. |
-| **Public reply** | Optional. Shows under the comment, only once the DM has gone through. |
+| **The DM** | Under 1,000 characters. Put everything they need here. `{username}` puts in their Instagram name. |
+| **Public reply** | Optional. Shows under the comment, only once the DM has gone through. `{username}` works here too. |
 | **Which posts** | All posts and reels, or pick one from the dropdown. |
 | **Reply to every comment on this post** | For giveaways and waitlists. Everyone who comments on that one post gets the DM, no keyword needed, and the keyword fields disappear. It needs a specific post: on all posts it would message everyone who ever comments, so it is refused. |
 
@@ -267,6 +267,7 @@ Instagram's rules, not ours. Each of these is enforced by Meta and cost someone 
 
 - [x] Comment → one official Instagram private reply, end to end
 - [x] Optional public reply under the comment
+- [x] `{username}` placeholder in the DM and public reply
 - [x] Keyword rules with case, emoji, and punctuation normalisation, matched on word boundaries
 - [x] Per-rule choice of whole-word or anywhere-in-the-comment matching, for hashtag campaigns
 - [x] Per-rule exclusions, so "how much is the guide?" does not burn the one private reply
@@ -327,7 +328,6 @@ Everything below is [an open issue](https://github.com/CharanMN7/ig-comment-dm/i
 | [#26](https://github.com/CharanMN7/ig-comment-dm/issues/26) | **Follow gate** | Deliver the link only after they follow |
 | [#27](https://github.com/CharanMN7/ig-comment-dm/issues/27) | **Follow-up DM after a delay** | A second touch inside the 24-hour window |
 | [#29](https://github.com/CharanMN7/ig-comment-dm/issues/29) | **Reply to DMs and story replies** | The same keyword rules, triggered by inbound messages |
-| [#30](https://github.com/CharanMN7/ig-comment-dm/issues/30) | **`{username}` and `{link}` placeholders** | Personalised copy without a rule per person |
 | [#31](https://github.com/CharanMN7/ig-comment-dm/issues/31) | **Public reply variations** | Rotate replies so a comment section does not read like a bot |
 | [#33](https://github.com/CharanMN7/ig-comment-dm/issues/33) | **Bind a rule to the next reel you post** | Set the automation up before the content exists |
 | [#34](https://github.com/CharanMN7/ig-comment-dm/issues/34) | **Ad-comment to organic-post mapping** | Boosted posts report a different media id and silently miss |
@@ -388,9 +388,8 @@ Everything below is [an open issue](https://github.com/CharanMN7/ig-comment-dm/i
 </details>
 
 > [!TIP]
-> **New here?** These four are self-contained, need no Meta app to test, and have the approach written out in the issue:
+> **New here?** These three are self-contained, need no Meta app to test, and have the approach written out in the issue:
 > [#19 non-Latin keyword matching](https://github.com/CharanMN7/ig-comment-dm/issues/19) ·
-> [#30 `{username}` placeholders](https://github.com/CharanMN7/ig-comment-dm/issues/30) ·
 > [#50 dark mode](https://github.com/CharanMN7/ig-comment-dm/issues/50) ·
 > [#48 human-readable Meta errors](https://github.com/CharanMN7/ig-comment-dm/issues/48)
 

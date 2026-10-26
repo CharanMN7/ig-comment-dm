@@ -107,6 +107,19 @@ describe('creating a rule from the admin form', () => {
     ['no DM text', { dm_text: '   ' }, 'Write the private message to send.'],
     ['DM text over 1,000 characters', { dm_text: 'x'.repeat(1001) }, 'The private message must be 1,000 characters or fewer.'],
     ['a post link instead of an id', { media_id: 'https://www.instagram.com/reel/abc/' }, 'That looks like a link, not a post ID.'],
+    [
+      'DM text a long username could push past 1,000 characters',
+      { dm_text: `${'x'.repeat(981)}{username}` },
+      'The private message must be 1,000 characters or fewer. This one is 991, and each {username} can add up to 20 characters for a long name, so it could reach 1,011.',
+    ],
+    ['DM text that is only {username}', { dm_text: ' {username} ' }, 'The private message needs more than {username}.'],
+    ['a public reply over 1,000 characters', { public_reply_text: 'x'.repeat(1001) }, 'The public reply must be 1,000 characters or fewer. This one is 1,001.'],
+    [
+      'a public reply a long username could push past 1,000 characters',
+      { public_reply_text: `${'x'.repeat(971)}{username}{username}` },
+      'The public reply must be 1,000 characters or fewer. This one is 991, and each {username} can add up to 20 characters for a long name, so it could reach 1,031.',
+    ],
+    ['a public reply that is only {username}', { public_reply_text: '@{username}' }, 'The public reply needs more than {username}.'],
   ])('rejects a rule with %s and keeps what was typed', async (_, fields, message) => {
     const admin = await adminWithAccount();
     await admin.get(adminPath('/rules/new'));
@@ -132,6 +145,34 @@ describe('creating a rule from the admin form', () => {
     const res = await admin.submit(adminPath('/rules'), { ...validRule, dm_text: 'x'.repeat(1234) });
     expect(res.status).toBe(400);
     expect(res.text).toContain('The private message must be 1,000 characters or fewer. This one is 1,234.');
+  });
+
+  it('accepts text that fits 1,000 characters with the longest possible username', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const dm = `${'x'.repeat(970)}{username}`;
+    const reply = `${'y'.repeat(940)}{Username}{USERNAME}`;
+    const res = await admin.submit(adminPath('/rules'), { ...validRule, dm_text: dm, public_reply_text: reply });
+    expect(res.status).toBe(302);
+    expect(await ruleRows()).toMatchObject([{ dm_text: dm, public_reply_text: reply }]);
+  });
+
+  it('counts a line break as one character in the username allowance too', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    // 979 characters with LF, 988 with CRLF: only the LF count leaves room for a 30-character name.
+    const lines = Array.from({ length: 10 }, () => 'x'.repeat(96));
+    const res = await admin.submit(adminPath('/rules'), { ...validRule, dm_text: `${lines.join('\r\n')}{username}` });
+    expect(res.status).toBe(302);
+    expect(await ruleRows()).toMatchObject([{ dm_text: `${lines.join('\n')}{username}` }]);
+  });
+
+  it('documents {username} on the form and caps the public reply in the browser too', async () => {
+    const admin = await adminWithAccount();
+    const form = await admin.get(adminPath('/rules/new'));
+    expect(form.text).toContain('<code>{username}</code> puts in their Instagram name and counts as 30.');
+    expect(form.text).toContain('the only placeholder for now');
+    expect(form.text).toMatch(/<textarea id="public_reply_text" name="public_reply_text" maxlength="1000">/);
   });
 
   it('counts a line break as one character, as maxlength does, though the browser sends CRLF', async () => {
@@ -421,6 +462,26 @@ describe('the dry-run test page', () => {
     expect(page.text).toContain('Here you go');
     expect(page.text).toContain('Sent!');
     expect(meta.calls).toEqual([]);
+  });
+
+  it('fills in {username} with a sample name and says so', async () => {
+    const admin = await adminWithAccount();
+    await seedRule({ dmText: 'Hey {username}, here you go\n\nhttps://example.com/g', publicReply: 'Check your DMs @{username}' });
+    await admin.get(adminPath('/test'));
+    const page = await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'guide', media_id: '' });
+    expect(page.text).toContain('<p class="message">Hey sample_user, here you go\n\nhttps://example.com/g</p>');
+    expect(page.text).toContain('<p class="message">Check your DMs @sample_user</p>');
+    expect(page.text).toContain('<b>sample_user</b>, a sample name');
+    expect(page.text).not.toContain('{username}</p>');
+  });
+
+  it('does not mention a sample name when the rule has no {username}', async () => {
+    const admin = await adminWithAccount();
+    await seedRule({ dmText: 'Here you go' });
+    await admin.get(adminPath('/test'));
+    const page = await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'guide', media_id: '' });
+    expect(page.text).toContain('<p class="message">Here you go</p>');
+    expect(page.text).not.toContain('sample');
   });
 
   it('ignores paused rules', async () => {

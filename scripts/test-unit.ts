@@ -28,6 +28,13 @@ import {
   matchComment,
   normalizeCommentText,
 } from '../src/match.ts';
+import {
+  USERNAME_GROWTH,
+  cleanUsername,
+  countUsernameTokens,
+  fillPlaceholders,
+  worstCaseLength,
+} from '../src/placeholders.ts';
 import { MATCH_ALL_NEEDS_POST_MESSAGE, readRuleFields } from '../src/routes/admin.ts';
 import type { Rule } from '../src/types.ts';
 
@@ -588,6 +595,115 @@ describe('keywordSwallowedBy', () => {
     assert.equal(keywordSwallowedBy(['guide'], ['how much', 'guidebook'], 'word'), null);
     assert.equal(keywordSwallowedBy(['guidebook'], ['guide'], 'word'), null);
     assert.equal(keywordSwallowedBy(['guide'], [], 'word'), null);
+  });
+});
+
+describe('fillPlaceholders: with a username', () => {
+  it('puts the name in for every {username}', () => {
+    assert.equal(fillPlaceholders('Hey {username}! Enjoy, {username}.', 'sarah'), 'Hey sarah! Enjoy, sarah.');
+  });
+
+  it('matches the token in any capitalisation', () => {
+    assert.equal(fillPlaceholders('{Username} / {USERNAME} / {uSeRnAmE}', 'sarah'), 'sarah / sarah / sarah');
+  });
+
+  it('leaves unknown tokens, {link} and near-misses exactly as typed', () => {
+    const text = 'Get it at {link} {foo} { username } {user name} {username';
+    assert.equal(fillPlaceholders(text, 'sarah'), text);
+    assert.equal(fillPlaceholders(text, null), text);
+  });
+
+  it('keeps an @ the creator typed, so @{username} becomes a mention', () => {
+    assert.equal(fillPlaceholders('Thanks @{username}!', 'sarah.k_99'), 'Thanks @sarah.k_99!');
+  });
+
+  it('drops an @ Instagram put on the name, so it never doubles', () => {
+    assert.equal(fillPlaceholders('Hi {username}', '@sarah'), 'Hi sarah');
+  });
+
+  it('does not read $ patterns in the name as replacement syntax', () => {
+    assert.equal(cleanUsername('$&'), null);
+    assert.equal(fillPlaceholders('Hi {username}', 'a$b'), 'Hi');
+  });
+});
+
+describe('fillPlaceholders: with no usable username', () => {
+  for (const [why, value] of [
+    ['missing', undefined],
+    ['null', null],
+    ['empty', ''],
+    ['not a string', 12345 as unknown as string],
+    ['longer than Instagram allows', 'a'.repeat(31)],
+    ['outside the username alphabet', 'sarah <b>'],
+  ] as const) {
+    it(`removes the token cleanly when the name is ${why}`, () => {
+      const out = fillPlaceholders('Hey {username}, here is the guide', value);
+      assert.equal(out, 'Hey, here is the guide');
+      assert.doesNotMatch(out, /undefined|null|[{}]/);
+    });
+  }
+
+  it('accepts a name of exactly 30 characters', () => {
+    assert.equal(fillPlaceholders('Hi {username}', 'a'.repeat(30)), `Hi ${'a'.repeat(30)}`);
+  });
+
+  for (const [text, expected] of [
+    ['Hey {username}, here you go', 'Hey, here you go'],
+    ['Hey {username}! Here you go', 'Hey! Here you go'],
+    ['Hey {username}. Here you go', 'Hey. Here you go'],
+    ['Hey {username}', 'Hey'],
+    ['Hey {username} here you go', 'Hey here you go'],
+    ['Thanks, {username}!', 'Thanks!'],
+    ['Thanks, {username}', 'Thanks'],
+    ['Hi, {username}, here you go', 'Hi, here you go'],
+    ['Hi @{username} welcome', 'Hi welcome'],
+    ['Thanks @{username}!', 'Thanks!'],
+    ['{username}, here you go', 'here you go'],
+    ['{username} here you go', 'here you go'],
+    ['¡Hola {username}!', '¡Hola!'],
+    ['Merci {username} !', 'Merci !'],
+    ['Hey{username} you', 'Hey you'],
+    ['Hey {username}{username} you', 'Hey you'],
+  ] as const) {
+    it(`tidies only around the token: ${JSON.stringify(text)}`, () => {
+      assert.equal(fillPlaceholders(text, null), expected);
+    });
+  }
+
+  it('leaves every other space and line break the creator typed exactly as it was', () => {
+    const text = '  Hi  there,\n\n\tHey {username}, the  guide:\nhttps://example.com  \n\n\nBye ';
+    assert.equal(fillPlaceholders(text, null), '  Hi  there,\n\n\tHey, the  guide:\nhttps://example.com  \n\n\nBye ');
+  });
+
+  it('removes a line that held only the token, with its line break', () => {
+    assert.equal(fillPlaceholders('Hi\n{username}\nHere you go', null), 'Hi\nHere you go');
+    assert.equal(fillPlaceholders('{username}\nHere you go', null), 'Here you go');
+    assert.equal(fillPlaceholders('Here you go\n@{username}', null), 'Here you go');
+  });
+
+  it('removes a paragraph that held only the token without leaving a double gap', () => {
+    assert.equal(fillPlaceholders('Hi\n\n{username}\n\nHere you go', null), 'Hi\n\nHere you go');
+    assert.equal(fillPlaceholders('{username}\n\nHere you go', null), 'Here you go');
+    assert.equal(fillPlaceholders('Here you go\n\n{username}', null), 'Here you go');
+    assert.equal(fillPlaceholders('Hi\r\n\r\n{username}\r\n\r\nThere', null), 'Hi\r\n\r\nThere');
+  });
+
+  it('can leave nothing at all, which the form refuses to save', () => {
+    assert.equal(fillPlaceholders('{username}', null), '');
+  });
+});
+
+describe('placeholder length', () => {
+  it('counts every {username}, in any capitalisation', () => {
+    assert.equal(countUsernameTokens('{username} {Username} {link} {foo}'), 2);
+  });
+
+  it('assumes each {username} grows to a 30-character name', () => {
+    assert.equal(USERNAME_GROWTH, 20);
+    assert.equal(worstCaseLength('plain'), 5);
+    assert.equal(worstCaseLength('Hi {username} and @{USERNAME}'), 29 + 2 * 20);
+    const longest = fillPlaceholders('Hi {username} and @{USERNAME}', 'a'.repeat(30));
+    assert.equal(longest.length, worstCaseLength('Hi {username} and @{USERNAME}'));
   });
 });
 

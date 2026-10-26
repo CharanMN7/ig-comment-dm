@@ -98,6 +98,41 @@ describe('a comment that matches an active rule', () => {
   });
 });
 
+describe('the {username} placeholder', () => {
+  it('puts the commenter\'s username into the DM and the public reply', async () => {
+    await seedAccount();
+    await seedRule({ dmText: 'Hey {username}, here is the guide: https://example.com/g', publicReply: 'Check your DMs, @{Username}!' });
+
+    await postWebhook(commentPayload({ username: 'sarah.k' }));
+
+    expect(dmCalls()).toEqual([
+      expect.objectContaining({ body: expect.objectContaining({ message: { text: 'Hey sarah.k, here is the guide: https://example.com/g' } }) }),
+    ]);
+    expect(replyCalls()).toEqual([expect.objectContaining({ body: { message: 'Check your DMs, @sarah.k!' } })]);
+    expect(await sentRow('17900000000000001')).toMatchObject({ dm_status: 'ok', reply_status: 'ok', error: null });
+  });
+
+  it('still sends both, with the token tidied away, when the payload has no username', async () => {
+    await seedAccount();
+    await seedRule({ dmText: 'Hey {username}, here is the guide:\n\nhttps://example.com/g', publicReply: 'Sent you a DM {username} 🙌' });
+
+    await postWebhook(commentPayload({ username: null }));
+
+    expect(dmCalls()).toEqual([
+      expect.objectContaining({ body: expect.objectContaining({ message: { text: 'Hey, here is the guide:\n\nhttps://example.com/g' } }) }),
+    ]);
+    expect(replyCalls()).toEqual([expect.objectContaining({ body: { message: 'Sent you a DM 🙌' } })]);
+    expect(await sentRow('17900000000000001')).toMatchObject({ dm_status: 'ok', reply_status: 'ok' });
+  });
+
+  it('sends text with no placeholder byte for byte, leaving other braces alone', async () => {
+    await seedAccount();
+    await seedRule({ dmText: 'Use code {SAVE10} at {link}' });
+    await postWebhook(commentPayload({ username: 'sarah' }));
+    expect(dmCalls()).toEqual([expect.objectContaining({ body: expect.objectContaining({ message: { text: 'Use code {SAVE10} at {link}' } }) })]);
+  });
+});
+
 describe('comments that must not trigger a DM', () => {
   it('records a non-matching comment as skipped and calls Meta for nothing', async () => {
     await seedAccount();

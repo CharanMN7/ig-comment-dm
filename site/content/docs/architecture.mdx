@@ -67,7 +67,7 @@ For each comment change. Only `field === "comments"` is handled. Instagram Login
 6. Normalise the comment: fold accents, lowercase, strip emoji, punctuation and symbols, collapse whitespace.
 7. Apply the rule's `match_mode`. `word` (the default) matches each keyword on Unicode letter and digit boundaries, with regex metacharacters escaped; scripts written without spaces (Han, Hiragana, Katakana, Thai, Lao, Khmer, Myanmar) don't count as a boundary. `contains` is a substring test on the normalised text. Both normalise the keyword the same way, once per isolate. Keywords under 3 characters after normalising, or with no letter or digit, are rejected when a rule is **saved**, not here.
 8. Decrypt the token.
-9. `POST https://graph.instagram.com/v23.0/{ig_user_id}/messages` with `{ recipient: { comment_id }, message: { text } }`.
+9. `POST https://graph.instagram.com/v23.0/{ig_user_id}/messages` with `{ recipient: { comment_id }, message: { text } }`. `{username}` in the DM and public reply becomes `from.username` (`src/placeholders.ts`). With no username, the token is removed along with the space or comma touching it, and nothing else in the text moves.
 10. If the rule has `public_reply_text` and the DM went through, `POST /{comment-id}/replies`. If the DM failed, the public reply isn't posted and `reply_status` is `skipped`: "Sent you a DM!" would be false.
 11. `UPDATE sent` with both outcomes: `ok`, `failed` or `skipped`. A send that never reaches Meta (a network failure or timeout on every retry) is `failed`, never left `pending`. If the Worker is stopped mid-send, the daily job marks the row `failed` once it has been `pending` for 15 minutes, and never sends it again, because the DM may have gone out.
 
@@ -109,7 +109,7 @@ The panel is mounted at `/a/:secret`. The unguessable URL is one layer, not the 
 - CSRF protection on every mutating form, including logout.
 - Connect needs the same logged-in session. The session cookie is `SameSite=Strict`, so the browser leaves it off Instagram's cross-site redirect to `/connect/callback`. `/connect/start` checks the session instead, then issues a signed `state` (10-minute expiry) and an `igcdm_connect` cookie (`HttpOnly`, `SameSite=Lax`, `Path=/connect`) holding an HMAC of the state's nonce. The callback refuses unless both verify, and clears the cookie. Neither the refusal page nor the callback's error pages link to the admin path.
 - The keyword-save error is exactly: `Keywords under 3 characters match inside other words — 'AI' would fire on 'again' and 'email'.`
-- The DM text field has `maxlength="1000"` and a static hint (no client JavaScript runs under the CSP). The server rejects anything longer and says how long the text was. Line breaks count as one character on both sides, though browsers submit them as CRLF.
+- The DM text field has `maxlength="1000"` and a static hint (no client JavaScript runs under the CSP). The server rejects anything longer and says how long the text was. Line breaks count as one character on both sides, though browsers submit them as CRLF. Each `{username}` counts as 30 characters, Instagram's longest username, so a rule that saves always fits once the name is in. The public reply has the same 1,000-character limit.
 
 ## Tests
 

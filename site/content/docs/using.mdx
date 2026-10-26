@@ -24,8 +24,8 @@ Connecting needs you to be logged in to the admin panel; the Connect page refuse
 | **Keywords** | One per line, **at least 3 characters** each, counted after emoji and punctuation are dropped. `AI` would fire on "again" and "email", so the form rejects it. |
 | **How to look for them** | **Whole words only** (the default): `guide` matches "Guide please!" but not "guides". **Anywhere in the comment**: also catches `#launch2026` and "guides", but `art` would match "start". |
 | **Exclusions** | Optional, one per line. A comment containing any of them is skipped by this rule even when a keyword matches: `how much`, `already have it`, `not interested`. |
-| **The DM** | Up to 1,000 characters. Put everything they need in this one message. |
-| **Public reply** | Optional. Posted under their comment, and only once the DM has gone through. |
+| **The DM** | Up to 1,000 characters. Put everything they need in this one message. `{username}` puts in their Instagram name. |
+| **Public reply** | Optional. Posted under their comment, and only once the DM has gone through. `{username}` works here too. |
 | **Which posts** | **All posts and reels** (which includes reels), or one post picked from the dropdown. |
 | **Reply to every comment on this post** | For giveaways and waitlists. Everyone who comments on that one post gets the DM, no keyword needed, and the keyword fields disappear. It needs a specific post: on all posts it would message everyone who ever comments, so it's refused. |
 

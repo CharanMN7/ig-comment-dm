@@ -24,8 +24,9 @@ function igTime(unix: number): string {
   return new Date(unix * 1000).toISOString().replace(/\.\d{3}Z$/, '+0000');
 }
 
-function comment(id: string, text: string, opts: { from?: string; at?: number } = {}) {
-  return { id, text, timestamp: igTime(opts.at ?? NOW - 120), from: { id: opts.from ?? '9100000000000001', username: 'a_fan' } };
+function comment(id: string, text: string, opts: { from?: string; at?: number; username?: string | null } = {}) {
+  const from = { id: opts.from ?? '9100000000000001', ...(opts.username === null ? {} : { username: opts.username ?? 'a_fan' }) };
+  return { id, text, timestamp: igTime(opts.at ?? NOW - 120), from };
 }
 
 function commentsByMedia(byMedia: Record<string, unknown[] | { status: number }>) {
@@ -152,6 +153,28 @@ describe('the 5-minute comment poll', () => {
     await runScheduled(POLL);
     await runScheduled(POLL);
     expect(dmTargets()).toEqual(['c1']);
+  });
+
+  it('puts the username from the comment listing into the DM and public reply', async () => {
+    await seedAccount();
+    await seedRule({ dmText: 'Hi {username}, here you go', publicReply: 'Sent, {username}!' });
+    meta.on('GET', '/me/media', { json: { data: [{ id: 'm1' }] } });
+    meta.on(
+      'GET',
+      '/:id/comments',
+      commentsByMedia({ m1: [comment('c-named', 'guide', { username: 'polled_fan' }), comment('c-anon', 'guide', { username: null })] }),
+    );
+
+    await runScheduled(POLL);
+
+    expect(meta.callsTo('POST', '/:id/messages').map((c) => c.body)).toEqual([
+      { recipient: { comment_id: 'c-named' }, message: { text: 'Hi polled_fan, here you go' } },
+      { recipient: { comment_id: 'c-anon' }, message: { text: 'Hi, here you go' } },
+    ]);
+    expect(meta.callsTo('POST', '/:id/replies').map((c) => [c.path, c.body])).toEqual([
+      ['/c-named/replies', { message: 'Sent, polled_fan!' }],
+      ['/c-anon/replies', { message: 'Sent!' }],
+    ]);
   });
 
   it('skips accounts with no active rules without calling Instagram', async () => {
