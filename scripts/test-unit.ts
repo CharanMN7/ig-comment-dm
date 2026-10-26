@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   hmacSha256Hex,
+  randomIndex,
   timingSafeEqualString,
   verifyHmacSha256Hex,
   verifyMetaSignature,
@@ -35,6 +36,7 @@ import {
   fillPlaceholders,
   worstCaseLength,
 } from '../src/placeholders.ts';
+import { parsePublicReplies, pickReply, serializePublicReplies } from '../src/replies.ts';
 import { MATCH_ALL_NEEDS_POST_MESSAGE, readRuleFields } from '../src/routes/admin.ts';
 import type { Rule } from '../src/types.ts';
 
@@ -704,6 +706,90 @@ describe('placeholder length', () => {
     assert.equal(worstCaseLength('Hi {username} and @{USERNAME}'), 29 + 2 * 20);
     const longest = fillPlaceholders('Hi {username} and @{USERNAME}', 'a'.repeat(30));
     assert.equal(longest.length, worstCaseLength('Hi {username} and @{USERNAME}'));
+  });
+});
+
+describe('parsePublicReplies', () => {
+  it('reads no reply as an empty list', () => {
+    assert.deepEqual(parsePublicReplies(null), []);
+    assert.deepEqual(parsePublicReplies(undefined), []);
+    assert.deepEqual(parsePublicReplies('  \n '), []);
+  });
+
+  it('reads a JSON array of non-empty strings as variations', () => {
+    assert.deepEqual(parsePublicReplies('["Sent you a DM!","Check your inbox 📩"]'), ['Sent you a DM!', 'Check your inbox 📩']);
+    assert.deepEqual(parsePublicReplies('["Line one\\nline two"," padded "]'), ['Line one\nline two', 'padded']);
+  });
+
+  it('reads a legacy multi-line reply as one reply, whole', () => {
+    const legacy = 'Sent you a DM!\nCheck your message requests\n\n— Sam';
+    assert.deepEqual(parsePublicReplies(legacy), [legacy]);
+  });
+
+  for (const stored of ['[]', '[""]', '["ok", "  "]', '["ok", 2]', '[["nested"]]', '[unclosed', '[see bio] for the link', '{"a":"b"}', 'null', '"quoted"']) {
+    it(`never drops a configured reply that is not a clean array: ${stored}`, () => {
+      assert.deepEqual(parsePublicReplies(stored), [stored]);
+    });
+  }
+});
+
+describe('serializePublicReplies', () => {
+  it('stores nothing for no replies, and ignores blanks', () => {
+    assert.equal(serializePublicReplies([]), null);
+    assert.equal(serializePublicReplies(['', '  ']), null);
+  });
+
+  it('stores one reply as plain text, exactly as before variations', () => {
+    assert.equal(serializePublicReplies(['', 'Sent you a DM!', ' ']), 'Sent you a DM!');
+    assert.equal(serializePublicReplies(['Line one\n\nline two']), 'Line one\n\nline two');
+  });
+
+  it('stores two or more as a JSON array, in order', () => {
+    assert.equal(serializePublicReplies(['One', '', 'Two', 'Three']), '["One","Two","Three"]');
+  });
+
+  for (const replies of [['One'], ['One', 'Two'], ['["a","b"]'], ['[]'], ['Hi\n[1]'], ['["a"]', 'b']]) {
+    it(`reads back what it stored: ${JSON.stringify(replies)}`, () => {
+      assert.deepEqual(parsePublicReplies(serializePublicReplies(replies)), replies);
+    });
+  }
+});
+
+describe('pickReply', () => {
+  it('uses the random source to choose among variations', () => {
+    const replies = ['a', 'b', 'c'];
+    assert.equal(pickReply(replies, () => 0), 'a');
+    assert.equal(pickReply(replies, () => 2), 'c');
+    const asked: number[] = [];
+    pickReply(replies, (n) => (asked.push(n), 1));
+    assert.deepEqual(asked, [3]);
+  });
+
+  it('returns a lone reply without drawing, and nothing when there is none', () => {
+    const never = () => assert.fail('no draw needed');
+    assert.equal(pickReply(['only'], never), 'only');
+    assert.equal(pickReply([], never), null);
+  });
+
+  it('defaults to crypto randomness and only ever picks a real variation', () => {
+    const replies = ['a', 'b', 'c', 'd', 'e'];
+    const seen = new Set<string>();
+    for (let i = 0; i < 500; i++) seen.add(pickReply(replies) ?? 'none');
+    assert.deepEqual([...seen].sort(), replies);
+  });
+});
+
+describe('randomIndex', () => {
+  it('stays in range and reaches every index', () => {
+    const counts = [0, 0, 0];
+    for (let i = 0; i < 3000; i++) counts[randomIndex(3)]! += 1;
+    assert.ok(counts.every((c) => c > 800), `uneven: ${counts.join(', ')}`);
+    assert.equal(randomIndex(1), 0);
+  });
+
+  it('refuses a count it cannot draw from', () => {
+    assert.throws(() => randomIndex(0), RangeError);
+    assert.throws(() => randomIndex(2.5), RangeError);
   });
 });
 

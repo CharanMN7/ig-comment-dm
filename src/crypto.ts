@@ -23,6 +23,21 @@ export function randomBytes(n: number): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(n));
 }
 
+/**
+ * A whole number from 0 to n - 1, each equally likely. Draws past the largest
+ * multiple of n are thrown away, because taking them modulo n would favour the
+ * low numbers.
+ */
+export function randomIndex(n: number): number {
+  if (!Number.isInteger(n) || n < 1 || n > 0x1_0000_0000) throw new RangeError(`randomIndex needs 1 to 2^32 choices, got ${n}`);
+  const limit = Math.floor(0x1_0000_0000 / n) * n;
+  const draw = new Uint32Array(1);
+  for (;;) {
+    crypto.getRandomValues(draw);
+    if (draw[0] < limit) return draw[0] % n;
+  }
+}
+
 export function bytesToHex(bytes: Uint8Array): string {
   let out = '';
   for (let i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, '0');
