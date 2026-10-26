@@ -12,6 +12,8 @@ import { FREE_ATTEMPTS, lockRemaining, lockSecondsFor } from '../src/throttle.ts
 import type { Env } from '../src/types.ts';
 import { authorizeUrl, oauthRedirectUri } from '../src/meta.ts';
 import { isSelfComment } from '../src/guard.ts';
+import { sentLogQuery } from '../src/db.ts';
+import { logsHref, pageLinks, parseDay, parseLogsQuery } from '../src/logs.ts';
 import { parseWebhookPayload } from '../src/process.ts';
 import {
   KEYWORD_CACHE_MAX,
@@ -478,5 +480,154 @@ describe('login throttle', () => {
     assert.equal(lockRemaining({ fails: 9, lockedUntil: 1_000 }, 900), 100);
     assert.equal(lockRemaining({ fails: 9, lockedUntil: 1_000 }, 1_000), 0);
     assert.equal(lockRemaining({ fails: 0, lockedUntil: 0 }, 1_000), 0);
+  });
+});
+
+describe('logs date filters', () => {
+  it('reads a YYYY-MM-DD day as midnight UTC', () => {
+    assert.equal(parseDay('2026-10-27'), Date.UTC(2026, 9, 27) / 1000);
+    assert.equal(parseDay('2028-02-29'), Date.UTC(2028, 1, 29) / 1000);
+  });
+
+  it('refuses days that do not exist instead of rolling them over', () => {
+    for (const raw of ['2026-02-30', '2027-02-29', '2026-13-01', '2026-00-10', '2026-04-31', '0099-01-01']) {
+      assert.equal(parseDay(raw), null, raw);
+    }
+  });
+
+  it('refuses anything that is not exactly YYYY-MM-DD', () => {
+    for (const raw of ['', '2026-1-5', '26-10-27', '2026/10/27', '2026-10-27T00:00', 'yesterday', 'NaN']) {
+      assert.equal(parseDay(raw), null, raw);
+    }
+  });
+
+  it('turns To into the midnight after that day, so the whole day is included', () => {
+    const { filters, notes } = parseLogsQuery({ from: '2026-10-01', to: '2026-10-01' });
+    assert.deepEqual(filters, { from: Date.UTC(2026, 9, 1) / 1000, to: Date.UTC(2026, 9, 2) / 1000 });
+    assert.deepEqual(notes, []);
+  });
+
+  it('ignores a bad date with a note and keeps the other filters', () => {
+    const q = parseLogsQuery({ status: 'failed', from: '2026-02-30', to: 'soon' });
+    assert.deepEqual(q.filters, { status: 'failed' });
+    assert.deepEqual(q.form, { status: 'failed', ig_user_id: '', rule_id: '', from: '', to: '' });
+    assert.equal(q.notes.length, 2);
+    assert.match(q.notes[0]!, /From date “2026-02-30” isn’t a real date/);
+    assert.match(q.notes[1]!, /To date “soon”/);
+  });
+
+  it('says so when From is after To', () => {
+    const { notes } = parseLogsQuery({ from: '2026-10-02', to: '2026-10-01' });
+    assert.match(notes[0]!, /From date is after the To date/);
+  });
+});
+
+describe('logs query', () => {
+  it('drops statuses and rule ids it does not recognise', () => {
+    const q = parseLogsQuery({ status: 'deleted', rule_id: '1 OR 1=1', ig_user_id: ' 1784 ' });
+    assert.deepEqual(q.filters, { ig_user_id: '1784' });
+    assert.deepEqual(parseLogsQuery({ status: 'ok', rule_id: '12' }).filters, { status: 'ok', rule_id: 12 });
+  });
+
+  it('reads an Older or a Newer cursor, and needs both halves of it', () => {
+    assert.deepEqual(parseLogsQuery({ before: '1759320000', before_id: '179' }).cursor, {
+      dir: 'older',
+      sent_at: 1759320000,
+      comment_id: '179',
+    });
+    assert.deepEqual(parseLogsQuery({ after: '1759320000', after_id: '179' }).cursor, {
+      dir: 'newer',
+      sent_at: 1759320000,
+      comment_id: '179',
+    });
+    for (const half of [{ before: '1759320000' }, { before_id: '179' }, { after: 'x', after_id: '179' }]) {
+      const q = parseLogsQuery(half);
+      assert.equal(q.cursor, null);
+      assert.match(q.notes[0]!, /starts from the newest sends/);
+    }
+    assert.deepEqual(parseLogsQuery({}).notes, []);
+  });
+
+  it('breaks ties on comment_id going older', () => {
+    const { sql, bindings } = sentLogQuery({}, { dir: 'older', sent_at: 100, comment_id: 'c5' }, 51);
+    assert.match(sql, /WHERE \(s\.sent_at < \? OR \(s\.sent_at = \? AND s\.comment_id < \?\)\)/);
+    assert.match(sql, /ORDER BY s\.sent_at DESC, s\.comment_id DESC/);
+    assert.deepEqual(bindings, [100, 100, 'c5', 51]);
+  });
+
+  it('reverses the comparison and the order going newer', () => {
+    const { sql, bindings } = sentLogQuery({}, { dir: 'newer', sent_at: 100, comment_id: 'c5' }, 51);
+    assert.match(sql, /WHERE \(s\.sent_at > \? OR \(s\.sent_at = \? AND s\.comment_id > \?\)\)/);
+    assert.match(sql, /ORDER BY s\.sent_at ASC, s\.comment_id ASC/);
+    assert.deepEqual(bindings, [100, 100, 'c5', 51]);
+  });
+
+  it('binds every filter in the order its condition appears', () => {
+    const { sql, bindings } = sentLogQuery(
+      { status: 'failed', ig_user_id: 'acct', rule_id: 3, from: 10, to: 20 },
+      { dir: 'older', sent_at: 15, comment_id: 'c1' },
+      51,
+    );
+    assert.match(
+      sql,
+      /WHERE s\.dm_status = \? AND s\.ig_user_id = \? AND s\.rule_id = \? AND s\.sent_at >= \? AND s\.sent_at < \? AND \(s\.sent_at < \?/,
+    );
+    assert.deepEqual(bindings, ['failed', 'acct', 3, 10, 20, 15, 15, 'c1', 51]);
+  });
+
+  it('has no WHERE at all on an unfiltered first page', () => {
+    const { sql, bindings } = sentLogQuery({}, null, 51);
+    assert.doesNotMatch(sql, /WHERE/);
+    assert.deepEqual(bindings, [51]);
+  });
+});
+
+describe('logs page links', () => {
+  const base = '/a/secret';
+  const form = { status: 'failed', ig_user_id: '', rule_id: '7', from: '2026-10-01', to: '' };
+  const page = [
+    { sent_at: 300, comment_id: 'c9' },
+    { sent_at: 200, comment_id: 'c8' },
+  ];
+
+  it('keeps the filters and carries both halves of the cursor', () => {
+    assert.equal(
+      logsHref(base, form, { dir: 'older', sent_at: 200, comment_id: 'c8' }),
+      '/a/secret/logs?status=failed&rule_id=7&from=2026-10-01&before=200&before_id=c8',
+    );
+    assert.equal(logsHref(base, { status: '', ig_user_id: '', rule_id: '', from: '', to: '' }), '/a/secret/logs');
+  });
+
+  it('encodes comment ids and filter values', () => {
+    const href = logsHref(base, { ...form, ig_user_id: 'a&b=c' }, { dir: 'newer', sent_at: 1, comment_id: 'x y&z' });
+    assert.equal(new URL(href, 'https://w.example').searchParams.get('ig_user_id'), 'a&b=c');
+    assert.equal(new URL(href, 'https://w.example').searchParams.get('after_id'), 'x y&z');
+  });
+
+  it('offers only Older on the first page, and only when there is more', () => {
+    const links = pageLinks(base, { form, cursor: null }, page, true);
+    assert.equal(links.newer, null);
+    assert.match(links.older!, /before=200&before_id=c8$/);
+    assert.deepEqual(pageLinks(base, { form, cursor: null }, page, false), { newer: null, older: null });
+  });
+
+  it('always offers Newer after going older', () => {
+    const links = pageLinks(base, { form, cursor: { dir: 'older', sent_at: 400, comment_id: 'c10' } }, page, false);
+    assert.match(links.newer!, /after=300&after_id=c9$/);
+    assert.equal(links.older, null);
+  });
+
+  it('always offers Older after going newer, and Newer only when there is more', () => {
+    const cursor = { dir: 'newer', sent_at: 100, comment_id: 'c7' } as const;
+    assert.deepEqual(pageLinks(base, { form, cursor }, page, false), {
+      newer: null,
+      older: logsHref(base, form, { dir: 'older', sent_at: 200, comment_id: 'c8' }),
+    });
+    assert.match(pageLinks(base, { form, cursor }, page, true).newer!, /after=300&after_id=c9$/);
+  });
+
+  it('offers no links on an empty page', () => {
+    const cursor = { dir: 'older', sent_at: 1, comment_id: 'c0' } as const;
+    assert.deepEqual(pageLinks(base, { form, cursor }, [], false), { newer: null, older: null });
   });
 });

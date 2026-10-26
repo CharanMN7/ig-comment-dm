@@ -33,6 +33,7 @@ import {
 } from '../db.ts';
 import { findConfigProblems } from '../config.ts';
 import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
+import { LOGS_PAGE_SIZE, LOG_STATUSES, logsHref, pageLinks, parseLogsQuery } from '../logs.ts';
 import { KEYWORD_TOO_SHORT_MESSAGE, parseKeywords } from '../match.ts';
 import { listRecentMedia, oauthRedirectUri } from '../meta.ts';
 import { chooseRule } from '../process.ts';
@@ -44,7 +45,7 @@ import {
   readThrottle,
   recordFailure,
 } from '../throttle.ts';
-import type { Env, SessionData } from '../types.ts';
+import type { Env, Sent, SessionData } from '../types.ts';
 
 type Vars = {
   adminBase: string;
@@ -286,6 +287,20 @@ adminRoutes.post('/logout', async (c) => {
   return c.redirect(`${c.get('adminBase')}/login`, 302);
 });
 
+function sendDetail(s: Sent) {
+  return html`
+    ${s.dm_status === 'failed' && s.error
+      ? html`<span class="err">Send failed.</span>
+          <div class="muted">${s.error}</div>`
+      : s.error
+        ? html`<span class="muted">${s.error}</span>`
+        : html``}
+    ${s.reply_status === 'skipped'
+      ? html`<div class="muted">Public reply not posted, because no DM went out.</div>`
+      : html``}
+  `;
+}
+
 adminRoutes.on('GET', ['/', ''], async (c) => {
   const base = c.get('adminBase');
   const session = c.get('session');
@@ -428,17 +443,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                       <td>${fmtWhen(s.sent_at)}</td>
                       <td>${s.rule_label ?? '—'}</td>
                       <td>${statusWords(s.dm_status)}</td>
-                      <td>
-                        ${s.dm_status === 'failed' && s.error
-                          ? html`<span class="err">Send failed.</span>
-                              <div class="muted">${s.error}</div>`
-                          : s.error
-                            ? html`<span class="muted">${s.error}</span>`
-                            : html``}
-                        ${s.reply_status === 'skipped'
-                          ? html`<div class="muted">Public reply not posted, because no DM went out.</div>`
-                          : html``}
-                      </td>
+                      <td>${sendDetail(s)}</td>
                     </tr>`,
                   )}
                 </tbody>
@@ -496,66 +501,15 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
 
 adminRoutes.get('/logs', async (c) => {
   const base = c.get('adminBase');
-
-  const status = c.req.query('status') ?? '';
-  const igUserId = c.req.query('ig_user_id') ?? '';
-  const ruleIdRaw = c.req.query('rule_id') ?? '';
-  const fromRaw = c.req.query('from') ?? '';
-  const toRaw = c.req.query('to') ?? '';
-  const beforeRaw = c.req.query('before') ?? '';
-
-  const ruleId = ruleIdRaw ? Number(ruleIdRaw) : undefined;
-
-  const from = fromRaw
-    ? Math.floor(new Date(`${fromRaw}T00:00:00Z`).getTime() / 1000)
-    : undefined;
-
-  const to = toRaw
-    ? Math.floor(new Date(`${toRaw}T00:00:00Z`).getTime() / 1000) + 86400
-    : undefined;
-
-  const before = beforeRaw ? Number(beforeRaw) : undefined;
-
+  const query = parseLogsQuery(c.req.query());
+  const { form, cursor } = query;
   const accounts = await listAccounts(c.env.DB);
   const rules = await listRules(c.env.DB);
-
-  const rows = await paginatedSent(
-    c.env.DB,
-    {
-      status: status || undefined,
-      ig_user_id: igUserId || undefined,
-      rule_id: Number.isFinite(ruleId) ? ruleId : undefined,
-      from,
-      to,
-      before: Number.isFinite(before) ? before : undefined,
-    },
-    50,
-  );
-
-  const hasNext = rows.length > 50;
-  const sends = rows.slice(0, 50);
-
-  const accountNames = new Map(
-    accounts.map((account) => [account.ig_user_id, account.username]),
-  );
-
-  const last = sends[sends.length - 1];
-
-  let nextUrl: string | null = null;
-
-  if (hasNext && last) {
-    const params = new URLSearchParams();
-
-    if (status) params.set('status', status);
-    if (igUserId) params.set('ig_user_id', igUserId);
-    if (ruleIdRaw) params.set('rule_id', ruleIdRaw);
-    if (fromRaw) params.set('from', fromRaw);
-    if (toRaw) params.set('to', toRaw);
-
-    params.set('before', String(last.sent_at));
-
-    nextUrl = `${base}/logs?${params.toString()}`;
-  }
+  const { sends, more } = await paginatedSent(c.env.DB, query.filters, cursor, LOGS_PAGE_SIZE);
+  const links = pageLinks(base, query, sends, more);
+  const accountNames = new Map(accounts.map((a) => [a.ig_user_id, a.username]));
+  const filtered = Object.values(form).some(Boolean);
+  const knownRule = rules.some((r) => String(r.id) === form.rule_id);
 
   return c.html(
     layout({
@@ -564,65 +518,41 @@ adminRoutes.get('/logs', async (c) => {
       csrf: c.get('session').csrf,
       body: html`
         <h1>Logs</h1>
-
-        <form method="get" action="${base}/logs">
+        ${query.notes.map((note) => html`<p class="err">${note}</p>`)}
+        <form class="filters" method="get" action="${base}/logs">
           <label for="status">Status</label>
           <select id="status" name="status">
             <option value="">All statuses</option>
-            <option value="ok" ${status === 'ok' ? 'selected' : ''}>Sent</option>
-            <option value="failed" ${status === 'failed' ? 'selected' : ''}>Failed</option>
-            <option value="skipped" ${status === 'skipped' ? 'selected' : ''}>Skipped</option>
-            <option value="pending" ${status === 'pending' ? 'selected' : ''}>
-              In progress
-            </option>
+            ${LOG_STATUSES.map(
+              (s) => html`<option value="${s}" ${form.status === s ? 'selected' : ''}>${statusWords(s)}</option>`,
+            )}
           </select>
-
           <label for="ig_user_id">Account</label>
           <select id="ig_user_id" name="ig_user_id">
             <option value="">All accounts</option>
             ${accounts.map(
-              (account) => html`
-                <option
-                  value="${account.ig_user_id}"
-                  ${igUserId === account.ig_user_id ? 'selected' : ''}
-                >
-                  @${account.username}
-                </option>
-              `,
+              (a) =>
+                html`<option value="${a.ig_user_id}" ${form.ig_user_id === a.ig_user_id ? 'selected' : ''}>
+                  @${a.username}
+                </option>`,
             )}
           </select>
-
           <label for="rule_id">Rule</label>
           <select id="rule_id" name="rule_id">
             <option value="">All rules</option>
             ${rules.map(
-              (rule) => html`
-                <option
-                  value="${rule.id}"
-                  ${ruleIdRaw === String(rule.id) ? 'selected' : ''}
-                >
-                  ${rule.label}
-                </option>
-              `,
+              (r) =>
+                html`<option value="${String(r.id)}" ${form.rule_id === String(r.id) ? 'selected' : ''}>${r.label}</option>`,
             )}
+            ${form.rule_id && !knownRule
+              ? html`<option value="${form.rule_id}" selected>Deleted rule #${form.rule_id}</option>`
+              : html``}
           </select>
-
           <label for="from">From</label>
-          <input
-            id="from"
-            name="from"
-            type="date"
-            value="${fromRaw}"
-          />
-
+          <input id="from" name="from" type="date" value="${form.from}" />
           <label for="to">To</label>
-          <input
-            id="to"
-            name="to"
-            type="date"
-            value="${toRaw}"
-          />
-
+          <input id="to" name="to" type="date" value="${form.to}" />
+          <p class="muted">Dates are in UTC, like the times below. To includes the whole of that day.</p>
           <div class="row">
             <button type="submit">Filter</button>
             <a class="btn secondary" href="${base}/logs">Clear</a>
@@ -630,11 +560,15 @@ adminRoutes.get('/logs', async (c) => {
         </form>
 
         <h2>Send history</h2>
-
         ${sends.length === 0
-          ? html`
-              <p class="muted">No sends match these filters.</p>
-            `
+          ? cursor
+            ? html`<p class="muted">Nothing on this page. <a href="${logsHref(base, form)}">Go to the newest sends</a>.</p>`
+            : filtered
+              ? html`<p class="muted">No sends match these filters. <a href="${base}/logs">Clear them</a> to see everything.</p>`
+              : html`<p class="muted">
+                  Nothing logged yet. Every comment the program picks up shows here, whether or not it matched
+                  a rule.
+                </p>`
           : html`
               <div class="table-wrap">
                 <table>
@@ -647,47 +581,25 @@ adminRoutes.get('/logs', async (c) => {
                       <th>Detail</th>
                     </tr>
                   </thead>
-
                   <tbody>
                     ${sends.map(
-                      (s) => html`
-                        <tr>
-                          <td>${fmtWhen(s.sent_at)}</td>
-
-                          <td>
-                            @${accountNames.get(s.ig_user_id) ?? s.ig_user_id}
-                          </td>
-
-                          <td>${s.rule_label ?? '—'}</td>
-
-                          <td>${statusWords(s.dm_status)}</td>
-
-                          <td>
-                            ${s.dm_status === 'failed' && s.error
-                              ? html`
-                                  <span class="err">Send failed.</span>
-                                  <div class="muted">${s.error}</div>
-                                `
-                              : s.error
-                                ? html`
-                                    <span class="muted">${s.error}</span>
-                                  `
-                                : html`—`}
-                          </td>
-                        </tr>
-                      `,
+                      (s) => html`<tr>
+                        <td>${fmtWhen(s.sent_at)}</td>
+                        <td>@${accountNames.get(s.ig_user_id) ?? s.ig_user_id}</td>
+                        <td>${s.rule_label ?? '—'}</td>
+                        <td>${statusWords(s.dm_status)}</td>
+                        <td>${sendDetail(s)}</td>
+                      </tr>`,
                     )}
                   </tbody>
                 </table>
               </div>
             `}
-
-        ${nextUrl
-          ? html`
-              <div class="row">
-                <a class="btn secondary" href="${nextUrl}">Older →</a>
-              </div>
-            `
+        ${links.newer || links.older
+          ? html`<div class="row pager">
+              ${links.newer ? html`<a class="btn secondary" href="${links.newer}">← Newer</a>` : html``}
+              ${links.older ? html`<a class="btn secondary" href="${links.older}">Older →</a>` : html``}
+            </div>`
           : html``}
       `,
     }),

@@ -315,73 +315,83 @@ export type SentLogFilters = {
   status?: string;
   ig_user_id?: string;
   rule_id?: number;
+  /** Inclusive, unix seconds. */
   from?: number;
+  /** Exclusive, unix seconds. */
   to?: number;
-  before?: number;
 };
 
-export async function paginatedSent(
-  db: D1Database,
-  opts: {
-    status?: string;
-    ig_user_id?: string;
-    rule_id?: number;
-    from?: number;
-    to?: number;
-    before?: number;
-  },
-  limit = 50,
-): Promise<(Sent & { rule_label: string | null })[]> {
+/**
+ * Where a logs page starts: just past one send, going older or newer. The
+ * comment id breaks ties because sent_at is whole seconds, and a burst of
+ * comments shares one. Paging on sent_at alone skips the rest of that second.
+ */
+export type SentLogCursor = { dir: 'older' | 'newer'; sent_at: number; comment_id: string };
+
+export function sentLogQuery(
+  filters: SentLogFilters,
+  cursor: SentLogCursor | null,
+  limit: number,
+): { sql: string; bindings: (string | number)[] } {
   const conditions: string[] = [];
   const bindings: (string | number)[] = [];
-
-  if (opts.status) {
+  if (filters.status) {
     conditions.push('s.dm_status = ?');
-    bindings.push(opts.status);
+    bindings.push(filters.status);
   }
-
-  if (opts.ig_user_id) {
+  if (filters.ig_user_id) {
     conditions.push('s.ig_user_id = ?');
-    bindings.push(opts.ig_user_id);
+    bindings.push(filters.ig_user_id);
   }
-
-  if (opts.rule_id !== undefined) {
+  if (filters.rule_id !== undefined) {
     conditions.push('s.rule_id = ?');
-    bindings.push(opts.rule_id);
+    bindings.push(filters.rule_id);
   }
-
-  if (opts.from !== undefined) {
+  if (filters.from !== undefined) {
     conditions.push('s.sent_at >= ?');
-    bindings.push(opts.from);
+    bindings.push(filters.from);
   }
-
-  if (opts.to !== undefined) {
+  if (filters.to !== undefined) {
     conditions.push('s.sent_at < ?');
-    bindings.push(opts.to);
+    bindings.push(filters.to);
   }
-
-  if (opts.before !== undefined) {
-    conditions.push('s.sent_at < ?');
-    bindings.push(opts.before);
+  if (cursor) {
+    const cmp = cursor.dir === 'older' ? '<' : '>';
+    conditions.push(`(s.sent_at ${cmp} ? OR (s.sent_at = ? AND s.comment_id ${cmp} ?))`);
+    bindings.push(cursor.sent_at, cursor.sent_at, cursor.comment_id);
   }
-
+  // Newer pages read oldest first, so LIMIT keeps the rows next to the cursor
+  // rather than the newest rows in the table.
+  const order = cursor?.dir === 'newer' ? 'ASC' : 'DESC';
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-
-  const { results } = await db
-    .prepare(
-      `SELECT s.comment_id, s.ig_user_id, s.rule_id, s.commenter_id,
-              s.dm_status, s.reply_status, s.error, s.sent_at,
-              r.label AS rule_label
+  return {
+    sql: `SELECT s.comment_id, s.ig_user_id, s.rule_id, s.commenter_id, s.dm_status, s.reply_status,
+              s.error, s.sent_at, r.label AS rule_label
        FROM sent s
        LEFT JOIN rules r ON r.id = s.rule_id
        ${where}
-       ORDER BY s.sent_at DESC
+       ORDER BY s.sent_at ${order}, s.comment_id ${order}
        LIMIT ?`,
-    )
-    .bind(...bindings, limit + 1)
-    .all<Sent & { rule_label: string | null }>();
+    bindings: [...bindings, limit],
+  };
+}
 
-  return results ?? [];
+/** One page of sends, newest first, and whether another page lies beyond it. */
+export async function paginatedSent(
+  db: D1Database,
+  filters: SentLogFilters,
+  cursor: SentLogCursor | null,
+  limit: number,
+): Promise<{ sends: (Sent & { rule_label: string | null })[]; more: boolean }> {
+  const { sql, bindings } = sentLogQuery(filters, cursor, limit + 1);
+  const { results } = await db
+    .prepare(sql)
+    .bind(...bindings)
+    .all<Sent & { rule_label: string | null }>();
+  const rows = results ?? [];
+  const sends = rows.slice(0, limit);
+  if (cursor?.dir === 'newer') sends.reverse();
+  return { sends, more: rows.length > limit };
 }
 
 export async function todayCounters(

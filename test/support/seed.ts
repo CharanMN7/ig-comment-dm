@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { decryptAesGcm, encryptAesGcm } from '../../src/crypto.ts';
-import { insertRule, setAccountActive, toggleRule, upsertAccount } from '../../src/db.ts';
+import { insertRule, setAccountActive, toggleRule, tryClaimComment, updateSent, upsertAccount } from '../../src/db.ts';
 import type { Account, Rule, Sent } from '../../src/types.ts';
 
 export const FROZEN_NOW_MS = Date.UTC(2026, 9, 1, 12, 0, 0);
@@ -64,6 +64,34 @@ export async function seedRule(
   const id = row!.id;
   if (opts.active === false) await toggleRule(env.DB, id);
   return id;
+}
+
+/** A logged comment, claimed then settled the way the pipeline writes one. */
+export async function seedSent(opts: {
+  commentId: string;
+  igUserId?: string;
+  ruleId?: number | null;
+  status?: string;
+  replyStatus?: string | null;
+  error?: string | null;
+  sentAt?: number;
+}): Promise<void> {
+  const sentAt = opts.sentAt ?? NOW;
+  await tryClaimComment(env.DB, {
+    comment_id: opts.commentId,
+    ig_user_id: opts.igUserId ?? IG_USER,
+    commenter_id: '9100000000000001',
+    dm_status: 'pending',
+    error: null,
+    sent_at: sentAt,
+  });
+  await updateSent(env.DB, opts.commentId, {
+    rule_id: opts.ruleId ?? null,
+    dm_status: opts.status ?? 'ok',
+    reply_status: opts.replyStatus ?? null,
+    error: opts.error ?? null,
+    sent_at: sentAt,
+  });
 }
 
 // Compare rows with toMatchObject, not toEqual: a migration that adds a column

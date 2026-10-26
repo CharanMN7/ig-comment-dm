@@ -6,6 +6,11 @@ import { DAY, IG_USER, NOW, seedAccount, seedRule } from './support/seed.ts';
 import { adminPath, commentPayload, postWebhook, request, signedInAdmin } from './support/worker.ts';
 
 describe('the admin home page', () => {
+  it('links to the full logs page from its recent sends', async () => {
+    const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
+    expect(page).toContain(`<a class="btn secondary" href="${adminPath('/logs')}">View all logs</a>`);
+  });
+
   it('re-subscribes active accounts to comment webhooks in the background', async () => {
     await seedAccount();
     const admin = await signedInAdmin();

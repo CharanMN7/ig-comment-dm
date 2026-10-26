@@ -25,7 +25,7 @@ table { width: 100%; border-collapse: collapse; background: #fff; border: 1px so
 th, td { text-align: left; padding: 0.4rem 0.55rem; border-bottom: 1px solid #eee; vertical-align: top; font-size: 0.9rem; }
 th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; color: #555; background: #fafafa; }
 label { display: block; font-weight: 650; margin: 0.85rem 0 0.25rem; }
-input[type=text], input[type=password], textarea, select {
+input[type=text], input[type=password], input[type=date], textarea, select {
   width: 100%; padding: 0.4rem 0.5rem; font: inherit; border: 1px solid #ccc; background: #fff;
 }
 textarea { min-height: 6rem; }
@@ -36,6 +36,8 @@ button, .btn {
 }
 button.secondary, a.btn.secondary { background: #fff; color: #111; border: 1px solid #bbb; }
 button.danger, a.btn.danger { background: #a11; }
+.filters select, .filters input, .filters button, .filters .btn, .pager .btn { min-height: 44px; }
+.filters .btn, .pager .btn { display: inline-flex; align-items: center; }
 .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; margin: 0.75rem 0 1.25rem; }
 .kpi { background: #fff; border: 1px solid #e4e4e0; padding: 0.65rem 0.75rem; }
 .kpi b { display: block; font-size: 1.35rem; }
