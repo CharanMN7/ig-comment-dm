@@ -160,27 +160,48 @@ It is safe to re-run, and it will not rotate secrets you already have.
 
 Stuck? Run **`npm run doctor`**. It checks your live deployment and tells you what is missing in plain words.
 
+### Updating
+
+Meta renames dashboard screens, retires OAuth hosts and changes signing often enough that fixes need to keep flowing to every copy. That's why you clone or fork this repository rather than make a GitHub template of it, which would cut the link back here.
+
+```bash
+npm run update
+```
+
+It stops if you have unsaved edits, shows what's new (and calls out anything that changes your database), asks, merges, then installs and runs `npm run deploy`, which applies database migrations before the new code goes live. If your own edits clash with the new version, it backs out and tells you which files and how to fix them. `--dry-run` shows what it would do and changes nothing. Your secrets live in Cloudflare, so updating never touches them.
+
+| How you got your copy | How to update |
+|---|---|
+| `git clone` or a fork, deployed with `npm run setup` | `npm run update` |
+| The **Deploy to Cloudflare** button | Clone the repository Cloudflare made in your GitHub, then `npm run update -- --push` (below) |
+| A downloaded ZIP | `npm run update` explains your two options: a fresh download, or `git init` once |
+
 <details>
-<summary><b>Why clone instead of a template repo?</b></summary>
+<summary><b>Deployed with the Deploy to Cloudflare button?</b></summary>
 
 <br />
 
-Because a fresh clone needs **zero file edits** to deploy — Wrangler provisions the D1 database from the config, so there is no placeholder to fill in. Nothing about the code differs between deployments; the only per-user values are Cloudflare secrets, which never touch the repository.
-
-A GitHub template would sever the upstream link. Meta renames dashboard screens, retires OAuth hosts, and changes signing behaviour often enough that `git pull` needs to keep working:
+Cloudflare copied this repository into a new one in your GitHub account and deploys every push to it. Once, on your computer:
 
 ```bash
-git remote add upstream https://github.com/CharanMN7/ig-comment-dm.git
-git pull upstream master
+git clone https://github.com/YOUR-NAME/YOUR-REPO.git
+cd YOUR-REPO
 npm install
-npm run deploy
 ```
 
-`npm run deploy` applies any new database migrations, then deploys. If Wrangler lists migrations and asks to continue, say yes. Use it rather than `npx wrangler deploy`, which would put new code live without the tables and columns it needs.
+Then, whenever you want the latest version:
 
-Your secrets live in Cloudflare, so updating never touches them.
+```bash
+npm run update -- --push
+```
+
+Cloudflare's copy starts with fresh history, so the first run works out which version was copied and records it (a commit that changes no files); after that only what's new gets merged. It adds the `upstream` remote for you and pushes to your repository, and Workers Builds runs `npm run deploy`, which migrates and then deploys. Watch the build under **Workers & Pages → your Worker → Deployments**.
+
+By hand: `git remote add upstream https://github.com/CharanMN7/ig-comment-dm.git`, then `git merge -s ours --allow-unrelated-histories <the upstream commit Cloudflare copied>` once. After that, `git merge upstream/master` and `git push` work like on any fork.
 
 </details>
+
+More in **[Updating your copy](https://charanmn7.github.io/ig-comment-dm/docs/updating/)**.
 
 ---
 
@@ -309,6 +330,7 @@ Instagram's rules, not ours. Each of these is enforced by Meta and cost someone 
 - [x] Startup validation of all eight secrets, surfaced in the admin panel
 - [x] `npm run setup` — clone to deployed in one command
 - [x] `npm run doctor` — diagnoses a live deployment
+- [x] `npm run update` — pulls upstream fixes, applies migrations and deploys, for clones, forks and Deploy-button copies
 - [x] Tracked database migrations, applied by `npm run deploy` before the new code goes live
 - [x] `/health` endpoint for uptime monitors, with no login and nothing identifying in it
 - [x] Multi-account support on a single deployment
