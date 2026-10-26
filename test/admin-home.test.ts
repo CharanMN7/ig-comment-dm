@@ -1,8 +1,8 @@
 import { env } from 'cloudflare:workers';
-import { describe, expect, it } from 'vitest';
-import { systemSet } from '../src/db.ts';
+import { describe, expect, it, vi } from 'vitest';
+import { HEALTH_FIRST_SEEN_KEY, systemSet } from '../src/db.ts';
 import { meta } from './support/meta.ts';
-import { DAY, IG_USER, NOW, seedAccount, seedRule } from './support/seed.ts';
+import { DAY, FROZEN_NOW_MS, IG_USER, NOW, seedAccount, seedRule, systemValue } from './support/seed.ts';
 import { adminPath, commentPayload, postWebhook, request, signedInAdmin } from './support/worker.ts';
 
 /** The page as a reader sees it: tags gone, whitespace collapsed. */
@@ -80,11 +80,42 @@ describe('the admin home page', () => {
     expect((await admin.get(adminPath('/'))).text).not.toContain('the signing secret did not match');
   });
 
+  it('says the daily check has not run yet on a fresh deploy, instead of calling it 3 days late', async () => {
+    const admin = await signedInAdmin();
+    const page = textOf((await admin.get(adminPath('/'))).text);
+    expect(page).not.toContain('over 3 days');
+    expect(page).not.toContain('has never run');
+    expect(page).toContain('The daily Instagram check hasn’t run yet.');
+    expect(page).toContain('expect the first run by 2026-10-02 03:00 UTC.');
+    // The grace period runs from the first look, shared with /health.
+    expect(await systemValue(HEALTH_FIRST_SEEN_KEY)).toBe(String(NOW));
+
+    vi.setSystemTime(Date.UTC(2026, 9, 2, 2, 30));
+    expect(textOf((await admin.get(adminPath('/'))).text)).toContain('expect the first run by 2026-10-02 03:00 UTC.');
+    expect(await systemValue(HEALTH_FIRST_SEEN_KEY)).toBe(String(NOW));
+  });
+
+  it('warns once the first nightly run is overdue, when /health starts failing too', async () => {
+    const admin = await signedInAdmin();
+    await systemSet(env.DB, HEALTH_FIRST_SEEN_KEY, String(NOW));
+    vi.setSystemTime(FROZEN_NOW_MS + 25 * 60 * 60 * 1000);
+    expect((await admin.get(adminPath('/'))).text).toContain('hasn’t run yet');
+
+    vi.setSystemTime(FROZEN_NOW_MS + 27 * 60 * 60 * 1000);
+    const page = (await admin.get(adminPath('/'))).text;
+    expect(page).toContain('The daily Instagram check has never run, and its first run at 03:00 UTC is overdue.');
+    expect(page).not.toContain('hasn’t run yet');
+    expect(JSON.parse((await request('/health')).text)).toMatchObject({ cron: 'stale' });
+  });
+
   it('warns until the daily check has run in the last 3 days', async () => {
     const admin = await signedInAdmin();
+    await systemSet(env.DB, 'last_cron_ok_at', String(NOW - 4 * DAY));
     expect((await admin.get(adminPath('/'))).text).toContain('hasn’t run in over 3 days');
     await systemSet(env.DB, 'last_cron_ok_at', String(NOW - 2 * DAY));
-    expect((await admin.get(adminPath('/'))).text).not.toContain('hasn’t run in over 3 days');
+    const page = (await admin.get(adminPath('/'))).text;
+    expect(page).not.toContain('hasn’t run in over 3 days');
+    expect(page).not.toContain('hasn’t run yet');
   });
 
   it('flags an account whose token has expired', async () => {

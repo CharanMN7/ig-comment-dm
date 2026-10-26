@@ -90,7 +90,7 @@ Cloudflare cron has **no retries**. A missed tick is gone until tomorrow.
 3. `GET https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=…`
 4. Success: re-encrypt, update `token_expires_at` and `last_refreshed_at`, clear `needs_reconnect`.
 5. Failure with < 14 days left: set `needs_reconnect`. Admin shows a red banner with Reconnect → `/connect`.
-6. On a clean run (whether or not there was work), write `last_cron_ok_at`. Admin banners if that is > 72h stale.
+6. On a clean run (whether or not there was work), write `last_cron_ok_at`. Admin banners if that is > 72h stale, or if it has never run 26 hours after the deployment was first seen (`health_first_seen_at`, the clock `/health` uses). Before that, Home says the first run is still on its way.
 
 Idempotent: running five times in a day is harmless.
 

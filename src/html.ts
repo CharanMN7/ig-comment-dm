@@ -49,6 +49,7 @@ button.danger, a.btn.danger { background: #a11; }
 .kpi { background: #fff; border: 1px solid #e4e4e0; padding: 0.65rem 0.75rem; }
 .kpi b { display: block; font-size: 1.35rem; }
 .kpi div { margin-top: 0.3rem; }
+.note { background: #fff; border: 1px solid #ccc; padding: 0.7rem 0.85rem; margin: 0 0 1rem; }
 pre.raw { background: #111; color: #eee; padding: 0.6rem 0.7rem; overflow: auto; font-size: 0.78rem; }
 .actions form { display: inline; }
 code { font-size: 0.88em; }

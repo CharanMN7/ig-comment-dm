@@ -420,8 +420,12 @@ If this keeps happening, the nightly job is not running. See the next section.
 
 ## Red banner: the daily check has not run
 
-The nightly token refresh has not succeeded in over 3 days. Left alone, tokens
-will eventually expire and every account will need a manual reconnect.
+The nightly token refresh has not succeeded in over 3 days, or a new
+deployment's first run, due at 03:00 UTC, is more than a day late. Left alone,
+tokens will eventually expire and every account will need a manual reconnect.
+
+Until that first run is due, Home shows a plain note instead, saying the check
+hasn't run yet and when to expect it. That needs nothing from you.
 
 **Confirm the cron triggers are registered:**
 
