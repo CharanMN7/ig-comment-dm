@@ -5,6 +5,11 @@ import { meta } from './support/meta.ts';
 import { DAY, IG_USER, NOW, seedAccount, seedRule } from './support/seed.ts';
 import { adminPath, commentPayload, postWebhook, request, signedInAdmin } from './support/worker.ts';
 
+/** The page as a reader sees it: tags gone, whitespace collapsed. */
+function textOf(page: string): string {
+  return page.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+}
+
 describe('the admin home page', () => {
   it('re-subscribes active accounts to comment webhooks in the background', async () => {
     await seedAccount();
@@ -16,7 +21,7 @@ describe('the admin home page', () => {
     ]);
   });
 
-  it("counts today's comments, sends and failures", async () => {
+  it("counts today's sends, skips, failures and people reached from real webhooks", async () => {
     await seedAccount();
     await seedRule({ keywords: ['guide'] });
     await postWebhook(commentPayload({ commentId: 'ok-1', text: 'guide' }));
@@ -26,9 +31,7 @@ describe('the admin home page', () => {
 
     const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
 
-    expect(page).toMatch(/Comments seen today<\/span><b>3<\/b>/);
-    expect(page).toMatch(/DMs sent today<\/span><b>1<\/b>/);
-    expect(page).toMatch(/Failures today<\/span><b>1<\/b>/);
+    expect(textOf(page)).toContain('Today (UTC) 1 people reached 1 DMs sent 1 skipped 1 failed');
   });
 
   it("escapes Meta's error text when it shows a failed send", async () => {

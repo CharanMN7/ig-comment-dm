@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CRON_STALE_SECONDS, POLL_STALE_SECONDS } from '../src/crypto.ts';
 import { HEALTH_FIRST_SEEN_KEY, flagNeedsReconnect, systemSet } from '../src/db.ts';
 import { ACCESS_TOKEN, DAY, FROZEN_NOW_MS, IG_USER, NOW, accountRow, seedAccount, seedRule, systemValue } from './support/seed.ts';
-import { adminPath, request, runScheduled, signedInAdmin } from './support/worker.ts';
+import { adminPath, countingDb, request, runScheduled, signedInAdmin } from './support/worker.ts';
 
 const HOUR = 60 * 60;
 
@@ -44,20 +44,6 @@ function unreachableDb(): D1Database {
   const fail = () => Promise.reject(new Error('D1_ERROR: Network connection lost to db-internal-7f3a'));
   const statement = { bind: () => statement, first: fail, all: fail, run: fail, raw: fail };
   return { prepare: () => statement, batch: fail, exec: fail } as unknown as D1Database;
-}
-
-/** The real database, counting the statements prepared against it. */
-function countingDb(): { db: D1Database; statements: string[] } {
-  const statements: string[] = [];
-  const db = {
-    prepare: (sql: string) => {
-      statements.push(sql);
-      return env.DB.prepare(sql);
-    },
-    batch: (s: D1PreparedStatement[]) => env.DB.batch(s),
-    exec: (sql: string) => env.DB.exec(sql),
-  } as unknown as D1Database;
-  return { db, statements };
 }
 
 afterEach(() => vi.restoreAllMocks());

@@ -41,6 +41,20 @@ export async function runScheduled(cron: string): Promise<void> {
   await waitOnExecutionContext(ctx);
 }
 
+/** The real database, counting the statements prepared against it. */
+export function countingDb(): { db: D1Database; statements: string[] } {
+  const statements: string[] = [];
+  const db = {
+    prepare: (sql: string) => {
+      statements.push(sql);
+      return env.DB.prepare(sql);
+    },
+    batch: (s: D1PreparedStatement[]) => env.DB.batch(s),
+    exec: (sql: string) => env.DB.exec(sql),
+  } as unknown as D1Database;
+  return { db, statements };
+}
+
 // --- Webhooks ----------------------------------------------------------------
 
 // Signed here with crypto.subtle directly rather than with the Worker's own

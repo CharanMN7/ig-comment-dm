@@ -220,6 +220,7 @@ Then comment from a **different** Instagram account — a friend's phone works. 
 
 | Panel | What it tells you |
 |---|---|
+| **Totals** | DMs sent, skipped and failed, and people reached, for today, the last 7 and 30 days, and all time. Days are UTC. With more than one account, each also gets its own. |
 | **Did Instagram reach us?** | Whether Meta is POSTing at all. Empty means the problem is on Meta's side, not yours. `Wrong secret` means `FACEBOOK_APP_SECRET` is missing. |
 | **Last 20 sends** | Every DM, skip, and failure, with the reason. |
 | **Red banners** | An account needs reconnecting, the nightly job has stalled, or a secret is misconfigured. |
@@ -269,6 +270,7 @@ Instagram's rules, not ours. Each of these is enforced by Meta and cost someone 
 - [x] Exactly-once delivery, claimed atomically in the database before sending
 - [x] 7-day comment age guard, matching Meta's private-reply window
 - [x] Dry-run rule tester that sends nothing to real people
+- [x] Home totals for today, 7 days, 30 days and all time, with people reached and a per-account breakdown
 
 </details>
 
@@ -347,7 +349,6 @@ Everything below is [an open issue](https://github.com/CharanMN7/ig-comment-dm/i
 
 | Issue | Feature | Why it matters |
 |:--|---|---|
-| [#39](https://github.com/CharanMN7/ig-comment-dm/issues/39) | **Dashboard totals** | Sent today, this week, this month, all time |
 | [#40](https://github.com/CharanMN7/ig-comment-dm/issues/40) | **Sends-over-time chart** | Inline SVG, no JavaScript |
 | [#41](https://github.com/CharanMN7/ig-comment-dm/issues/41) | **Per-rule performance** | Which keyword is actually earning its place |
 | [#42](https://github.com/CharanMN7/ig-comment-dm/issues/42) | **Top matched keywords** | What your audience really types |

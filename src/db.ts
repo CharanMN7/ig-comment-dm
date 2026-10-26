@@ -334,25 +334,59 @@ export async function recentSent(db: D1Database, limit: number): Promise<(Sent &
   return results ?? [];
 }
 
-export async function todayCounters(
-  db: D1Database,
-  since: number,
-): Promise<{ triggers: number; sends: number; failures: number }> {
-  const row = await db
-    .prepare(
-      `SELECT
-         COUNT(*) AS triggers,
-         SUM(CASE WHEN dm_status = 'ok' THEN 1 ELSE 0 END) AS sends,
-         SUM(CASE WHEN dm_status = 'failed' THEN 1 ELSE 0 END) AS failures
-       FROM sent WHERE sent_at >= ?`,
-    )
-    .bind(since)
-    .first<{ triggers: number; sends: number | null; failures: number | null }>();
-  return {
-    triggers: row?.triggers ?? 0,
-    sends: row?.sends ?? 0,
-    failures: row?.failures ?? 0,
-  };
+export type SendTotals = { sent: number; skipped: number; failed: number; reached: number };
+
+type TotalsRow = Record<string, number | string | null>;
+
+/**
+ * One column per status per window, so adding a window adds columns rather than
+ * statements. The scan is the whole table whatever the windows are: the
+ * all-time window reads every row, so no index could narrow it.
+ *
+ * People reached counts each commenter once, from rows where a DM went out.
+ * Someone whose comment was skipped, or whose DM failed, was not reached.
+ */
+function totalsQuery(starts: number[], perAccount: boolean): string {
+  const columns = starts.flatMap((_, i) => {
+    const since = `sent_at >= ?${i + 1}`;
+    return [
+      `COUNT(CASE WHEN ${since} AND dm_status = 'ok' THEN 1 END) AS sent_${i}`,
+      `COUNT(CASE WHEN ${since} AND dm_status = 'skipped' THEN 1 END) AS skipped_${i}`,
+      `COUNT(CASE WHEN ${since} AND dm_status = 'failed' THEN 1 END) AS failed_${i}`,
+      `COUNT(DISTINCT CASE WHEN ${since} AND dm_status = 'ok' THEN commenter_id END) AS reached_${i}`,
+    ];
+  });
+  return perAccount
+    ? `SELECT ig_user_id, ${columns.join(', ')} FROM sent GROUP BY ig_user_id`
+    : `SELECT ${columns.join(', ')} FROM sent`;
+}
+
+function readTotals(row: TotalsRow | undefined, windows: number): SendTotals[] {
+  const n = (key: string) => Number(row?.[key] ?? 0);
+  return Array.from({ length: windows }, (_, i) => ({
+    sent: n(`sent_${i}`),
+    skipped: n(`skipped_${i}`),
+    failed: n(`failed_${i}`),
+    reached: n(`reached_${i}`),
+  }));
+}
+
+/** Totals for each window starting at `starts[i]` (unix seconds), in one statement. */
+export async function sendTotals(db: D1Database, starts: number[]): Promise<SendTotals[]> {
+  const { results } = await db
+    .prepare(totalsQuery(starts, false))
+    .bind(...starts)
+    .all<TotalsRow>();
+  return readTotals(results?.[0], starts.length);
+}
+
+/** The same totals per account, also in one statement. Accounts with no rows are absent. */
+export async function sendTotalsByAccount(db: D1Database, starts: number[]): Promise<Map<string, SendTotals[]>> {
+  const { results } = await db
+    .prepare(totalsQuery(starts, true))
+    .bind(...starts)
+    .all<TotalsRow>();
+  return new Map((results ?? []).map((row) => [String(row.ig_user_id), readTotals(row, starts.length)]));
 }
 
 export async function insertWebhookEvent(

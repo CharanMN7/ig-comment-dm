@@ -12,6 +12,7 @@ import {
 } from '../crypto.ts';
 import { ensureCommentSubscriptions, runCron } from '../cron.ts';
 import {
+  type SendTotals,
   countSentByComment,
   deleteRule,
   getAccount,
@@ -23,10 +24,11 @@ import {
   listRules,
   recentSent,
   recentWebhookEvents,
+  sendTotals,
+  sendTotalsByAccount,
   setAccountActive,
   systemGet,
   systemSet,
-  todayCounters,
   toggleRule,
   updateRule,
   upsertAccount,
@@ -286,6 +288,46 @@ adminRoutes.post('/logout', async (c) => {
   return c.redirect(`${c.get('adminBase')}/login`, 302);
 });
 
+const DAY = 24 * 60 * 60;
+
+// Windows start at a UTC midnight, so "Last 7 days" is today and the six days
+// before it. One fixed clock means the numbers don't shift with the viewer.
+const TOTAL_WINDOWS = [
+  { label: 'Today (UTC)', days: 1 },
+  { label: 'Last 7 days', days: 7 },
+  { label: 'Last 30 days', days: 30 },
+  { label: 'All time', days: null },
+];
+
+function windowStarts(now: number): number[] {
+  const today = Math.floor(now / DAY) * DAY;
+  return TOTAL_WINDOWS.map((w) => (w.days == null ? 0 : today - (w.days - 1) * DAY));
+}
+
+function fmtCount(n: number): string {
+  return n.toLocaleString('en-US');
+}
+
+function totalsTiles(totals: SendTotals[]) {
+  return html`
+    <div class="kpis">
+      ${TOTAL_WINDOWS.map((w, i) => {
+        const t = totals[i] ?? { sent: 0, skipped: 0, failed: 0, reached: 0 };
+        const failed = `${fmtCount(t.failed)} failed`;
+        return html`<div class="kpi">
+          <span class="muted">${w.label}</span>
+          <b>${fmtCount(t.reached)}</b>
+          people reached
+          <div class="muted">
+            ${fmtCount(t.sent)} DMs sent<br />${fmtCount(t.skipped)} skipped<br />
+            ${t.failed ? html`<span class="err">${failed}</span>` : failed}
+          </div>
+        </div>`;
+      })}
+    </div>
+  `;
+}
+
 adminRoutes.on('GET', ['/', ''], async (c) => {
   const base = c.get('adminBase');
   const session = c.get('session');
@@ -301,8 +343,10 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   } catch {
     events = [];
   }
-  const dayStart = Math.floor(now / 86400) * 86400;
-  const counts = await todayCounters(c.env.DB, dayStart);
+  const starts = windowStarts(now);
+  const totals = await sendTotals(c.env.DB, starts);
+  // With one account the breakdown would repeat the totals, so skip its query.
+  const byAccount = accounts.length > 1 ? await sendTotalsByAccount(c.env.DB, starts) : null;
   const lastCron = await systemGet(c.env.DB, 'last_cron_ok_at');
   const lastCronN = lastCron ? parseInt(lastCron, 10) : NaN;
   const lastPoll = await systemGet(c.env.DB, 'last_poll_ok_at');
@@ -366,11 +410,20 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
       body: html`
         ${banners}
         <h1>Home</h1>
-        <div class="kpis">
-          <div class="kpi"><span class="muted">Comments seen today</span><b>${String(counts.triggers)}</b></div>
-          <div class="kpi"><span class="muted">DMs sent today</span><b>${String(counts.sends)}</b></div>
-          <div class="kpi"><span class="muted">Failures today</span><b>${String(counts.failures)}</b></div>
-        </div>
+        ${totalsTiles(totals)}
+        <p class="muted">
+          Days start at 00:00 UTC, and the 7- and 30-day totals include today. People reached counts each
+          person once, and only if a DM actually went out to them.
+        </p>
+        ${byAccount
+          ? html`
+              <h2>By account</h2>
+              ${accounts.map(
+                (a) => html`<h3>@${a.username}</h3>
+                  ${totalsTiles(byAccount.get(a.ig_user_id) ?? [])}`,
+              )}
+            `
+          : html``}
 
         <h2>Accounts</h2>
         ${accounts.length === 0
