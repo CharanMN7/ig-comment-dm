@@ -172,8 +172,11 @@ A GitHub template would sever the upstream link. Meta renames dashboard screens,
 ```bash
 git remote add upstream https://github.com/CharanMN7/ig-comment-dm.git
 git pull upstream master
-npx wrangler deploy
+npm install
+npm run deploy
 ```
+
+`npm run deploy` applies any new database migrations, then deploys. If Wrangler lists migrations and asks to continue, say yes. Use it rather than `npx wrangler deploy`, which would put new code live without the tables and columns it needs.
 
 Your secrets live in Cloudflare, so updating never touches them.
 
@@ -282,6 +285,7 @@ Instagram's rules, not ours. Each of these is enforced by Meta and cost someone 
 - [x] Startup validation of all eight secrets, surfaced in the admin panel
 - [x] `npm run setup` — clone to deployed in one command
 - [x] `npm run doctor` — diagnoses a live deployment
+- [x] Tracked database migrations, applied by `npm run deploy` before the new code goes live
 - [x] Multi-account support on a single deployment
 - [x] Hosted privacy, terms, and data-deletion pages for Meta review
 
@@ -358,7 +362,6 @@ Everything below is [an open issue](https://github.com/CharanMN7/ig-comment-dm/i
 
 | Issue | Feature | Why it matters |
 |:--|---|---|
-| [#45](https://github.com/CharanMN7/ig-comment-dm/issues/45) | **Tracked migration runner** | Adding a migration should not mean editing two npm scripts |
 | [#46](https://github.com/CharanMN7/ig-comment-dm/issues/46) | **Health check endpoint** | Uptime monitoring without a login |
 | [#47](https://github.com/CharanMN7/ig-comment-dm/issues/47) | **Operational event log** | Cron failures are invisible until something breaks |
 | [#49](https://github.com/CharanMN7/ig-comment-dm/issues/49) | **Export rules and logs** | Your data, portable |

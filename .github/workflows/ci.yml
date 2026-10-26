@@ -54,6 +54,15 @@ jobs:
 
       - run: npm ci
 
+      - name: Migrations apply with Wrangler's runner
+        # The tests below apply migrations through the test pool, which accepts
+        # SQL that `wrangler d1 migrations apply` rejects (a last statement with
+        # no semicolon, for one). Deploys use Wrangler's runner, so check it on
+        # a throwaway local database. Needs no Cloudflare account.
+        run: npx wrangler d1 migrations apply DB --local --persist-to "$RUNNER_TEMP/d1"
+        env:
+          CLOUDFLARE_API_TOKEN: ""
+
       - name: Worker, D1 and admin panel in workerd, Meta faked
         run: npm run test:integration
 
