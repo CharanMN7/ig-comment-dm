@@ -73,14 +73,24 @@ describe('Meta retry policy', () => {
     expect(row).toMatchObject({ dm_status: 'failed' });
   });
 
-  // Known bug: a network error on every attempt makes fetchWithRetry throw, and
-  // processComment has no catch around the send, so the claimed row is left
-  // `pending` forever. Dedupe then blocks any retry and Home shows
-  // "In progress" for good. When that is fixed, drop `.fails`.
-  it.fails('records a send that never reaches Meta as failed rather than leaving it pending', async () => {
+  // A pending row is never retried: dedupe and the 5-minute poll both treat it
+  // as handled, and Home shows "In progress" for good.
+  it('records a send that never reaches Meta as failed rather than leaving it pending', async () => {
     meta.on('POST', '/:id/messages', { networkError: true });
     const row = await deliverMatchingComment();
     expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(3);
     expect(row).toMatchObject({ dm_status: 'failed' });
+    expect(row?.error).toMatch(/^DM: could not reach Instagram after 3 tries \(.+\)$/);
+  });
+
+  it('records a public reply that never reaches Meta as failed, keeping the DM as sent', async () => {
+    meta.on('POST', '/:id/replies', { networkError: true });
+    await seedAccount();
+    await seedRule({ publicReply: 'Sent you a DM!' });
+    await withBackoffSkipped(postWebhook(commentPayload()));
+    const row = await sentRow('17900000000000001');
+    expect(meta.callsTo('POST', '/:id/replies')).toHaveLength(3);
+    expect(row).toMatchObject({ dm_status: 'ok', reply_status: 'failed' });
+    expect(row?.error).toMatch(/^public reply: could not reach Instagram after 3 tries/);
   });
 });

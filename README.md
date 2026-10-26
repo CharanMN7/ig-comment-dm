@@ -201,7 +201,7 @@ You can connect several Instagram accounts to one deployment. Each one needs to 
 | **Name** | For you only. `Free guide`. |
 | **Keywords** | One per line. **At least 3 characters** — `AI` would fire on "again" and "email". |
 | **The DM** | Under 1,000 characters. Put everything they need here. |
-| **Public reply** | Optional. Shows under the comment. |
+| **Public reply** | Optional. Shows under the comment, only once the DM has gone through. |
 | **Which posts** | All posts and reels, or pick one from the dropdown. |
 
 Matching ignores case, emoji, and punctuation, and matches whole words. A rule scoped to a specific post beats a rule that applies to everything.

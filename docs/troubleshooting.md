@@ -28,7 +28,7 @@ and it still does not work.
 - [Locked out of the admin page](#locked-out-of-the-admin-page)
 - [Creating the first password returns a 500](#creating-the-first-password-returns-a-500)
 - [Errors mention "no such column" after an update](#errors-mention-no-such-column-after-an-update)
-- [The DM failed but the public reply worked](#the-dm-failed-but-the-public-reply-worked)
+- [The DM failed](#the-dm-failed)
 - [Red banner: an account needs reconnecting](#red-banner-an-account-needs-reconnecting)
 - [Red banner: the daily check has not run](#red-banner-the-daily-check-has-not-run)
 - [/health answers 503](#health-answers-503)
@@ -368,10 +368,15 @@ npm run db:migrate
 
 ---
 
-## The DM failed but the public reply worked
+## The DM failed
 
-They are separate API calls and either can fail on its own. The **Last 20 sends**
-row shows the exact error from Meta for each.
+The **Last 20 sends** row shows the exact error from Meta. When the DM fails, the
+public reply is not posted either, because a reply like "Sent you a DM!" would be
+false; the row says so. A public reply can still fail on its own after a DM went
+through.
+
+"Could not reach Instagram after 3 tries" means Meta never answered, usually a
+brief network problem. That comment is not retried automatically.
 
 Common DM failures:
 

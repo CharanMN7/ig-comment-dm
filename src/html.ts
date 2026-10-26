@@ -34,7 +34,7 @@ button, .btn {
   text-decoration: none; display: inline-block;
 }
 button.secondary, a.btn.secondary { background: #fff; color: #111; border: 1px solid #bbb; }
-button.danger { background: #a11; }
+button.danger, a.btn.danger { background: #a11; }
 .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; margin: 0.75rem 0 1.25rem; }
 .kpi { background: #fff; border: 1px solid #e4e4e0; padding: 0.65rem 0.75rem; }
 .kpi b { display: block; font-size: 1.35rem; }

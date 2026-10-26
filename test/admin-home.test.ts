@@ -42,6 +42,16 @@ describe('the admin home page', () => {
     expect(page).not.toContain('<img');
   });
 
+  it('says when a public reply was held back because the DM failed', async () => {
+    await seedAccount();
+    await seedRule({ publicReply: 'Sent you a DM!' });
+    meta.on('POST', '/:id/messages', { status: 400, json: { error: { message: 'outside of allowed window' } } });
+    await postWebhook(commentPayload());
+    const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
+    expect(page).toContain('Send failed.');
+    expect(page).toContain('Public reply not posted, because no DM went out.');
+  });
+
   it('warns when the last webhook failed its signature check', async () => {
     await postWebhook(commentPayload(), { secret: 'wrong' });
     const page = (await (await signedInAdmin()).get(adminPath('/'))).text;

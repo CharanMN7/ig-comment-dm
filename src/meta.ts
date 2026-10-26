@@ -16,25 +16,30 @@ export type MetaCallResult = {
   body: string;
 };
 
+const ATTEMPTS = 3;
+
 async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
   let lastRes: Response | undefined;
   let lastErr: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     try {
       const res = await fetch(url, init);
       if (res.status === 429 || res.status >= 500) {
         lastRes = res;
-        if (attempt < 2) await sleep(jitteredDelayMs(500 * 2 ** attempt));
+        if (attempt < ATTEMPTS - 1) await sleep(jitteredDelayMs(500 * 2 ** attempt));
         continue;
       }
       return res;
     } catch (err) {
       lastErr = err;
-      if (attempt < 2) await sleep(jitteredDelayMs(500 * 2 ** attempt));
+      if (attempt < ATTEMPTS - 1) await sleep(jitteredDelayMs(500 * 2 ** attempt));
     }
   }
   if (lastRes) return lastRes;
-  throw lastErr instanceof Error ? lastErr : new Error('network error talking to Instagram');
+  // This message ends up in the send log on Home, so it says what happened in
+  // words an operator can act on; the runtime's own text follows for whoever debugs.
+  const detail = lastErr instanceof Error ? lastErr.message : String(lastErr);
+  throw new Error(`could not reach Instagram after ${ATTEMPTS} tries (${detail})`);
 }
 
 async function readResult(res: Response): Promise<MetaCallResult> {

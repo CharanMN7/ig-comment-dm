@@ -11,8 +11,8 @@ import {
 } from './db.ts';
 import { isSelfComment } from './guard.ts';
 import { findMatchingRule } from './match.ts';
-import { sendPrivateReply, sendPublicReply } from './meta.ts';
-import type { Env } from './types.ts';
+import { type MetaCallResult, sendPrivateReply, sendPublicReply } from './meta.ts';
+import type { Env, Rule } from './types.ts';
 
 type CommentValue = {
   id?: string | number;
@@ -87,6 +87,33 @@ export async function processWebhook(env: Env, payload: unknown): Promise<void> 
   }
 }
 
+/**
+ * The one place a comment is matched to a rule. The admin Test page calls it
+ * too, so a dry run can never name a different rule from the one a real
+ * comment fires.
+ */
+export async function chooseRule(
+  db: D1Database,
+  igUserId: string,
+  text: string,
+  mediaId: string | undefined,
+): Promise<Rule | null> {
+  return findMatchingRule(await listActiveRules(db, igUserId), text, mediaId);
+}
+
+/**
+ * A send that throws (every retry failed before Meta answered) must still end
+ * as a failed result. Otherwise the final UPDATE never runs, the claimed row
+ * stays `pending`, and dedupe treats the comment as handled for good.
+ */
+async function sendOrFail(send: () => Promise<MetaCallResult>): Promise<MetaCallResult> {
+  try {
+    return await send();
+  } catch (err) {
+    return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function processComment(
   env: Env,
   entryId: string,
@@ -137,8 +164,7 @@ export async function processComment(
   });
   if (!claimed) return;
 
-  const rules = await listActiveRules(env.DB, account.ig_user_id);
-  const rule = findMatchingRule(rules, text, mediaId);
+  const rule = await chooseRule(env.DB, account.ig_user_id, text, mediaId);
   if (!rule) {
     await updateSent(env.DB, commentId, {
       rule_id: null,
@@ -150,6 +176,8 @@ export async function processComment(
     return;
   }
 
+  const publicText = rule.public_reply_text?.trim();
+
   let token: string;
   try {
     token = await decryptAesGcm(env.TOKEN_ENCRYPTION_KEY, account.token_iv, account.access_token_enc);
@@ -157,24 +185,30 @@ export async function processComment(
     await updateSent(env.DB, commentId, {
       rule_id: rule.id,
       dm_status: 'failed',
-      reply_status: null,
+      reply_status: publicText ? 'skipped' : null,
       error: `could not decrypt access token: ${err instanceof Error ? err.message : 'unknown'}`,
       sent_at: nowSeconds(),
     });
     return;
   }
 
-  const dm = await sendPrivateReply(account.ig_user_id, token, commentId, rule.dm_text);
+  const dm = await sendOrFail(() => sendPrivateReply(account.ig_user_id, token, commentId, rule.dm_text));
   let replyStatus: string | null = null;
   const errors: string[] = [];
 
   if (!dm.ok) errors.push(`DM: ${dm.body}`);
 
-  const publicText = rule.public_reply_text?.trim();
   if (publicText) {
-    const reply = await sendPublicReply(commentId, token, publicText);
-    replyStatus = reply.ok ? 'ok' : 'failed';
-    if (!reply.ok) errors.push(`public reply: ${reply.body}`);
+    if (dm.ok) {
+      const reply = await sendOrFail(() => sendPublicReply(commentId, token, publicText));
+      replyStatus = reply.ok ? 'ok' : 'failed';
+      if (!reply.ok) errors.push(`public reply: ${reply.body}`);
+    } else {
+      // Public replies are usually "Sent you a DM!". Posting one when no DM
+      // arrived tells the commenter, and everyone reading the thread, something
+      // false.
+      replyStatus = 'skipped';
+    }
   }
 
   await updateSent(env.DB, commentId, {
