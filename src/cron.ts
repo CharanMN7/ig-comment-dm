@@ -49,7 +49,14 @@ export async function runCron(env: Env): Promise<void> {
       continue;
     }
 
-    const result = await refreshLongLived(token);
+    // A network failure throws rather than returning a result. Uncaught, it
+    // ended the whole run: later accounts went unrefreshed and last_cron_ok_at
+    // unwritten, and Cloudflare does not retry a cron.
+    const result = await refreshLongLived(token).catch((err: unknown) => ({
+      ok: false as const,
+      status: 0,
+      body: err instanceof Error ? err.message : String(err),
+    }));
     if (result.ok) {
       const enc = await encryptAesGcm(env.TOKEN_ENCRYPTION_KEY, result.access_token);
       await updateAccountToken(

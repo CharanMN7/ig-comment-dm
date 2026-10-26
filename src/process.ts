@@ -47,9 +47,19 @@ function asId(value: unknown): string | undefined {
   return String(value);
 }
 
-/** Meta often sends 17-digit IDs as JSON numbers, which JS cannot represent exactly. */
+/**
+ * Meta often sends 17-digit IDs as JSON numbers, which JS cannot represent exactly.
+ *
+ * Strings are matched first and kept whole. Otherwise a comment like
+ * "order: 123456789012345 thanks" had quotes inserted into its text, the
+ * result was not JSON, and the fallback below rounded every id in the payload.
+ */
 export function parseWebhookPayload(raw: string): unknown {
-  const quoted = raw.replace(/:\s*(-?\d{15,})([,}\s])/g, ':"$1"$2');
+  const quoted = raw.replace(
+    /"(?:[^"\\]|\\.)*"|(:\s*)(-?\d{15,})(?=\s*[,}\]])/g,
+    (match: string, colon: string | undefined, digits: string | undefined) =>
+      digits ? `${colon}"${digits}"` : match,
+  );
   try {
     return JSON.parse(quoted);
   } catch {
