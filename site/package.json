@@ -12,7 +12,7 @@
   "dependencies": {
     "@inkform/astro": "0.1.0",
     "astro": "^7.4.2",
-    "mermaid": "^11.17.2",
+    "mermaid": "^12.2.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
