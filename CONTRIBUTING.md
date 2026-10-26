@@ -44,11 +44,23 @@ You need a real Meta app only to test Connect (OAuth) or a live DM.
 ### Verifying your change
 
 ```bash
-npm test            # unit tests — no network, no database
-npm run typecheck   # tsc --noEmit
+npm test            # both suites below, a few seconds, no network
+npm run typecheck   # tsc over src/ and test/
 ```
 
-Both must pass. CI runs exactly these two commands plus a secret scan.
+Both must pass. CI runs them, a `wrangler deploy --dry-run`, and a secret scan.
+
+`npm test` is two suites you can also run alone:
+
+- `npm run test:unit` — `scripts/test-unit.ts`, pure functions on Node's built-in runner.
+- `npm run test:integration` — `test/*.test.ts`, the real Worker running in workerd
+  with a fresh local D1 per test and every file in `migrations/` applied. Meta is
+  faked in `test/support/meta.ts`: no request leaves the machine, and tests assert
+  exactly what the Worker sent. A Meta call with no fake fails the test, so if your
+  change adds one, add a route there.
+
+You need no Meta app and no `.dev.vars` for either. If you fix a bug in the webhook,
+admin panel or cron, add an integration test that fails without your fix.
 
 There is also a live end-to-end check that drives a running Worker:
 
@@ -59,13 +71,27 @@ ADMIN_URL_SECRET=... WEBHOOK_VERIFY_TOKEN=... META_APP_SECRET=... ADMIN_PASSWORD
 
 ## Working on an issue
 
+Every pull request starts as an issue with your name on it.
+
+1. **Find an issue, or open one.** For a bug, a typo or a broken link too: it takes
+   ten seconds and saves a wasted PR.
+2. **Comment to claim it**, with a line or two on how you plan to do it.
+3. **Wait until a maintainer assigns it to you.** Then start building.
+4. **Open the PR with `Closes #<issue>` in the description.**
+
+A pull request from someone who is not assigned to the issue it closes is closed
+automatically, however good the code is. We may still build the idea ourselves. It is
+nothing personal: writing a PR now takes seconds, reviewing one still takes an hour,
+and assignment is how two people avoid building the same thing twice.
+
+You can have at most **two open pull requests** here at a time.
+
 Issues labelled [`good first issue`](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue)
-are self-contained and have the approach sketched out in the description. Comment on
-one to claim it.
+are self-contained and have the approach sketched out in the description.
 
 Anything labelled [`roadmap`](https://github.com/CharanMN7/ig-comment-dm/labels/roadmap)
-is a feature we want but have not built. Those are bigger. Say what you plan to do in
-the issue before you write much code, so two people do not build the same thing twice.
+is a feature we want but have not built. Those are bigger, so expect a short design
+conversation in the issue before you are assigned.
 
 ## Pull requests
 
@@ -80,6 +106,39 @@ the issue before you write much code, so two people do not build the same thing 
 - **Add a test** when you fix a bug. `scripts/test-unit.ts` uses the built-in
   `node:test` runner — no framework to learn.
 - **Update the docs** when you change the operator-facing steps.
+
+## Adding a migration
+
+A schema change is a new file in `migrations/` with the next free number on
+`master`: `003_match_mode.sql` after `002_webhook_events.sql`. Nothing else needs
+editing. `npm run db:migrate`, `npm run deploy`, `npm run setup` and the
+integration tests all pick up every file in the folder. If another PR takes your
+number before yours merges, renumber yours.
+
+Wrangler's runner (`wrangler d1 migrations apply`) records each file it applies in
+a `d1_migrations` table and skips recorded files after that, so a migration runs
+once per database. That is what makes `ALTER TABLE` possible.
+
+- **Never edit a migration that has shipped.** A database that has recorded it
+  never reads it again, so the edit would reach new installs only and the two
+  would quietly drift apart. Fix it in a new migration.
+- **Keep changes additive.** `npm run deploy` applies migrations before the new
+  code goes live, so the old code runs against the new schema for a moment. Add
+  tables and columns; don't rename or drop them.
+- **Give a new column a default that keeps existing rows behaving exactly as
+  before**, for example `ALTER TABLE rules ADD COLUMN match_mode TEXT NOT NULL
+  DEFAULT 'contains';`. SQLite refuses `NOT NULL` without a default here anyway.
+- **Try it locally** with `npm run db:migrate:local` (`npm run db:migrate:list:local`
+  shows what is pending), then `npm test`.
+
+**Why `001` and `002` run again on old deployments.** Deployments from before
+tracking applied them by hand with `wrangler d1 execute`, so their `d1_migrations`
+table is empty and the first tracked run applies both again. That is harmless:
+every statement in them is `CREATE TABLE IF NOT EXISTS` or `CREATE INDEX IF NOT
+EXISTS`, and neither inserts a row, so the replay changes nothing and only records
+them. `test/migrations.test.ts` builds a database the old way, with rows in it,
+and checks that every migration then applies cleanly and leaves those rows alone.
+Your new migration has to pass that test too.
 
 ## House style
 

@@ -8,7 +8,7 @@ npm run setup
 ```
 
 That one command checks your Cloudflare login, deploys the Worker (which
-auto-provisions the D1 database), runs both migrations, asks for the three
+auto-provisions the D1 database), applies the migrations, asks for the three
 secrets that come from Meta, generates the four secrets you don't have to
 think about, sets `PUBLIC_BASE_URL`, and deploys again. At the end it prints
 the exact OAuth redirect URIs, the webhook callback URL and verify token, the
@@ -134,11 +134,12 @@ npm run setup
 ```
 
 `npm run setup` does the rest of this section for you: it deploys once
-(which provisions the D1 database), runs both migrations, prompts for the
+(which provisions the D1 database), applies the migrations, prompts for the
 three Meta secrets from Part 1, generates and stores the four self-issued
 secrets, sets `PUBLIC_BASE_URL` to your real Worker URL, and deploys again.
-It's safe to re-run — deploys are idempotent, migrations use `IF NOT
-EXISTS`, and it leaves existing secrets alone unless you pass `--rotate`.
+It's safe to re-run — deploys are idempotent, migrations the database has
+already recorded are skipped, and it leaves existing secrets alone unless you
+pass `--rotate`.
 
 If it stops partway, the sections below are what it was going to run next.
 
@@ -169,11 +170,16 @@ CPU limits are not supported.
 Create the tables:
 
 ```bash
-npx wrangler d1 execute ig-comment-dm --remote --file=migrations/001_init.sql
-npx wrangler d1 execute ig-comment-dm --remote --file=migrations/002_webhook_events.sql
+npm run db:migrate
 ```
 
-(Both of those are also `npm run db:migrate`.)
+That runs `wrangler d1 migrations apply DB --remote`. It applies the files in
+`migrations/` in order and records each one in a `d1_migrations` table, so a
+later run applies only the migrations added since; `npm run db:migrate:list`
+shows what's pending. The tables come after the first deploy only because the
+database doesn't exist before it. When you update to a newer version later,
+deploy with `npm run deploy`, which applies new migrations before the new code
+goes live.
 
 Generate the four secrets you issue yourself:
 
@@ -388,12 +394,12 @@ Copy `.dev.vars.example` to `.dev.vars` and fill in the same secrets. Use
 ```bash
 npm install
 npm run keys                 # generates the four secrets you issue yourself
-npx wrangler d1 execute ig-comment-dm --local --file=migrations/001_init.sql
-npx wrangler d1 execute ig-comment-dm --local --file=migrations/002_webhook_events.sql
+npm run db:migrate:local     # creates the tables in the local database
 npm run dev
 ```
 
-(Both migration commands are also `npm run db:migrate:local`.)
+Run `npm run db:migrate:local` again after pulling a change that adds a
+migration. It skips the ones your local database has already recorded.
 
 In the Meta app, add `http://localhost:8787/connect/callback` as an OAuth
 redirect URI if you want to click Connect locally. Webhooks from Instagram

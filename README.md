@@ -5,7 +5,7 @@
 <p>
   <a href="#quick-start"><img src="https://img.shields.io/badge/deploy_in-6_minutes-FD1D1D?style=for-the-badge&labelColor=1a1a1a" alt="Deploy in 6 minutes" /></a>
   <a href="#roadmap"><img src="https://img.shields.io/badge/roadmap-30%2B_planned-833AB4?style=for-the-badge&labelColor=1a1a1a" alt="Roadmap" /></a>
-  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-FCB045?style=for-the-badge&labelColor=1a1a1a" alt="PRs welcome" /></a>
+  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-claim_an_issue_first-FCB045?style=for-the-badge&labelColor=1a1a1a" alt="PRs: claim an issue first" /></a>
 </p>
 
 <p>
@@ -172,8 +172,11 @@ A GitHub template would sever the upstream link. Meta renames dashboard screens,
 ```bash
 git remote add upstream https://github.com/CharanMN7/ig-comment-dm.git
 git pull upstream master
-npx wrangler deploy
+npm install
+npm run deploy
 ```
+
+`npm run deploy` applies any new database migrations, then deploys. If Wrangler lists migrations and asks to continue, say yes. Use it rather than `npx wrangler deploy`, which would put new code live without the tables and columns it needs.
 
 Your secrets live in Cloudflare, so updating never touches them.
 
@@ -198,7 +201,7 @@ You can connect several Instagram accounts to one deployment. Each one needs to 
 | **Name** | For you only. `Free guide`. |
 | **Keywords** | One per line. **At least 3 characters** — `AI` would fire on "again" and "email". |
 | **The DM** | Under 1,000 characters. Put everything they need here. |
-| **Public reply** | Optional. Shows under the comment. |
+| **Public reply** | Optional. Shows under the comment, only once the DM has gone through. |
 | **Which posts** | All posts and reels, or pick one from the dropdown. |
 
 Matching ignores case, emoji, and punctuation, and matches whole words. A rule scoped to a specific post beats a rule that applies to everything.
@@ -219,6 +222,16 @@ Then comment from a **different** Instagram account — a friend's phone works. 
 | **Did Instagram reach us?** | Whether Meta is POSTing at all. Empty means the problem is on Meta's side, not yours. `Wrong secret` means `FACEBOOK_APP_SECRET` is missing. |
 | **Last 20 sends** | Every DM, skip, and failure, with the reason. |
 | **Red banners** | An account needs reconnecting, the nightly job has stalled, or a secret is misconfigured. |
+
+### Get told when it stops working
+
+The red banners only help if someone opens the panel. Point any uptime monitor at:
+
+```
+https://ig-comment-dm.YOURNAME.workers.dev/health
+```
+
+It answers `200` while the database responds and both scheduled jobs are running, and `503` when either has stalled, so you hear about a dead nightly refresh before tokens start expiring. It needs no login and shows no usernames, ids or secrets: only account counts and the time each job last ran. [What a 503 means](docs/troubleshooting.md#health-answers-503).
 
 ---
 
@@ -282,6 +295,8 @@ Instagram's rules, not ours. Each of these is enforced by Meta and cost someone 
 - [x] Startup validation of all eight secrets, surfaced in the admin panel
 - [x] `npm run setup` — clone to deployed in one command
 - [x] `npm run doctor` — diagnoses a live deployment
+- [x] Tracked database migrations, applied by `npm run deploy` before the new code goes live
+- [x] `/health` endpoint for uptime monitors, with no login and nothing identifying in it
 - [x] Multi-account support on a single deployment
 - [x] Hosted privacy, terms, and data-deletion pages for Meta review
 
@@ -358,8 +373,6 @@ Everything below is [an open issue](https://github.com/CharanMN7/ig-comment-dm/i
 
 | Issue | Feature | Why it matters |
 |:--|---|---|
-| [#45](https://github.com/CharanMN7/ig-comment-dm/issues/45) | **Tracked migration runner** | Adding a migration should not mean editing two npm scripts |
-| [#46](https://github.com/CharanMN7/ig-comment-dm/issues/46) | **Health check endpoint** | Uptime monitoring without a login |
 | [#47](https://github.com/CharanMN7/ig-comment-dm/issues/47) | **Operational event log** | Cron failures are invisible until something breaks |
 | [#49](https://github.com/CharanMN7/ig-comment-dm/issues/49) | **Export rules and logs** | Your data, portable |
 | [#50](https://github.com/CharanMN7/ig-comment-dm/issues/50) | **Dark mode** | The panel is white at 1am |
@@ -396,11 +409,11 @@ Everything below is [an open issue](https://github.com/CharanMN7/ig-comment-dm/i
 
 ## Contributing
 
-Issues and pull requests are welcome. [`good first issue`](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue) items are self-contained and describe the approach.
+Issues and pull requests are welcome. Claim an issue and wait to be assigned before you open a PR; unassigned PRs are closed automatically ([why](CONTRIBUTING.md#working-on-an-issue)). [`good first issue`](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue) items are self-contained and describe the approach.
 
 ```bash
 npm install
-npm test          # 30 unit tests, no network, no database
+npm test          # unit + integration tests, fully local, no network
 npm run typecheck
 npm run dev       # http://localhost:8787
 ```

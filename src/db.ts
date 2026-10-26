@@ -1,33 +1,66 @@
-import type { Account, Rule, Sent, WebhookEvent } from "./types.ts";
+import type { Account, Rule, Sent, WebhookEvent } from './types.ts';
 
-export async function systemGet(
-  db: D1Database,
-  key: string,
-): Promise<string | null> {
-  const row = await db
-    .prepare("SELECT value FROM system WHERE key = ?")
-    .bind(key)
-    .first<{ value: string | null }>();
+export async function systemGet(db: D1Database, key: string): Promise<string | null> {
+  const row = await db.prepare('SELECT value FROM system WHERE key = ?').bind(key).first<{ value: string | null }>();
   return row?.value ?? null;
 }
 
-export async function systemSet(
-  db: D1Database,
-  key: string,
-  value: string,
-): Promise<void> {
+export async function systemSet(db: D1Database, key: string, value: string): Promise<void> {
   await db
     .prepare(
-      "INSERT INTO system (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      'INSERT INTO system (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
     )
     .bind(key, value)
     .run();
 }
 
-export async function getAccount(
-  db: D1Database,
-  igUserId: string,
-): Promise<Account | null> {
+export type HealthSnapshot = {
+  lastCronOkAt: number | null;
+  lastPollOkAt: number | null;
+  firstSeenAt: number | null;
+  activeAccounts: number;
+  needsReconnect: number;
+};
+
+export const HEALTH_FIRST_SEEN_KEY = 'health_first_seen_at';
+
+/**
+ * Everything `/health` reports, in one statement, so a monitor polling every
+ * 30 seconds costs one D1 read. `needs_reconnect` counts what the admin
+ * banner counts: flagged by the nightly job, or already expired.
+ */
+export async function healthSnapshot(db: D1Database, now: number): Promise<HealthSnapshot> {
+  const row = await db
+    .prepare(
+      `SELECT
+         (SELECT value FROM system WHERE key = 'last_cron_ok_at') AS last_cron_ok_at,
+         (SELECT value FROM system WHERE key = 'last_poll_ok_at') AS last_poll_ok_at,
+         (SELECT value FROM system WHERE key = ?) AS first_seen_at,
+         (SELECT COUNT(*) FROM accounts WHERE active = 1) AS active,
+         (SELECT COUNT(*) FROM accounts WHERE needs_reconnect = 1 OR token_expires_at <= ?) AS needs_reconnect`,
+    )
+    .bind(HEALTH_FIRST_SEEN_KEY, now)
+    .first<{
+      last_cron_ok_at: string | null;
+      last_poll_ok_at: string | null;
+      first_seen_at: string | null;
+      active: number;
+      needs_reconnect: number;
+    }>();
+  const int = (value: string | null | undefined): number | null => {
+    const n = Number.parseInt(value ?? '', 10);
+    return Number.isFinite(n) ? n : null;
+  };
+  return {
+    lastCronOkAt: int(row?.last_cron_ok_at),
+    lastPollOkAt: int(row?.last_poll_ok_at),
+    firstSeenAt: int(row?.first_seen_at),
+    activeAccounts: row?.active ?? 0,
+    needsReconnect: row?.needs_reconnect ?? 0,
+  };
+}
+
+export async function getAccount(db: D1Database, igUserId: string): Promise<Account | null> {
   return await db
     .prepare(
       `SELECT ig_user_id, username, access_token_enc, token_iv, token_expires_at,
@@ -88,15 +121,8 @@ export async function upsertAccount(
     .run();
 }
 
-export async function setAccountActive(
-  db: D1Database,
-  igUserId: string,
-  active: number,
-): Promise<void> {
-  await db
-    .prepare("UPDATE accounts SET active = ? WHERE ig_user_id = ?")
-    .bind(active, igUserId)
-    .run();
+export async function setAccountActive(db: D1Database, igUserId: string, active: number): Promise<void> {
+  await db.prepare('UPDATE accounts SET active = ? WHERE ig_user_id = ?').bind(active, igUserId).run();
 }
 
 export async function updateAccountToken(
@@ -118,20 +144,11 @@ export async function updateAccountToken(
     .run();
 }
 
-export async function flagNeedsReconnect(
-  db: D1Database,
-  igUserId: string,
-): Promise<void> {
-  await db
-    .prepare("UPDATE accounts SET needs_reconnect = 1 WHERE ig_user_id = ?")
-    .bind(igUserId)
-    .run();
+export async function flagNeedsReconnect(db: D1Database, igUserId: string): Promise<void> {
+  await db.prepare('UPDATE accounts SET needs_reconnect = 1 WHERE ig_user_id = ?').bind(igUserId).run();
 }
 
-export async function accountsNeedingRefresh(
-  db: D1Database,
-  expiresBefore: number,
-): Promise<Account[]> {
+export async function accountsNeedingRefresh(db: D1Database, expiresBefore: number): Promise<Account[]> {
   const { results } = await db
     .prepare(
       `SELECT ig_user_id, username, access_token_enc, token_iv, token_expires_at,
@@ -145,10 +162,7 @@ export async function accountsNeedingRefresh(
   return results ?? [];
 }
 
-export async function listActiveRules(
-  db: D1Database,
-  igUserId: string,
-): Promise<Rule[]> {
+export async function listActiveRules(db: D1Database, igUserId: string): Promise<Rule[]> {
   const { results } = await db
     .prepare(
       `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at
@@ -159,10 +173,7 @@ export async function listActiveRules(
   return results ?? [];
 }
 
-export async function listRules(
-  db: D1Database,
-  igUserId?: string,
-): Promise<Rule[]> {
+export async function listRules(db: D1Database, igUserId?: string): Promise<Rule[]> {
   if (igUserId) {
     const { results } = await db
       .prepare(
@@ -182,10 +193,7 @@ export async function listRules(
   return results ?? [];
 }
 
-export async function getRule(
-  db: D1Database,
-  id: number,
-): Promise<Rule | null> {
+export async function getRule(db: D1Database, id: number): Promise<Rule | null> {
   return await db
     .prepare(
       `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at
@@ -212,15 +220,7 @@ export async function insertRule(
       `INSERT INTO rules (ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at)
        VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
     )
-    .bind(
-      row.ig_user_id,
-      row.label,
-      row.keywords,
-      row.media_id,
-      row.dm_text,
-      row.public_reply_text,
-      row.created_at,
-    )
+    .bind(row.ig_user_id, row.label, row.keywords, row.media_id, row.dm_text, row.public_reply_text, row.created_at)
     .run();
 }
 
@@ -242,27 +242,16 @@ export async function updateRule(
        SET ig_user_id = ?, label = ?, keywords = ?, media_id = ?, dm_text = ?, public_reply_text = ?
        WHERE id = ?`,
     )
-    .bind(
-      row.ig_user_id,
-      row.label,
-      row.keywords,
-      row.media_id,
-      row.dm_text,
-      row.public_reply_text,
-      id,
-    )
+    .bind(row.ig_user_id, row.label, row.keywords, row.media_id, row.dm_text, row.public_reply_text, id)
     .run();
 }
 
 export async function toggleRule(db: D1Database, id: number): Promise<void> {
-  await db
-    .prepare("UPDATE rules SET active = 1 - active WHERE id = ?")
-    .bind(id)
-    .run();
+  await db.prepare('UPDATE rules SET active = 1 - active WHERE id = ?').bind(id).run();
 }
 
 export async function deleteRule(db: D1Database, id: number): Promise<void> {
-  await db.prepare("DELETE FROM rules WHERE id = ?").bind(id).run();
+  await db.prepare('DELETE FROM rules WHERE id = ?').bind(id).run();
 }
 
 export async function tryClaimComment(
@@ -282,14 +271,7 @@ export async function tryClaimComment(
        VALUES (?, ?, NULL, ?, ?, NULL, ?, ?)
        ON CONFLICT(comment_id) DO NOTHING`,
     )
-    .bind(
-      row.comment_id,
-      row.ig_user_id,
-      row.commenter_id,
-      row.dm_status,
-      row.error,
-      row.sent_at,
-    )
+    .bind(row.comment_id, row.ig_user_id, row.commenter_id, row.dm_status, row.error, row.sent_at)
     .run();
   const meta = result.meta as { changes?: number; rows_written?: number };
   return (meta.changes ?? meta.rows_written ?? 0) > 0;
@@ -310,21 +292,11 @@ export async function updateSent(
     .prepare(
       `UPDATE sent SET rule_id = ?, dm_status = ?, reply_status = ?, error = ?, sent_at = ? WHERE comment_id = ?`,
     )
-    .bind(
-      patch.rule_id,
-      patch.dm_status,
-      patch.reply_status,
-      patch.error,
-      patch.sent_at,
-      commentId,
-    )
+    .bind(patch.rule_id, patch.dm_status, patch.reply_status, patch.error, patch.sent_at, commentId)
     .run();
 }
 
-export async function recentSent(
-  db: D1Database,
-  limit: number,
-): Promise<(Sent & { rule_label: string | null })[]> {
+export async function recentSent(db: D1Database, limit: number): Promise<(Sent & { rule_label: string | null })[]> {
   const { results } = await db
     .prepare(
       `SELECT s.comment_id, s.ig_user_id, s.rule_id, s.commenter_id, s.dm_status, s.reply_status,
@@ -425,11 +397,7 @@ export async function todayCounters(
        FROM sent WHERE sent_at >= ?`,
     )
     .bind(since)
-    .first<{
-      triggers: number;
-      sends: number | null;
-      failures: number | null;
-    }>();
+    .first<{ triggers: number; sends: number | null; failures: number | null }>();
   return {
     triggers: row?.triggers ?? 0,
     sends: row?.sends ?? 0,
@@ -456,10 +424,7 @@ export async function insertWebhookEvent(
     .run();
 }
 
-export async function recentWebhookEvents(
-  db: D1Database,
-  limit: number,
-): Promise<WebhookEvent[]> {
+export async function recentWebhookEvents(db: D1Database, limit: number): Promise<WebhookEvent[]> {
   const { results } = await db
     .prepare(
       `SELECT id, received_at, status, object, preview, error
@@ -472,31 +437,19 @@ export async function recentWebhookEvents(
   return results ?? [];
 }
 
-export async function pruneWebhookEvents(
-  db: D1Database,
-  olderThan: number,
-): Promise<void> {
-  await db
-    .prepare("DELETE FROM webhook_events WHERE received_at < ?")
-    .bind(olderThan)
-    .run();
+export async function pruneWebhookEvents(db: D1Database, olderThan: number): Promise<void> {
+  await db.prepare('DELETE FROM webhook_events WHERE received_at < ?').bind(olderThan).run();
 }
 
-export async function countSentByComment(
-  db: D1Database,
-  commentId: string,
-): Promise<number> {
+export async function countSentByComment(db: D1Database, commentId: string): Promise<number> {
   const row = await db
-    .prepare("SELECT COUNT(*) AS n FROM sent WHERE comment_id = ?")
+    .prepare('SELECT COUNT(*) AS n FROM sent WHERE comment_id = ?')
     .bind(commentId)
     .first<{ n: number }>();
   return row?.n ?? 0;
 }
 
-export async function getSent(
-  db: D1Database,
-  commentId: string,
-): Promise<Sent | null> {
+export async function getSent(db: D1Database, commentId: string): Promise<Sent | null> {
   return await db
     .prepare(
       `SELECT comment_id, ig_user_id, rule_id, commenter_id, dm_status, reply_status, error, sent_at

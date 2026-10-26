@@ -1,0 +1,63 @@
+name: PR policy
+
+# A pull request has to come from someone assigned to an issue it closes
+# (CONTRIBUTING.md, "Working on an issue"). Everything else is closed with a
+# note pointing there.
+#
+# pull_request_target runs with a token that can close the PR, so this
+# workflow never checks out or runs anything from the pull request. The only
+# PR data it touches is the number and the author's login, passed through env.
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+  issues: read
+
+jobs:
+  assigned:
+    name: Author is assigned to the issue
+    # Maintainers, collaborators and bots (Dependabot) are exempt, and a
+    # maintainer can exempt one PR by adding the policy-exempt label before
+    # reopening it.
+    if: >-
+      github.event.pull_request.user.type != 'Bot' &&
+      !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) &&
+      !contains(github.event.pull_request.labels.*.name, 'policy-exempt')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close unless the author is assigned to an issue this PR closes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          gh api graphql \
+            -f owner="${REPO%/*}" -f name="${REPO#*/}" -F pr="$PR" \
+            -f query='
+              query($owner: String!, $name: String!, $pr: Int!) {
+                repository(owner: $owner, name: $name) {
+                  pullRequest(number: $pr) {
+                    closingIssuesReferences(first: 10) {
+                      nodes { number assignees(first: 20) { nodes { login } } }
+                    }
+                  }
+                }
+              }' > linked.json
+
+          assigned=$(jq -r --arg author "$AUTHOR" '
+            [.data.repository.pullRequest.closingIssuesReferences.nodes[]
+              | select(any(.assignees.nodes[]; .login == $author))
+              | "#\(.number)"] | join(" ")' linked.json)
+
+          if [ -n "$assigned" ]; then
+            echo "@$AUTHOR is assigned to $assigned. Leaving the PR open."
+            exit 0
+          fi
+
+          gh pr close "$PR" --repo "$REPO" --comment "Closing per [CONTRIBUTING](https://github.com/$REPO/blob/master/CONTRIBUTING.md#working-on-an-issue). Claim an issue and wait for assignment, and I'll happily review.
+
+          Already assigned? Put \`Closes #<issue>\` in the description and comment here, and a maintainer will reopen it."
+          echo "::notice::Closed #$PR: @$AUTHOR is not assigned to an issue it closes."

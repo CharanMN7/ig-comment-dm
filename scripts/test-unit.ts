@@ -14,6 +14,8 @@ import { authorizeUrl, oauthRedirectUri } from '../src/meta.ts';
 import { isSelfComment } from '../src/guard.ts';
 import { parseWebhookPayload } from '../src/process.ts';
 import {
+  KEYWORD_CACHE_MAX,
+  compileKeyword,
   escapeRegex,
   findMatchingRule,
   keywordMatches,
@@ -57,6 +59,68 @@ describe('normalizeCommentText', () => {
   it('lowercases, strips emoji and punctuation, collapses whitespace', () => {
     assert.equal(normalizeCommentText('  Guide PLEASE!!! 🙌  '), 'guide please');
   });
+
+  it('folds Latin diacritics but preserves non-Latin combining marks', () => {
+    assert.equal(normalizeCommentText('PREÇO café über'), 'preco cafe uber');
+    assert.equal(normalizeCommentText('й が क़ ไทย'), 'й が क़ ไทย');
+  });
+});
+
+describe('normalizeCommentText: stroke and bar letters', () => {
+  // NFD has nothing to split in these, so the combining-mark fold alone left
+  // them as they were. Escapes keep the two look-alike capitals apart.
+  const letters: Array<[string, string, string]> = [
+    ['\u0111', 'd', 'đ U+0111'],
+    ['\u0110', 'd', 'Đ U+0110 (Vietnamese, Croatian)'],
+    ['\u0142', 'l', 'ł U+0142'],
+    ['\u0141', 'l', 'Ł U+0141'],
+    ['\u00F8', 'o', 'ø U+00F8'],
+    ['\u00D8', 'o', 'Ø U+00D8'],
+    ['\u00DF', 'ss', 'ß U+00DF'],
+    ['\u1E9E', 'ss', 'ẞ U+1E9E'],
+    ['\u00F0', 'd', 'ð U+00F0'],
+    ['\u00D0', 'd', 'Ð U+00D0 (Icelandic eth)'],
+    ['\u00FE', 'th', 'þ U+00FE'],
+    ['\u00DE', 'th', 'Þ U+00DE'],
+  ];
+
+  for (const [letter, folded, name] of letters) {
+    it(`folds ${name} to ${folded}`, () => {
+      assert.equal(normalizeCommentText(letter), folded);
+    });
+  }
+
+  it('folds a precomposed letter whose NFD base is a stroke letter', () => {
+    // ǿ decomposes to ø plus a combining acute, so the acute only goes if ø
+    // has already become o by the time combining marks are stripped.
+    assert.equal(normalizeCommentText('\u01FF'), 'o');
+    assert.equal(normalizeCommentText('\u01FE'), 'o');
+  });
+
+  it('folds whole words in Latin-script languages', () => {
+    assert.equal(normalizeCommentText('Điện thoại'), 'dien thoai');
+    assert.equal(normalizeCommentText('Đà Nẵng, tiếng Việt'), 'da nang tieng viet');
+    assert.equal(normalizeCommentText('Smørrebrød i København'), 'smorrebrod i kobenhavn');
+    assert.equal(normalizeCommentText('ØL'), 'ol');
+    assert.equal(normalizeCommentText('Łódź'), 'lodz');
+    assert.equal(normalizeCommentText('STRAẞE Straße'), 'strasse strasse');
+    assert.equal(normalizeCommentText('Þórður'), 'thordur');
+  });
+
+  it('leaves non-Latin letters and their combining marks untouched', () => {
+    const unchanged: Array<[string, string]> = [
+      ['Cyrillic й (и plus breve)', 'й'],
+      ['Cyrillic ђ (looks like đ)', 'ђорђе'],
+      ['Devanagari nukta and virama', 'ज़रूर नमस्ते'],
+      ['Thai tone marks', 'คู่มือ ภาษาไทย'],
+      ['Japanese dakuten and handakuten', 'ガイドください パン'],
+      ['Greek tonos', 'οδηγός ελληνικά'],
+      ['Arabic harakat', 'مَرْحَبًا الدليل'],
+    ];
+    for (const [name, text] of unchanged) {
+      assert.equal(normalizeCommentText(text), text, name);
+    }
+  });
 });
 
 describe('keyword matching', () => {
@@ -71,12 +135,122 @@ describe('keyword matching', () => {
     assert.equal(keywordMatches(n, 'mail'), false);
   });
 
+  it('matches across stroke and bar letters in either direction', () => {
+    const pairs: Array<[string, string]> = [
+      ['dien', 'Điện thoại mới'],
+      ['lodz', 'jadę do Łodzi, łódź'],
+      ['strasse', 'in der Straße 5'],
+      ['thing', 'ÞING'],
+    ];
+    for (const [plain, accented] of pairs) {
+      assert.equal(keywordMatches(normalizeCommentText(accented), plain), true, `${plain} in ${accented}`);
+    }
+    assert.equal(keywordMatches(normalizeCommentText('dien thoai moi'), 'điện'), true);
+    assert.equal(keywordMatches(normalizeCommentText('lodz please'), 'łódź'), true);
+    assert.equal(keywordMatches(normalizeCommentText('Straße'), 'strasse'), true);
+    assert.equal(keywordMatches(normalizeCommentText('strasse'), 'Straße'), true);
+    assert.equal(keywordMatches(normalizeCommentText('thing'), 'ÞING'), true);
+  });
+
   it('escapes regex metacharacters in keywords', () => {
     assert.equal(escapeRegex('c++'), 'c\\+\\+');
     const n = normalizeCommentText('love c++ here');
     // punctuation stripped, so c++ becomes c
     assert.equal(normalizeCommentText('love c++ here'), 'love c here');
     assert.equal(keywordMatches(n, 'c++'), true);
+  });
+});
+
+describe('keyword matching across scripts', () => {
+  // Every one of these silently failed before: `` is defined against
+  // [A-Za-z0-9_] and does not widen under the `u` flag, so for a keyword whose
+  // edges are non-ASCII the boundary never asserted.
+  const spaceUsing: Array<[string, string, string]> = [
+    ['Cyrillic', 'гид', 'нужен гид пожалуйста'],
+    ['Arabic', 'الدليل', 'أريد الدليل'],
+    ['Korean', '가이드', '가이드 주세요'],
+    ['Devanagari', 'मार्गदर्शन', 'मुझे मार्गदर्शन चाहिए'],
+    ['Greek', 'οδηγός', 'θέλω τον οδηγός'],
+  ];
+
+  for (const [script, keyword, comment] of spaceUsing) {
+    it(`matches a ${script} keyword`, () => {
+      assert.equal(keywordMatches(normalizeCommentText(comment), keyword), true);
+    });
+  }
+
+  // Scripts with no spaces between words. A boundary does not exist here, so
+  // requiring one rejects every real comment.
+  const separatorless: Array<[string, string, string]> = [
+    ['Chinese', '指南', '请发指南给我'],
+    ['Japanese', 'ガイド', 'ガイドください'],
+    ['Thai', 'คู่มือ', 'ขอคู่มือหน่อย'],
+  ];
+
+  for (const [script, keyword, comment] of separatorless) {
+    it(`matches a ${script} keyword with no separator around it`, () => {
+      assert.equal(keywordMatches(normalizeCommentText(comment), keyword), true);
+    });
+  }
+
+  it('still refuses a substring in a script that does use spaces', () => {
+    // The boundary is widened, not removed.
+    assert.equal(keywordMatches(normalizeCommentText('нужен гидроцикл'), 'гид'), false);
+    assert.equal(keywordMatches(normalizeCommentText('가이드북 주세요'), '가이드'), false);
+    assert.equal(keywordMatches(normalizeCommentText('guidebook here'), 'guide'), false);
+  });
+
+  it('accepts a separatorless neighbour around a Latin keyword', () => {
+    // Japanese runs Latin words straight into kana with no space, so treating a
+    // kana neighbour as word-forming would reject the ordinary case.
+    assert.equal(
+      keywordMatches(normalizeCommentText('新しいiphoneケースが欲しい'), 'iphoneケース'),
+      true,
+    );
+  });
+
+  it('records that a separatorless keyword matches inside a longer word', () => {
+    // Deliberate, not an oversight: there is no boundary available to consult.
+    // The same trade-off KEYWORD_TOO_SHORT_MESSAGE describes for short Latin
+    // keywords, and far better than matching nothing at all.
+    assert.equal(keywordMatches(normalizeCommentText('ガイドライン'), 'ガイド'), true);
+  });
+
+  it('matches at the very start and end of the text', () => {
+    assert.equal(keywordMatches(normalizeCommentText('гид'), 'гид'), true);
+    assert.equal(keywordMatches(normalizeCommentText('指南'), '指南'), true);
+  });
+});
+
+describe('compiled keyword cache', () => {
+  it('normalises and compiles a keyword once, then hands back the same entry', () => {
+    const first = compileKeyword('Free GUIDE!');
+    assert.equal(first.normalized, 'free guide');
+    assert.equal(compileKeyword('Free GUIDE!'), first);
+    keywordMatches('free guide please', 'Free GUIDE!');
+    assert.equal(compileKeyword('Free GUIDE!'), first);
+  });
+
+  it('keeps the shared RegExp stateless, so a match never depends on the comment before it', () => {
+    assert.equal(compileKeyword('guide').re?.flags, 'u');
+    // A `g` or `y` flag would make the second call resume from lastIndex and miss.
+    const n = normalizeCommentText('guide please');
+    assert.equal(keywordMatches(n, 'guide'), true);
+    assert.equal(keywordMatches(n, 'guide'), true);
+    assert.equal(keywordMatches(normalizeCommentText('the guide'), 'guide'), true);
+  });
+
+  it('caches a keyword that normalises to nothing as one that never matches', () => {
+    assert.deepEqual(compileKeyword('🙏!!'), { normalized: '', re: null });
+    assert.equal(keywordMatches('anything at all', '🙏!!'), false);
+  });
+
+  it('starts over past the cap instead of growing without limit', () => {
+    const first = compileKeyword('cap-test-0');
+    for (let i = 1; i <= KEYWORD_CACHE_MAX; i++) compileKeyword(`cap-test-${i}`);
+    const again = compileKeyword('cap-test-0');
+    assert.notEqual(again, first);
+    assert.deepEqual(again, first);
   });
 });
 
@@ -165,6 +339,15 @@ describe('parseWebhookPayload', () => {
     ) as { entry: Array<{ id: string; changes: Array<{ value: { id: string } }> }> };
     assert.equal(parsed.entry[0]?.id, '17841464780021342');
     assert.equal(parsed.entry[0]?.changes[0]?.value.id, '18074865634493149');
+  });
+
+  it('leaves numbers inside strings alone, so comment text cannot break the quoting', () => {
+    const parsed = parseWebhookPayload(
+      '{"entry":[{"id":17841464780021342,"changes":[{"value":{"id":18074865634493149,"text":"order: 123456789012345 ok \\"x\\": 123456789012345678}"}}]}]}',
+    ) as { entry: Array<{ id: string; changes: Array<{ value: { id: string; text: string } }> }> };
+    assert.equal(parsed.entry[0]?.id, '17841464780021342');
+    assert.equal(parsed.entry[0]?.changes[0]?.value.id, '18074865634493149');
+    assert.equal(parsed.entry[0]?.changes[0]?.value.text, 'order: 123456789012345 ok "x": 123456789012345678}');
   });
 });
 

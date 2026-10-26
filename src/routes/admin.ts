@@ -14,6 +14,7 @@ import { ensureCommentSubscriptions, runCron } from '../cron.ts';
 import {
   countSentByComment,
   deleteRule,
+  getAccount,
   getRule,
   getSent,
   insertRule,
@@ -32,8 +33,9 @@ import {
 } from '../db.ts';
 import { findConfigProblems } from '../config.ts';
 import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
-import { KEYWORD_TOO_SHORT_MESSAGE, findMatchingRule, parseKeywords } from '../match.ts';
+import { KEYWORD_TOO_SHORT_MESSAGE, parseKeywords } from '../match.ts';
 import { listRecentMedia, oauthRedirectUri } from '../meta.ts';
+import { chooseRule } from '../process.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
 import {
   clearFailures,
@@ -426,12 +428,17 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                       <td>${fmtWhen(s.sent_at)}</td>
                       <td>${s.rule_label ?? '—'}</td>
                       <td>${statusWords(s.dm_status)}</td>
-                      <td>${s.dm_status === 'failed' && s.error
-                        ? html`<span class="err">Send failed.</span>
-                            <div class="muted">${s.error}</div>`
-                        : s.error
-                          ? html`<span class="muted">${s.error}</span>`
-                          : html``}</td>
+                      <td>
+                        ${s.dm_status === 'failed' && s.error
+                          ? html`<span class="err">Send failed.</span>
+                              <div class="muted">${s.error}</div>`
+                          : s.error
+                            ? html`<span class="muted">${s.error}</span>`
+                            : html``}
+                        ${s.reply_status === 'skipped'
+                          ? html`<div class="muted">Public reply not posted, because no DM went out.</div>`
+                          : html``}
+                      </td>
                     </tr>`,
                   )}
                 </tbody>
@@ -745,7 +752,6 @@ function ruleForm(opts: {
   error?: string;
 }) {
   const v = opts.values;
-  const dmLen = v.dm_text.length;
   const known = new Set(opts.posts.map((p) => p.id));
   return html`
     ${opts.error ? html`<p class="err">${opts.error}</p>` : html``}
@@ -782,17 +788,14 @@ function ruleForm(opts: {
         on all posts — that still covers reels.
       </p>
       <label for="dm_text">Private message to send</label>
-      <textarea
-        id="dm_text"
-        name="dm_text"
-        required
-        maxlength="${String(DM_TEXT_MAX)}"
-        oninput="this.nextElementSibling.textContent=this.value.length+'/1,000 characters'"
-      >${v.dm_text}</textarea>
-      <p class="muted">${String(dmLen)}/1,000 characters</p>
+      <textarea id="dm_text" name="dm_text" required maxlength="${String(DM_TEXT_MAX)}">${v.dm_text}</textarea>
+      <p class="muted">Up to 1,000 characters.</p>
       <label for="public_reply_text">Public reply under the comment (optional)</label>
       <textarea id="public_reply_text" name="public_reply_text">${v.public_reply_text}</textarea>
-      <p class="muted">Leave blank to only send the private message, with no public reply.</p>
+      <p class="muted">
+        Leave blank to only send the private message, with no public reply. If the private message fails,
+        the public reply is not posted either.
+      </p>
       <div class="row"><button type="submit">Save rule</button></div>
     </form>
   `;
@@ -840,14 +843,7 @@ adminRoutes.get('/rules', async (c) => {
                           ${csrfField(session.csrf)}
                           <button class="secondary" type="submit">${r.active ? 'Pause' : 'Resume'}</button>
                         </form>
-                        <form
-                          method="post"
-                          action="${base}/rules/${String(r.id)}/delete"
-                          onsubmit="return confirm('Delete this rule?')"
-                        >
-                          ${csrfField(session.csrf)}
-                          <button class="danger" type="submit">Delete</button>
-                        </form>
+                        <a class="btn danger" href="${base}/rules/${String(r.id)}/delete">Delete</a>
                       </td>
                     </tr>`;
                   })}
@@ -898,16 +894,23 @@ adminRoutes.get('/rules/new', async (c) => {
 
 function readRuleFields(form: Record<string, string>) {
   const parsed = parseKeywordLines(form.keywords ?? '');
-  const dm = (form.dm_text ?? '').trim();
+  // Browsers submit each textarea line break as CRLF but count it as one
+  // character against maxlength. Without this, a message that fit the box
+  // could still fail the length check below.
+  const dm = (form.dm_text ?? '').replace(/\r\n/g, '\n').trim();
   const label = (form.label ?? '').trim();
   const ig = (form.ig_user_id ?? '').trim();
   const media = (form.media_id ?? '').trim();
-  const pub = (form.public_reply_text ?? '').trim();
+  const pub = (form.public_reply_text ?? '').replace(/\r\n/g, '\n').trim();
   if (!label) return { error: 'Give this rule a name.' };
   if (!ig) return { error: 'Pick an Instagram account.' };
   if (!parsed.ok) return { error: parsed.error };
   if (!dm) return { error: 'Write the private message to send.' };
-  if (dm.length > DM_TEXT_MAX) return { error: 'The private message must be 1,000 characters or fewer.' };
+  if (dm.length > DM_TEXT_MAX) {
+    return {
+      error: `The private message must be 1,000 characters or fewer. This one is ${dm.length.toLocaleString('en-US')}.`,
+    };
+  }
   if (media && looksLikePostUrl(media)) {
     return {
       error:
@@ -1034,6 +1037,40 @@ adminRoutes.post('/rules/:id/toggle', async (c) => {
   return c.redirect(`${c.get('adminBase')}/rules`, 302);
 });
 
+adminRoutes.get('/rules/:id/delete', async (c) => {
+  const rule = await getRule(c.env.DB, Number(c.req.param('id')));
+  if (!rule) return c.notFound();
+  const base = c.get('adminBase');
+  const session = c.get('session');
+  const account = await getAccount(c.env.DB, rule.ig_user_id);
+  return c.html(
+    layout({
+      title: 'Delete rule',
+      base,
+      csrf: session.csrf,
+      body: html`
+        <h1>Delete this rule?</h1>
+        <table>
+          <tr><th>Name</th><td>${rule.label}</td></tr>
+          <tr><th>Account</th><td>@${account?.username ?? rule.ig_user_id}</td></tr>
+          <tr><th>Keywords</th><td>${parseKeywords(rule.keywords).join(', ')}</td></tr>
+        </table>
+        <p>
+          Matching comments will stop getting a private message. This cannot be undone. To stop it for now
+          and keep it, pause it instead.
+        </p>
+        <form method="post" action="${base}/rules/${String(rule.id)}/delete">
+          ${csrfField(session.csrf)}
+          <div class="row">
+            <button class="danger" type="submit">Delete rule</button>
+            <a class="btn secondary" href="${base}/rules">Keep it</a>
+          </div>
+        </form>
+      `,
+    }),
+  );
+});
+
 adminRoutes.post('/rules/:id/delete', async (c) => {
   await deleteRule(c.env.DB, Number(c.req.param('id')));
   return c.redirect(`${c.get('adminBase')}/rules`, 302);
@@ -1081,8 +1118,7 @@ adminRoutes.post('/test', async (c) => {
   const ig = form.ig_user_id ?? '';
   const text = form.text ?? '';
   const media = form.media_id?.trim() || undefined;
-  const rules = (await listRules(c.env.DB, ig)).filter((r) => r.active === 1);
-  const match = findMatchingRule(rules, text, media);
+  const match = await chooseRule(c.env.DB, ig, text, media);
   const base = c.get('adminBase');
   return c.html(
     layout({

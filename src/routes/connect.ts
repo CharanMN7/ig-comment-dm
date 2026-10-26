@@ -121,7 +121,9 @@ connectRoutes.get('/callback', async (c) => {
       last_refreshed_at: now,
     });
 
-    const subscribed = await subscribeCommentWebhooks(igUserId, longLived.access_token);
+    // The account is saved by now, so a network failure here must not turn
+    // into "didn't finish connecting". Home subscribes again on every visit.
+    const subscribed = await subscribeCommentWebhooks(igUserId, longLived.access_token).catch(() => ({ ok: false }));
     const admin = `/a/${c.env.ADMIN_URL_SECRET}/accounts`;
     return c.html(
       layout({

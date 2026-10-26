@@ -8,6 +8,7 @@ export const TOKEN_LOOKAHEAD_SECONDS = 10 * 24 * 60 * 60;
 export const TOKEN_MIN_AGE_SECONDS = 24 * 60 * 60;
 export const RECONNECT_WARN_SECONDS = 14 * 24 * 60 * 60;
 export const CRON_STALE_SECONDS = 72 * 60 * 60;
+export const POLL_STALE_SECONDS = 60 * 60;
 export const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 export const DM_TEXT_MAX = 1000;
 
