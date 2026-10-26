@@ -68,6 +68,18 @@ describe('a comment that matches an active rule', () => {
     expect(await sentRow('17999999999999999')).toMatchObject({ dm_status: 'ok' });
   });
 
+  it('keeps the ids exact when the comment text itself contains a colon and a long number', async () => {
+    await seedAccount();
+    await seedRule();
+    const raw = JSON.stringify(commentPayload({ text: 'guide please, order: 123456789012345 thanks' }))
+      .replace('"17900000000000001"', '17999999999999999');
+
+    await postWebhook(raw);
+
+    expect(dmCalls()).toEqual([expect.objectContaining({ body: expect.objectContaining({ recipient: { comment_id: '17999999999999999' } }) })]);
+    expect(await sentRow('17999999999999999')).toMatchObject({ dm_status: 'ok' });
+  });
+
   it('handles the Instagram Login shape with field and value on the entry', async () => {
     await seedAccount();
     await seedRule();

@@ -340,6 +340,15 @@ describe('parseWebhookPayload', () => {
     assert.equal(parsed.entry[0]?.id, '17841464780021342');
     assert.equal(parsed.entry[0]?.changes[0]?.value.id, '18074865634493149');
   });
+
+  it('leaves numbers inside strings alone, so comment text cannot break the quoting', () => {
+    const parsed = parseWebhookPayload(
+      '{"entry":[{"id":17841464780021342,"changes":[{"value":{"id":18074865634493149,"text":"order: 123456789012345 ok \\"x\\": 123456789012345678}"}}]}]}',
+    ) as { entry: Array<{ id: string; changes: Array<{ value: { id: string; text: string } }> }> };
+    assert.equal(parsed.entry[0]?.id, '17841464780021342');
+    assert.equal(parsed.entry[0]?.changes[0]?.value.id, '18074865634493149');
+    assert.equal(parsed.entry[0]?.changes[0]?.value.text, 'order: 123456789012345 ok "x": 123456789012345678}');
+  });
 });
 
 describe('webhook HMAC', () => {
