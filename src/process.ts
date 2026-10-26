@@ -12,6 +12,7 @@ import {
 import { isSelfComment } from './guard.ts';
 import { type MatchVerdict, exclusionSkipReason, matchComment } from './match.ts';
 import { type MetaCallResult, sendPrivateReply, sendPublicReply } from './meta.ts';
+import { fillPlaceholders } from './placeholders.ts';
 import type { Env } from './types.ts';
 
 type CommentValue = {
@@ -190,7 +191,12 @@ export async function processComment(
   }
   const { rule } = match;
 
-  const publicText = rule.public_reply_text?.trim();
+  // Both webhook and poll payloads carry the name on `from`. When Instagram
+  // leaves it out, the text still goes, with `{username}` tidied away.
+  const username = value.from?.username;
+  const dmText = fillPlaceholders(rule.dm_text, username);
+  const savedReply = rule.public_reply_text?.trim();
+  const publicText = savedReply ? fillPlaceholders(savedReply, username) : '';
 
   let token: string;
   try {
@@ -206,7 +212,7 @@ export async function processComment(
     return;
   }
 
-  const dm = await sendOrFail(() => sendPrivateReply(account.ig_user_id, token, commentId, rule.dm_text));
+  const dm = await sendOrFail(() => sendPrivateReply(account.ig_user_id, token, commentId, dmText));
   let replyStatus: string | null = null;
   const errors: string[] = [];
 

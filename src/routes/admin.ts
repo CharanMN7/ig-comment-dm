@@ -3,6 +3,7 @@ import { html } from 'hono/html';
 import {
   CRON_STALE_SECONDS,
   DM_TEXT_MAX,
+  PUBLIC_REPLY_MAX,
   decryptAesGcm,
   encryptAesGcm,
   hashPassword,
@@ -43,6 +44,13 @@ import {
   parseKeywords,
 } from '../match.ts';
 import { listRecentMedia, oauthRedirectUri } from '../meta.ts';
+import {
+  SAMPLE_USERNAME,
+  USERNAME_GROWTH,
+  countUsernameTokens,
+  fillPlaceholders,
+  worstCaseLength,
+} from '../placeholders.ts';
 import { chooseRule } from '../process.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
 import {
@@ -710,12 +718,14 @@ function ruleForm(opts: {
         <p class="muted">
           Up to 1,000 characters. Instagram allows one private message per comment, so put everything they
           need in this one, link included.
+          <code>{username}</code> puts in their Instagram name and counts as 30. It’s the only placeholder for now.
         </p>
         <label for="public_reply_text">Public reply under their comment (optional)</label>
-        <textarea id="public_reply_text" name="public_reply_text">${v.public_reply_text}</textarea>
+        <textarea id="public_reply_text" name="public_reply_text" maxlength="${String(PUBLIC_REPLY_MAX)}">${v.public_reply_text}</textarea>
         <p class="muted">
           Everyone reading the comments sees this, for example “Sent you a DM!”. Leave it blank to reply
-          privately only. If the private message fails, the public reply is not posted either.
+          privately only. If the private message fails, the public reply is not posted either. Up to 1,000
+          characters, and <code>{username}</code> works here too.
         </p>
       </fieldset>
 
@@ -817,6 +827,23 @@ adminRoutes.get('/rules/new', async (c) => {
   );
 });
 
+const count = (n: number): string => n.toLocaleString('en-US');
+
+/**
+ * Checked against the longest the text can become once a name is put in, not
+ * against what was typed, so a rule that saves always fits Instagram's limit.
+ */
+function messageProblem(what: string, text: string, max: number): string | null {
+  if (!fillPlaceholders(text, null).trim()) {
+    return `${what} needs more than {username}. Instagram sometimes leaves the name out, and then there would be nothing to send.`;
+  }
+  const longest = worstCaseLength(text);
+  if (longest <= max) return null;
+  const limit = `${what} must be ${count(max)} characters or fewer.`;
+  if (!countUsernameTokens(text)) return `${limit} This one is ${count(text.length)}.`;
+  return `${limit} This one is ${count(text.length)}, and each {username} can add up to ${USERNAME_GROWTH} characters for a long name, so it could reach ${count(longest)}.`;
+}
+
 export const MATCH_ALL_NEEDS_POST_MESSAGE =
   '“Reply to every comment” needs one post. Pick it under “Which posts”, or untick the box. On all posts it would message everyone who comments on anything, and Instagram may restrict the account.';
 
@@ -864,11 +891,10 @@ export function readRuleFields(form: Record<string, string>) {
     };
   }
   if (!dm) return { error: 'Write the private message to send.' };
-  if (dm.length > DM_TEXT_MAX) {
-    return {
-      error: `The private message must be 1,000 characters or fewer. This one is ${dm.length.toLocaleString('en-US')}.`,
-    };
-  }
+  const dmProblem = messageProblem('The private message', dm, DM_TEXT_MAX);
+  if (dmProblem) return { error: dmProblem };
+  const pubProblem = pub ? messageProblem('The public reply', pub, PUBLIC_REPLY_MAX) : null;
+  if (pubProblem) return { error: pubProblem };
   if (media && looksLikePostUrl(media)) {
     return {
       error:
@@ -1084,6 +1110,8 @@ adminRoutes.post('/test', async (c) => {
           : html``}
       `
     : html``;
+  const savedReply = match?.rule.public_reply_text?.trim() ?? '';
+  const usesName = match ? countUsernameTokens(`${match.rule.dm_text}\n${savedReply}`) > 0 : false;
   return c.html(
     layout({
       title: 'Test',
@@ -1105,10 +1133,17 @@ adminRoutes.post('/test', async (c) => {
                     `}
                 ${readAs}
               </table>
+              ${usesName
+                ? html`<p class="muted">
+                    <code>{username}</code> is filled in with <b>${SAMPLE_USERNAME}</b>, a sample name. Real
+                    messages use the name of whoever commented.
+                  </p>`
+                : html``}
               <h2>Private message that would be sent</h2>
-              <p>${match.rule.dm_text}</p>
-              ${match.rule.public_reply_text
-                ? html`<h2>Public reply that would be posted</h2><p>${match.rule.public_reply_text}</p>`
+              <p class="message">${fillPlaceholders(match.rule.dm_text, SAMPLE_USERNAME)}</p>
+              ${savedReply
+                ? html`<h2>Public reply that would be posted</h2>
+                    <p class="message">${fillPlaceholders(savedReply, SAMPLE_USERNAME)}</p>`
                 : html`<p class="muted">No public reply for this rule.</p>`}
               ${exclusions}
             `
