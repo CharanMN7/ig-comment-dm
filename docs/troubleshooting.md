@@ -146,14 +146,18 @@ logged as skipped with the reason.
 **Confirm:** admin → **Test**, paste the exact comment text, and see which rule
 lights up. This sends nothing to anyone.
 
-Matching ignores case, emoji, and punctuation, and matches whole words —
-`guide` matches `Guide!` and `guide 🙏` but not `guides`.
+Matching ignores case, emoji, punctuation, and accents on Latin letters, and
+matches whole words — `guide` matches `Guide!` and `guide 🙏` but not `guides`,
+and `cafe` matches `café`.
 
 > [!NOTE]
-> Keywords in Cyrillic, Arabic, Chinese, Japanese, and other non-Latin scripts
-> **do not currently match**, and accented keywords only match if the accents
-> are typed identically. This is a known bug, not a configuration mistake — see
-> [the open issues](https://github.com/CharanMN7/ig-comment-dm/labels/area%3A%20matching).
+> Keywords work in any script, including Cyrillic, Arabic, Chinese and Japanese.
+> Accents are folded only on Latin letters (`dien` matches `điện`, `lodz`
+> matches `łódź`). Marks in other scripts are part of the word, so type a
+> non-Latin keyword with the same marks the comment uses. Chinese, Japanese,
+> Thai and other scripts written without spaces have no word edges to check,
+> so there a keyword also matches inside a longer word: `ガイド` matches
+> `ガイドライン`.
 
 ### 8. The keyword is too short
 
@@ -421,7 +425,7 @@ from an older config can drop them.
 npx wrangler deploy
 ```
 
-**Run it by hand right now** from the admin Home page ("Run the daily check"), or
+**Run it by hand right now** from the admin Home page ("Check connections now"), or
 watch for the next scheduled run.
 
 ---

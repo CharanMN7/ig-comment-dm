@@ -43,15 +43,6 @@ export function parseKeywords(raw: string): string[] {
 }
 
 /**
- * A character that would make the keyword part of a longer word: any Unicode
- * letter or digit.
- *
- * This replaces `\b`, which JavaScript defines as a boundary against
- * `[A-Za-z0-9_]` and does **not** widen under the `u` flag. For a keyword in
- * any non-Latin script both sides of the boundary are non-ASCII, so `\b` never
- * asserted and the match failed silently.
- */
-/**
  * Scripts written without spaces between words.
  *
  * A word boundary is not merely a weaker signal in these scripts — it does not
@@ -73,6 +64,11 @@ const SEPARATORLESS_CLASS =
  * What may sit against the keyword without swallowing it into a longer word:
  * the start or end of the text, a non-word character, or a character from a
  * script that does not separate its words.
+ *
+ * This replaces `\b`, which JavaScript defines as a boundary against
+ * `[A-Za-z0-9_]` and does **not** widen under the `u` flag. For a keyword in
+ * any non-Latin script both sides of the boundary are non-ASCII, so `\b` never
+ * asserted and the match failed silently.
  *
  * Expressed as an allowlist rather than as a negated `[\p{L}\p{N}]` because the
  * exclusion needs set subtraction, and the `v` flag that provides it is newer
