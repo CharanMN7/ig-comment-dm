@@ -168,7 +168,7 @@ function checkDatabase(): void {
     );
   }
 
-  const anyEvent = d1Query('SELECT COUNT(*) AS n FROM webhook_events');
+  const anyEvent = d1Query("SELECT COUNT(*) AS n FROM webhook_events WHERE status IN ('received', 'bad_sig')");
   if (anyEvent && /"n":\s*0\b/.test(anyEvent)) {
     record(
       'warn',

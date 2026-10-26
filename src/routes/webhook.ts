@@ -23,9 +23,12 @@ webhookRoutes.post('/', async (c) => {
     header,
   );
   if (!ok) {
+    // Meta signs every delivery, so a POST with no signature at all is a
+    // scanner or a hand-made request, not Meta with a secret we lack. It is
+    // logged apart so it can't raise the "secret did not match" banner.
     await insertWebhookEvent(c.env.DB, {
       received_at: nowSeconds(),
-      status: 'bad_sig',
+      status: header ? 'bad_sig' : 'unsigned',
       object: null,
       preview: raw.slice(0, 200),
       error: header ? 'signature did not match Instagram or Facebook app secret' : 'missing X-Hub-Signature-256',

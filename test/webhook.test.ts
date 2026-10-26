@@ -52,10 +52,10 @@ describe('POST /webhook signature checks', () => {
     expect(meta.calls).toEqual([]);
   });
 
-  it('rejects a body with no X-Hub-Signature-256 header and says so in the log', async () => {
+  it('rejects a body with no X-Hub-Signature-256 header and logs it apart from a wrong signature', async () => {
     const res = await postWebhook(commentPayload(), { signature: null });
     expect(res.status).toBe(401);
-    expect(await webhookEvents()).toEqual([expect.objectContaining({ status: 'bad_sig', error: 'missing X-Hub-Signature-256' })]);
+    expect(await webhookEvents()).toEqual([expect.objectContaining({ status: 'unsigned', error: 'missing X-Hub-Signature-256' })]);
     expect(meta.calls).toEqual([]);
   });
 

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FAKE_EXPIRES_IN, FAKE_ME, meta, type MetaReply } from './support/meta.ts';
 import { DAY, FROZEN_NOW_MS, NOW, accountRow, seedAccount, seedRule, sentRow, storedToken, systemValue } from './support/seed.ts';
 import { commentPayload, postWebhook, returnFromInstagram, runScheduled, signedInAdmin, startConnect } from './support/worker.ts';
@@ -81,6 +81,31 @@ describe('Meta retry policy', () => {
     expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(3);
     expect(row).toMatchObject({ dm_status: 'failed' });
     expect(row?.error).toMatch(/^DM: could not reach Instagram after 3 tries \(.+\)$/);
+  });
+
+  describe('with a hung request', () => {
+    // AbortSignal.timeout runs on workerd's own clock, which fake timers don't
+    // move, so a real hang would cost the suite 30 seconds. An already-expired
+    // signal is what fetch sees once the 10 seconds are up.
+    const expired = () => AbortSignal.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('gives every attempt its own 10-second timeout and records three timeouts as a failed send', async () => {
+      const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(expired);
+      const row = await deliverMatchingComment();
+      expect(timeout.mock.calls).toEqual([[10_000], [10_000], [10_000]]);
+      expect(row).toMatchObject({ dm_status: 'failed' });
+      expect(row?.error).toBe('DM: could not reach Instagram after 3 tries (The operation was aborted due to timeout)');
+    });
+
+    it('retries after a timeout like any other network failure', async () => {
+      vi.spyOn(AbortSignal, 'timeout').mockImplementationOnce(expired);
+      const row = await deliverMatchingComment();
+      expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
+      expect(row).toMatchObject({ dm_status: 'ok', error: null });
+    });
   });
 
   it('records a public reply that never reaches Meta as failed, keeping the DM as sent', async () => {
