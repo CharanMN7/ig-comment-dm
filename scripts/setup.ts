@@ -10,8 +10,9 @@
  * strings that have to be pasted back into Meta's dashboard — which is the only
  * part a script genuinely cannot do.
  *
- * It is safe to re-run. Deploys are idempotent, migrations use IF NOT EXISTS,
- * and existing secrets are left alone unless --rotate is passed.
+ * It is safe to re-run. Deploys are idempotent, migrations the database has
+ * already recorded are skipped, and existing secrets are left alone unless
+ * --rotate is passed.
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { webcrypto } from 'node:crypto';
@@ -179,17 +180,17 @@ async function main(): Promise<void> {
 
   // ----------------------------------------------------------- 3. migrations
   step(3, TOTAL, 'Creating the database tables');
-  for (const file of ['migrations/001_init.sql', 'migrations/002_webhook_events.sql']) {
-    const res = wrangler(['d1', 'execute', 'ig-comment-dm', '--remote', `--file=${file}`, '-y'], {
-      quiet: true,
-    });
-    if (res.code !== 0) {
-      rl.close();
-      say(indent(res.out));
-      die(`Could not apply ${file}.`);
-    }
-    ok(`Applied ${file}`);
+  // Wrangler asks "continue?" before applying, and has no flag to skip it. With
+  // stdin closed (quiet) it sees no terminal and answers yes itself, so an
+  // unattended run cannot hang here.
+  const migrated = wrangler(['d1', 'migrations', 'apply', 'DB', '--remote'], { quiet: true });
+  if (migrated.code !== 0) {
+    rl.close();
+    say(indent(migrated.out));
+    die('Could not create the database tables.', 'Fix what the output above says, then run npm run setup again.');
   }
+  const applied = [...new Set(migrated.out.match(/\b\d+_[\w-]+\.sql\b/g) ?? [])];
+  ok(applied.length ? `Applied ${applied.join(', ')}` : 'Already up to date.');
 
   // -------------------------------------------------------- 4. Meta secrets
   step(4, TOTAL, 'Your three values from the Meta dashboard');

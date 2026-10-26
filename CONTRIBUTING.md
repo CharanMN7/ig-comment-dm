@@ -107,6 +107,39 @@ conversation in the issue before you are assigned.
   `node:test` runner — no framework to learn.
 - **Update the docs** when you change the operator-facing steps.
 
+## Adding a migration
+
+A schema change is a new file in `migrations/` with the next free number on
+`master`: `003_match_mode.sql` after `002_webhook_events.sql`. Nothing else needs
+editing. `npm run db:migrate`, `npm run deploy`, `npm run setup` and the
+integration tests all pick up every file in the folder. If another PR takes your
+number before yours merges, renumber yours.
+
+Wrangler's runner (`wrangler d1 migrations apply`) records each file it applies in
+a `d1_migrations` table and skips recorded files after that, so a migration runs
+once per database. That is what makes `ALTER TABLE` possible.
+
+- **Never edit a migration that has shipped.** A database that has recorded it
+  never reads it again, so the edit would reach new installs only and the two
+  would quietly drift apart. Fix it in a new migration.
+- **Keep changes additive.** `npm run deploy` applies migrations before the new
+  code goes live, so the old code runs against the new schema for a moment. Add
+  tables and columns; don't rename or drop them.
+- **Give a new column a default that keeps existing rows behaving exactly as
+  before**, for example `ALTER TABLE rules ADD COLUMN match_mode TEXT NOT NULL
+  DEFAULT 'contains';`. SQLite refuses `NOT NULL` without a default here anyway.
+- **Try it locally** with `npm run db:migrate:local` (`npm run db:migrate:list:local`
+  shows what is pending), then `npm test`.
+
+**Why `001` and `002` run again on old deployments.** Deployments from before
+tracking applied them by hand with `wrangler d1 execute`, so their `d1_migrations`
+table is empty and the first tracked run applies both again. That is harmless:
+every statement in them is `CREATE TABLE IF NOT EXISTS` or `CREATE INDEX IF NOT
+EXISTS`, and neither inserts a row, so the replay changes nothing and only records
+them. `test/migrations.test.ts` builds a database the old way, with rows in it,
+and checks that every migration then applies cleanly and leaves those rows alone.
+Your new migration has to pass that test too.
+
 ## House style
 
 The code follows a few conventions that are not enforced by a linter, because there

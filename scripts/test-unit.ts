@@ -14,6 +14,8 @@ import { authorizeUrl, oauthRedirectUri } from '../src/meta.ts';
 import { isSelfComment } from '../src/guard.ts';
 import { parseWebhookPayload } from '../src/process.ts';
 import {
+  KEYWORD_CACHE_MAX,
+  compileKeyword,
   escapeRegex,
   findMatchingRule,
   keywordMatches,
@@ -217,6 +219,38 @@ describe('keyword matching across scripts', () => {
   it('matches at the very start and end of the text', () => {
     assert.equal(keywordMatches(normalizeCommentText('гид'), 'гид'), true);
     assert.equal(keywordMatches(normalizeCommentText('指南'), '指南'), true);
+  });
+});
+
+describe('compiled keyword cache', () => {
+  it('normalises and compiles a keyword once, then hands back the same entry', () => {
+    const first = compileKeyword('Free GUIDE!');
+    assert.equal(first.normalized, 'free guide');
+    assert.equal(compileKeyword('Free GUIDE!'), first);
+    keywordMatches('free guide please', 'Free GUIDE!');
+    assert.equal(compileKeyword('Free GUIDE!'), first);
+  });
+
+  it('keeps the shared RegExp stateless, so a match never depends on the comment before it', () => {
+    assert.equal(compileKeyword('guide').re?.flags, 'u');
+    // A `g` or `y` flag would make the second call resume from lastIndex and miss.
+    const n = normalizeCommentText('guide please');
+    assert.equal(keywordMatches(n, 'guide'), true);
+    assert.equal(keywordMatches(n, 'guide'), true);
+    assert.equal(keywordMatches(normalizeCommentText('the guide'), 'guide'), true);
+  });
+
+  it('caches a keyword that normalises to nothing as one that never matches', () => {
+    assert.deepEqual(compileKeyword('🙏!!'), { normalized: '', re: null });
+    assert.equal(keywordMatches('anything at all', '🙏!!'), false);
+  });
+
+  it('starts over past the cap instead of growing without limit', () => {
+    const first = compileKeyword('cap-test-0');
+    for (let i = 1; i <= KEYWORD_CACHE_MAX; i++) compileKeyword(`cap-test-${i}`);
+    const again = compileKeyword('cap-test-0');
+    assert.notEqual(again, first);
+    assert.deepEqual(again, first);
   });
 });
 

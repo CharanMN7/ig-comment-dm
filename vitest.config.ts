@@ -8,7 +8,7 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 const wranglerConfig = path.join(root, 'wrangler.toml');
 
 // Migrations are found the same way `wrangler d1 migrations apply` finds them,
-// so a PR that adds 003_*.sql or moves to `migrations_dir` is tested as written
+// so a PR that adds 003_*.sql or changes `migrations_dir` is tested as written
 // instead of against a list someone has to remember to update.
 function migrationsFor(binding: string) {
   const config = unstable_readConfig({ config: wranglerConfig });

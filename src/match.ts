@@ -81,13 +81,41 @@ const SEPARATORLESS_CLASS =
 const BOUNDARY_BEFORE = `(?<=^|[^\\p{L}\\p{N}]|${SEPARATORLESS_CLASS})`;
 const BOUNDARY_AFTER = `(?=$|[^\\p{L}\\p{N}]|${SEPARATORLESS_CLASS})`;
 
-export function keywordMatches(normalizedComment: string, keyword: string): boolean {
-  const k = normalizeCommentText(keyword);
-  if (!k) return false;
+export type CompiledKeyword = { normalized: string; re: RegExp | null };
+
+/**
+ * Every comment is matched against every keyword, and a keyword compiles to the
+ * same pattern each time, so each distinct keyword is normalised and compiled
+ * once per isolate rather than once per comment.
+ *
+ * Bounded because the keys are whatever operators type, and an isolate can
+ * outlive many rule edits. Clearing past the cap is cruder than LRU but costs
+ * nothing per lookup, and a real rule set is far smaller than the cap.
+ */
+export const KEYWORD_CACHE_MAX = 2000;
+const keywordCache = new Map<string, CompiledKeyword>();
+
+export function compileKeyword(keyword: string): CompiledKeyword {
+  const cached = keywordCache.get(keyword);
+  if (cached) return cached;
+  if (keywordCache.size >= KEYWORD_CACHE_MAX) keywordCache.clear();
+  const normalized = normalizeCommentText(keyword);
   // Lookaround rather than `\b`, so the boundary is decided by the Unicode
   // properties of the neighbouring characters instead of by the ASCII range.
-  const re = new RegExp(`${BOUNDARY_BEFORE}${escapeRegex(k)}${BOUNDARY_AFTER}`, 'u');
-  return re.test(normalizedComment);
+  // Never add the `g` or `y` flag: this one RegExp is shared by every comment,
+  // and `test()` on either advances `lastIndex`, so a match would depend on
+  // which comment came before it.
+  const re = normalized
+    ? new RegExp(`${BOUNDARY_BEFORE}${escapeRegex(normalized)}${BOUNDARY_AFTER}`, 'u')
+    : null;
+  const entry = { normalized, re };
+  keywordCache.set(keyword, entry);
+  return entry;
+}
+
+export function keywordMatches(normalizedComment: string, keyword: string): boolean {
+  const { re } = compileKeyword(keyword);
+  return re !== null && re.test(normalizedComment);
 }
 
 /**

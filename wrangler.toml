@@ -10,6 +10,9 @@ compatibility_date = "2026-08-14"
 [[d1_databases]]
 binding = "DB"
 database_name = "ig-comment-dm"
+# `wrangler d1 migrations apply` runs each file here once, in filename order, and
+# records it in the d1_migrations table. The integration tests read this too.
+migrations_dir = "migrations"
 
 [triggers]
 crons = ["0 3 * * *", "*/5 * * * *"]
