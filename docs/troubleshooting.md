@@ -155,6 +155,10 @@ If the keyword sits inside a hashtag or a longer word, edit the rule and choose
 **Anywhere in the comment** under "How to look for them". That catches
 `#launch2026` for `launch`, at the cost of `art` also matching `start`.
 
+If Home says `Skipped: matched exclusion “…”`, the keyword did match, but the
+comment also contained one of that rule's exclusions. The Test page lists the
+rule, the keyword it found and the exclusion that stopped it.
+
 > [!NOTE]
 > Keywords work in any script, including Cyrillic, Arabic, Chinese and Japanese.
 > Accents are folded only on Latin letters (`dien` matches `điện`, `lodz`

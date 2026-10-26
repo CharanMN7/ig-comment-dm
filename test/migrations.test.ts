@@ -97,6 +97,12 @@ describe('migrations', () => {
     }
   });
 
+  it('gives rules saved before exclusions an empty list', async () => {
+    await oldDeploymentThenMigrate();
+    const rule = await env.DB.prepare('SELECT exclude_keywords FROM rules WHERE id = 7').first<{ exclude_keywords: string }>();
+    expect(rule).toEqual({ exclude_keywords: '[]' });
+  });
+
   it('keeps rules saved before match modes matching whole words', async () => {
     await oldDeploymentThenMigrate();
     const rule = await env.DB.prepare('SELECT match_mode FROM rules WHERE id = 7').first<{ match_mode: string }>();

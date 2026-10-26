@@ -41,6 +41,8 @@ export type Rule = {
   label: string;
   keywords: string;
   match_mode: MatchMode;
+  /** JSON array, like `keywords`. Matched with the same normalisation and the same `match_mode`. */
+  exclude_keywords: string;
   media_id: string | null;
   dm_text: string;
   public_reply_text: string | null;

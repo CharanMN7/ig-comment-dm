@@ -208,6 +208,43 @@ describe('match modes', () => {
   });
 });
 
+describe('exclusions', () => {
+  it('skips a comment that matches an exclusion, records why, and calls Meta for nothing', async () => {
+    await seedAccount();
+    const ruleId = await seedRule({ keywords: ['guide'], excludeKeywords: ['how much', 'already have'], publicReply: 'Sent!' });
+    await postWebhook(commentPayload({ text: 'How much is the guide?' }));
+    expect(meta.calls).toEqual([]);
+    expect(await sentRows()).toEqual([
+      expect.objectContaining({ rule_id: ruleId, dm_status: 'skipped', reply_status: null, error: 'Skipped: matched exclusion “how much”' }),
+    ]);
+  });
+
+  it('keeps the skip when Meta delivers the comment again', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'], excludeKeywords: ['how much'] });
+    await postWebhook(commentPayload({ text: 'how much is the guide' }));
+    await postWebhook(commentPayload({ text: 'how much is the guide' }));
+    expect(meta.calls).toEqual([]);
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'skipped' })]);
+  });
+
+  it('still sends when the exclusion is not in the comment', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'], excludeKeywords: ['how much'] });
+    await postWebhook(commentPayload({ text: 'guide please' }));
+    expect(dmCalls()).toHaveLength(1);
+  });
+
+  it('lets another matching rule without that exclusion fire', async () => {
+    await seedAccount();
+    await seedRule({ label: 'Reel guide', keywords: ['guide'], mediaId: 'reel-1', excludeKeywords: ['how much'], dmText: 'reel guide' });
+    const fallback = await seedRule({ label: 'Any guide', keywords: ['guide'], dmText: 'price list and guide' });
+    await postWebhook(commentPayload({ mediaId: 'reel-1', text: 'how much is the guide' }));
+    expect(dmCalls()).toEqual([expect.objectContaining({ body: expect.objectContaining({ message: { text: 'price list and guide' } }) })]);
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'ok', rule_id: fallback, error: null })]);
+  });
+});
+
 describe('media-scoped rules', () => {
   it('prefers a rule scoped to the post over an older all-posts rule', async () => {
     await seedAccount();

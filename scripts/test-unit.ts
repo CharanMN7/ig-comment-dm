@@ -15,13 +15,16 @@ import { STALE_PENDING_SECONDS } from '../src/cron.ts';
 import { isSelfComment } from '../src/guard.ts';
 import { parseWebhookPayload } from '../src/process.ts';
 import {
+  EXCLUSION_TOO_SHORT_MESSAGE,
   KEYWORD_CACHE_MAX,
   KEYWORD_TOO_SHORT_MESSAGE,
   compileKeyword,
   escapeRegex,
+  exclusionSkipReason,
   isMatchMode,
   keywordMatches,
   keywordProblem,
+  keywordSwallowedBy,
   matchComment,
   normalizeCommentText,
 } from '../src/match.ts';
@@ -31,6 +34,7 @@ function rule(partial: Partial<Rule> & Pick<Rule, 'id' | 'keywords' | 'label'>):
   return {
     ig_user_id: 'acct',
     match_mode: 'word',
+    exclude_keywords: '[]',
     media_id: null,
     dm_text: 'hello',
     public_reply_text: null,
@@ -349,6 +353,11 @@ describe('keywordProblem', () => {
     }
   });
 
+  it('can name the field in its too-short message', () => {
+    assert.equal(keywordProblem('no', EXCLUSION_TOO_SHORT_MESSAGE), EXCLUSION_TOO_SHORT_MESSAGE);
+    assert.equal(keywordProblem('no thanks', EXCLUSION_TOO_SHORT_MESSAGE), null);
+  });
+
   it('counts digits as characters', () => {
     assert.equal(keywordProblem('2026'), null);
     assert.equal(keywordProblem('#42'), KEYWORD_TOO_SHORT_MESSAGE);
@@ -366,38 +375,126 @@ describe('matchComment', () => {
   });
 
   it('prefers a media-scoped rule over a global rule', () => {
-    const hit = matchComment([global, scoped], 'guide please', 'MEDIA1');
+    const hit = matchComment([global, scoped], 'guide please', 'MEDIA1').match;
     assert.equal(hit?.rule.id, 2);
     assert.equal(hit?.rule.dm_text, 'scoped-dm');
   });
 
   it('falls back to a global rule on other posts', () => {
-    const hit = matchComment([global, scoped], 'guide please', 'OTHER');
+    const hit = matchComment([global, scoped], 'guide please', 'OTHER').match;
     assert.equal(hit?.rule.id, 1);
   });
 
   it('returns the first matching rule and stops', () => {
     const a = rule({ id: 10, label: 'a', keywords: JSON.stringify(['hello']) });
     const b = rule({ id: 11, label: 'b', keywords: JSON.stringify(['hello']) });
-    const hit = matchComment([a, b], 'hello there', undefined);
+    const hit = matchComment([a, b], 'hello there', undefined).match;
     assert.equal(hit?.rule.id, 10);
   });
 
   it('returns null when nothing matches', () => {
-    assert.equal(matchComment([global], 'nice photo', undefined), null);
+    assert.deepEqual(matchComment([global], 'nice photo', undefined), { match: null, excluded: [] });
   });
 
   it('names the keyword that matched, as the operator typed it', () => {
     const r = rule({ id: 3, label: 'launch', keywords: JSON.stringify(['Guide', 'LAUNCH']), match_mode: 'contains' });
-    assert.deepEqual(matchComment([r], 'so ready for #launch2026', undefined), { rule: r, keyword: 'LAUNCH' });
+    assert.deepEqual(matchComment([r], 'so ready for #launch2026', undefined), {
+      match: { rule: r, keyword: 'LAUNCH' },
+      excluded: [],
+    });
   });
 
   it('uses each rule\'s own match mode', () => {
     const word = rule({ id: 4, label: 'word', keywords: JSON.stringify(['launch']) });
     const contains = rule({ id: 5, label: 'contains', keywords: JSON.stringify(['launch']), match_mode: 'contains' });
-    assert.equal(matchComment([word, contains], '#launch2026', undefined)?.rule.id, 5);
-    assert.equal(matchComment([word, contains], 'launch day', undefined)?.rule.id, 4);
-    assert.equal(matchComment([word], '#launch2026', undefined), null);
+    assert.equal(matchComment([word, contains], '#launch2026', undefined).match?.rule.id, 5);
+    assert.equal(matchComment([word, contains], 'launch day', undefined).match?.rule.id, 4);
+    assert.equal(matchComment([word], '#launch2026', undefined).match, null);
+  });
+});
+
+describe('exclusions', () => {
+  const guide = rule({
+    id: 20,
+    label: 'guide',
+    keywords: JSON.stringify(['guide']),
+    exclude_keywords: JSON.stringify(['how much', 'already have']),
+  });
+
+  it('stops a rule whose keyword matched, and says which exclusion did it', () => {
+    assert.deepEqual(matchComment([guide], 'How much is the GUIDE??', undefined), {
+      match: null,
+      excluded: [{ rule: guide, keyword: 'guide', exclusion: 'how much' }],
+    });
+  });
+
+  it('leaves the rule alone when no exclusion matches', () => {
+    assert.equal(matchComment([guide], 'guide please', undefined).match?.rule.id, 20);
+  });
+
+  it('only counts a rule as excluded when its keyword matched', () => {
+    assert.deepEqual(matchComment([guide], 'how much for a shoutout', undefined), { match: null, excluded: [] });
+  });
+
+  it('uses the same normalisation as keywords', () => {
+    assert.equal(matchComment([guide], 'I ALREADY-HAVE the guide 🙏', undefined).match, null);
+    const accented = rule({ id: 21, label: 'preco', keywords: JSON.stringify(['guia']), exclude_keywords: JSON.stringify(['preco']) });
+    assert.equal(matchComment([accented], 'qual o PREÇO do guia?', undefined).match, null);
+  });
+
+  it("uses the rule's own match mode", () => {
+    const word = rule({ id: 22, label: 'word', keywords: JSON.stringify(['guide']), exclude_keywords: JSON.stringify(['price']) });
+    const contains = { ...word, id: 23, match_mode: 'contains' as const };
+    // "prices" is not the whole word "price", so only the contains rule is stopped.
+    assert.equal(matchComment([word], 'guide prices?', undefined).match?.rule.id, 22);
+    assert.deepEqual(matchComment([contains], 'guide prices?', undefined).excluded.map((e) => e.exclusion), ['price']);
+  });
+
+  it('works in non-Latin scripts', () => {
+    const cyrillic = rule({ id: 24, label: 'гид', keywords: JSON.stringify(['гид']), exclude_keywords: JSON.stringify(['сколько']) });
+    assert.equal(matchComment([cyrillic], 'Сколько стоит гид?', undefined).match, null);
+    assert.equal(matchComment([cyrillic], 'нужен гид', undefined).match?.rule.id, 24);
+  });
+
+  it('is per rule: a later rule without that exclusion still fires', () => {
+    const scoped = { ...guide, id: 25, label: 'scoped guide', media_id: 'MEDIA1' };
+    const fallback = rule({ id: 26, label: 'any guide', keywords: JSON.stringify(['guide']) });
+    const verdict = matchComment([fallback, scoped], 'how much is the guide', 'MEDIA1');
+    assert.equal(verdict.match?.rule.id, 26);
+    assert.deepEqual(verdict.excluded, [{ rule: scoped, keyword: 'guide', exclusion: 'how much' }]);
+  });
+
+  it('lists every rule passed over, in matching order, when none fires', () => {
+    const other = rule({ id: 27, label: 'other', keywords: JSON.stringify(['guide']), exclude_keywords: JSON.stringify(['how much']) });
+    const verdict = matchComment([guide, other], 'how much is the guide', undefined);
+    assert.equal(verdict.match, null);
+    assert.deepEqual(verdict.excluded.map((e) => e.rule.id), [20, 27]);
+  });
+
+  it('treats a rule saved before exclusions existed as having none', () => {
+    const old = rule({ id: 28, label: 'old', keywords: JSON.stringify(['guide']), exclude_keywords: '' });
+    assert.equal(matchComment([old], 'how much is the guide', undefined).match?.rule.id, 28);
+  });
+
+  it('writes the skip reason the operator sees on Home', () => {
+    assert.equal(
+      exclusionSkipReason({ rule: guide, keyword: 'guide', exclusion: 'how much' }),
+      'Skipped: matched exclusion “how much”',
+    );
+  });
+});
+
+describe('keywordSwallowedBy', () => {
+  it('finds a keyword that one of its exclusions would always stop', () => {
+    assert.deepEqual(keywordSwallowedBy(['free guide', 'pdf'], ['guide'], 'word'), { keyword: 'free guide', exclusion: 'guide' });
+    assert.deepEqual(keywordSwallowedBy(['GUIDE!'], ['guide'], 'word'), { keyword: 'GUIDE!', exclusion: 'guide' });
+    assert.deepEqual(keywordSwallowedBy(['guidebook'], ['guide'], 'contains'), { keyword: 'guidebook', exclusion: 'guide' });
+  });
+
+  it('allows exclusions that only sometimes overlap', () => {
+    assert.equal(keywordSwallowedBy(['guide'], ['how much', 'guidebook'], 'word'), null);
+    assert.equal(keywordSwallowedBy(['guidebook'], ['guide'], 'word'), null);
+    assert.equal(keywordSwallowedBy(['guide'], [], 'word'), null);
   });
 });
 

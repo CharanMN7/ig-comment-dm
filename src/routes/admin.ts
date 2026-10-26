@@ -33,7 +33,15 @@ import {
 } from '../db.ts';
 import { findConfigProblems } from '../config.ts';
 import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
-import { isMatchMode, keywordProblem, normalizeCommentText, parseKeywords } from '../match.ts';
+import {
+  EXCLUSION_TOO_SHORT_MESSAGE,
+  KEYWORD_TOO_SHORT_MESSAGE,
+  isMatchMode,
+  keywordProblem,
+  keywordSwallowedBy,
+  normalizeCommentText,
+  parseKeywords,
+} from '../match.ts';
 import { listRecentMedia, oauthRedirectUri } from '../meta.ts';
 import { chooseRule } from '../process.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
@@ -525,17 +533,19 @@ async function recentMediaOptions(
   return out;
 }
 
-function parseKeywordLines(raw: string): { ok: true; keywords: string[] } | { ok: false; error: string } {
-  const keywords = raw
+function keywordLines(raw: string): string[] {
+  return raw
     .split(/\r?\n/)
     .map((s) => s.trim())
     .filter(Boolean);
-  if (keywords.length === 0) return { ok: false, error: 'Add at least one keyword, one per line.' };
-  for (const keyword of keywords) {
-    const problem = keywordProblem(keyword);
-    if (problem) return { ok: false, error: problem };
+}
+
+function firstKeywordProblem(words: string[], tooShortMessage: string): string | null {
+  for (const word of words) {
+    const problem = keywordProblem(word, tooShortMessage);
+    if (problem) return problem;
   }
-  return { ok: true, keywords };
+  return null;
 }
 
 type RuleFormValues = {
@@ -543,6 +553,7 @@ type RuleFormValues = {
   label: string;
   keywords: string;
   match_mode: string;
+  exclude_keywords: string;
   media_id: string;
   dm_text: string;
   public_reply_text: string;
@@ -554,6 +565,7 @@ function formValuesFromRule(rule: Rule): RuleFormValues {
     label: rule.label,
     keywords: parseKeywords(rule.keywords).join('\n'),
     match_mode: rule.match_mode,
+    exclude_keywords: parseKeywords(rule.exclude_keywords).join('\n'),
     media_id: rule.media_id ?? '',
     dm_text: rule.dm_text,
     public_reply_text: rule.public_reply_text ?? '',
@@ -567,6 +579,7 @@ function formValuesFromPost(f: Record<string, string>): RuleFormValues {
     label: f.label ?? '',
     keywords: f.keywords ?? '',
     match_mode: f.match_mode ?? 'word',
+    exclude_keywords: f.exclude_keywords ?? '',
     media_id: f.media_id ?? '',
     dm_text: f.dm_text ?? '',
     public_reply_text: f.public_reply_text ?? '',
@@ -652,6 +665,14 @@ function ruleForm(opts: {
             </span>
           </label>
         </fieldset>
+        <label for="exclude_keywords">Exclusions (optional)</label>
+        <textarea id="exclude_keywords" name="exclude_keywords" placeholder="how much&#10;already have it&#10;not interested">${v.exclude_keywords}</textarea>
+        <p class="muted">
+          Skip comments that contain any of these, even when a keyword matches. One per line. Useful for
+          “how much is the guide?” or “I already have the guide”, which mention your keyword but don’t want
+          the message. They are found the same way as your keywords. Another rule without these exclusions
+          can still reply.
+        </p>
       </fieldset>
 
       <fieldset class="group">
@@ -706,6 +727,7 @@ adminRoutes.get('/rules', async (c) => {
                 <tbody>
                   ${rules.map((r) => {
                     const kws = parseKeywords(r.keywords).join(', ');
+                    const exclusions = parseKeywords(r.exclude_keywords);
                     return html`<tr>
                       <td>${r.label}</td>
                       <td>@${accountMap.get(r.ig_user_id) ?? r.ig_user_id}</td>
@@ -713,6 +735,9 @@ adminRoutes.get('/rules', async (c) => {
                         ${kws}
                         ${r.match_mode === 'contains'
                           ? html`<div class="muted">${MATCH_MODE_WORDS.contains}</div>`
+                          : html``}
+                        ${exclusions.length
+                          ? html`<div class="muted">Exclusions: ${exclusions.join(', ')}</div>`
                           : html``}
                       </td>
                       <td>${r.active ? 'Yes' : 'Paused'}</td>
@@ -765,7 +790,8 @@ adminRoutes.get('/rules/new', async (c) => {
 });
 
 function readRuleFields(form: Record<string, string>) {
-  const parsed = parseKeywordLines(form.keywords ?? '');
+  const keywords = keywordLines(form.keywords ?? '');
+  const exclusions = keywordLines(form.exclude_keywords ?? '');
   // Browsers submit each textarea line break as CRLF but count it as one
   // character against maxlength. Without this, a message that fit the box
   // could still fail the length check below.
@@ -778,9 +804,19 @@ function readRuleFields(form: Record<string, string>) {
   const matchMode = form.match_mode ?? 'word';
   if (!label) return { error: 'Give this rule a name.' };
   if (!ig) return { error: 'Pick an Instagram account.' };
-  if (!parsed.ok) return { error: parsed.error };
+  if (keywords.length === 0) return { error: 'Add at least one keyword, one per line.' };
+  const keywordError = firstKeywordProblem(keywords, KEYWORD_TOO_SHORT_MESSAGE);
+  if (keywordError) return { error: keywordError };
   if (!isMatchMode(matchMode)) {
     return { error: 'Choose how to look for keywords: whole words only, or anywhere in the comment.' };
+  }
+  const exclusionError = firstKeywordProblem(exclusions, EXCLUSION_TOO_SHORT_MESSAGE);
+  if (exclusionError) return { error: exclusionError };
+  const swallowed = keywordSwallowedBy(keywords, exclusions, matchMode);
+  if (swallowed) {
+    return {
+      error: `The keyword “${swallowed.keyword}” could never get a message, because it contains the exclusion “${swallowed.exclusion}”. Remove one of them.`,
+    };
   }
   if (!dm) return { error: 'Write the private message to send.' };
   if (dm.length > DM_TEXT_MAX) {
@@ -798,8 +834,9 @@ function readRuleFields(form: Record<string, string>) {
     row: {
       ig_user_id: ig,
       label,
-      keywords: JSON.stringify(parsed.keywords),
+      keywords: JSON.stringify(keywords),
       match_mode: matchMode,
+      exclude_keywords: JSON.stringify(exclusions),
       media_id: media || null,
       dm_text: dm,
       public_reply_text: pub || null,
@@ -973,11 +1010,27 @@ adminRoutes.post('/test', async (c) => {
   const ig = form.ig_user_id ?? '';
   const text = form.text ?? '';
   const media = form.media_id?.trim() || undefined;
-  const match = await chooseRule(c.env.DB, ig, text, media);
+  const { match, excluded } = await chooseRule(c.env.DB, ig, text, media);
   const base = c.get('adminBase');
   // Shown either way: when a test does not match, the cleaned-up text is
   // usually the explanation (the hashtag symbol is gone, the accent folded).
   const readAs = html`<tr><th>Comment, as matched</th><td>${normalizeCommentText(text) || '(nothing left)'}</td></tr>`;
+  const exclusions = excluded.length
+    ? html`
+        <h2>${match ? 'Passed over first' : 'Skipped because of an exclusion'}</h2>
+        <table>
+          <thead><tr><th>Rule</th><th>Keyword found</th><th>Exclusion found</th></tr></thead>
+          <tbody>
+            ${excluded.map(
+              (e) => html`<tr><td>${e.rule.label}</td><td>${e.keyword}</td><td>${e.exclusion}</td></tr>`,
+            )}
+          </tbody>
+        </table>
+        ${match
+          ? html`<p class="muted">An exclusion only stops its own rule, so the next matching rule replies instead.</p>`
+          : html``}
+      `
+    : html``;
   return c.html(
     layout({
       title: 'Test',
@@ -1000,15 +1053,25 @@ adminRoutes.post('/test', async (c) => {
               ${match.rule.public_reply_text
                 ? html`<h2>Public reply that would be posted</h2><p>${match.rule.public_reply_text}</p>`
                 : html`<p class="muted">No public reply for this rule.</p>`}
+              ${exclusions}
             `
-          : html`
-              <p>No rule would match this comment. Nothing would be sent.</p>
-              <table>${readAs}</table>
-              <p class="muted">
-                Rules set to <b>${MATCH_MODE_WORDS.word}</b> skip keywords inside longer words and hashtags: “guide” does
-                not match “guides” or “#guide2026”. Paused rules are not tested.
-              </p>
-            `}
+          : excluded.length
+            ? html`
+                <p>
+                  Nothing would be sent. This comment has a rule’s keyword, but also one of that rule’s
+                  exclusions, so it would be skipped.
+                </p>
+                ${exclusions}
+                <table>${readAs}</table>
+              `
+            : html`
+                <p>No rule would match this comment. Nothing would be sent.</p>
+                <table>${readAs}</table>
+                <p class="muted">
+                  Rules set to <b>${MATCH_MODE_WORDS.word}</b> skip keywords inside longer words and hashtags: “guide”
+                  does not match “guides” or “#guide2026”. Paused rules are not tested.
+                </p>
+              `}
         <p><a href="${base}/test">Test another</a></p>
       `,
     }),

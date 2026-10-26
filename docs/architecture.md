@@ -73,7 +73,7 @@ Unlisted, session-gated, used by `scripts/selftest.ts`:
 2. Self-comment guard. Stop, no `sent` row.
 3. Age check. Older than 7 days → claim `sent` as `skipped`, stop.
 4. Atomic claim: `INSERT INTO sent … ON CONFLICT DO NOTHING`. `changes === 0` → already handled, stop.
-5. Active rules, oldest first (`chooseRule` in `src/process.ts`). `media_id` set → that post only; `NULL` → all posts. Media-scoped rules win. First match wins.
+5. Active rules, oldest first (`chooseRule` in `src/process.ts`, which calls `matchComment` in `src/match.ts`; the 5-minute sweep calls `matchComment` too). `media_id` set → that post only; `NULL` → all posts. Media-scoped rules win. First match wins. A rule whose `exclude_keywords` also match is passed over and matching continues, so exclusions are per rule. If nothing fires because of an exclusion, the `sent` row is `skipped` with `rule_id` of the first rule passed over and `Skipped: matched exclusion “…”` as the error.
 6. Normalize comment: lowercase, strip emoji, strip punctuation, collapse whitespace.
 7. Each rule's `match_mode`: `word` (default) is a Unicode word-boundary regex per keyword (metacharacters escaped); `contains` is a substring test on the normalised text. Both normalise the keyword the same way, once per isolate. Keywords under 3 characters after normalising, or with no letter or digit, are rejected at **save** time in admin, not here.
 8. Decrypt token.

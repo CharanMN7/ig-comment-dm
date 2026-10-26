@@ -165,7 +165,7 @@ export async function accountsNeedingRefresh(db: D1Database, expiresBefore: numb
 // Every reader selects the same columns, so a migration that adds one to
 // `rules` is a one-line change here rather than four that can drift apart.
 const RULE_COLUMNS =
-  'id, ig_user_id, label, keywords, match_mode, media_id, dm_text, public_reply_text, active, created_at';
+  'id, ig_user_id, label, keywords, match_mode, exclude_keywords, media_id, dm_text, public_reply_text, active, created_at';
 
 export async function listActiveRules(db: D1Database, igUserId: string): Promise<Rule[]> {
   const { results } = await db
@@ -211,6 +211,7 @@ export async function insertRule(
     label: string;
     keywords: string;
     match_mode: MatchMode;
+    exclude_keywords: string;
     media_id: string | null;
     dm_text: string;
     public_reply_text: string | null;
@@ -219,14 +220,16 @@ export async function insertRule(
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO rules (ig_user_id, label, keywords, match_mode, media_id, dm_text, public_reply_text, active, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+      `INSERT INTO rules (
+         ig_user_id, label, keywords, match_mode, exclude_keywords, media_id, dm_text, public_reply_text, active, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
     )
     .bind(
       row.ig_user_id,
       row.label,
       row.keywords,
       row.match_mode,
+      row.exclude_keywords,
       row.media_id,
       row.dm_text,
       row.public_reply_text,
@@ -243,6 +246,7 @@ export async function updateRule(
     label: string;
     keywords: string;
     match_mode: MatchMode;
+    exclude_keywords: string;
     media_id: string | null;
     dm_text: string;
     public_reply_text: string | null;
@@ -251,10 +255,21 @@ export async function updateRule(
   await db
     .prepare(
       `UPDATE rules
-       SET ig_user_id = ?, label = ?, keywords = ?, match_mode = ?, media_id = ?, dm_text = ?, public_reply_text = ?
+       SET ig_user_id = ?, label = ?, keywords = ?, match_mode = ?, exclude_keywords = ?, media_id = ?,
+           dm_text = ?, public_reply_text = ?
        WHERE id = ?`,
     )
-    .bind(row.ig_user_id, row.label, row.keywords, row.match_mode, row.media_id, row.dm_text, row.public_reply_text, id)
+    .bind(
+      row.ig_user_id,
+      row.label,
+      row.keywords,
+      row.match_mode,
+      row.exclude_keywords,
+      row.media_id,
+      row.dm_text,
+      row.public_reply_text,
+      id,
+    )
     .run();
 }
 
