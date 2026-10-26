@@ -357,8 +357,11 @@ export function sentLogQuery(
   }
   if (cursor) {
     const cmp = cursor.dir === 'older' ? '<' : '>';
-    conditions.push(`(s.sent_at ${cmp} ? OR (s.sent_at = ? AND s.comment_id ${cmp} ?))`);
-    bindings.push(cursor.sent_at, cursor.sent_at, cursor.comment_id);
+    // The plain range is implied by the OR, but D1's SQLite only seeks the
+    // index on a plain range. Without it, a page deep in the history reads
+    // every row in front of it, and D1 bills each one.
+    conditions.push(`s.sent_at ${cmp}= ?`, `(s.sent_at ${cmp} ? OR (s.sent_at = ? AND s.comment_id ${cmp} ?))`);
+    bindings.push(cursor.sent_at, cursor.sent_at, cursor.sent_at, cursor.comment_id);
   }
   // Newer pages read oldest first, so LIMIT keeps the rows next to the cursor
   // rather than the newest rows in the table.

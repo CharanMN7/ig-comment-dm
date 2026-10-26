@@ -550,16 +550,16 @@ describe('logs query', () => {
 
   it('breaks ties on comment_id going older', () => {
     const { sql, bindings } = sentLogQuery({}, { dir: 'older', sent_at: 100, comment_id: 'c5' }, 51);
-    assert.match(sql, /WHERE \(s\.sent_at < \? OR \(s\.sent_at = \? AND s\.comment_id < \?\)\)/);
+    assert.match(sql, /WHERE s\.sent_at <= \? AND \(s\.sent_at < \? OR \(s\.sent_at = \? AND s\.comment_id < \?\)\)/);
     assert.match(sql, /ORDER BY s\.sent_at DESC, s\.comment_id DESC/);
-    assert.deepEqual(bindings, [100, 100, 'c5', 51]);
+    assert.deepEqual(bindings, [100, 100, 100, 'c5', 51]);
   });
 
   it('reverses the comparison and the order going newer', () => {
     const { sql, bindings } = sentLogQuery({}, { dir: 'newer', sent_at: 100, comment_id: 'c5' }, 51);
-    assert.match(sql, /WHERE \(s\.sent_at > \? OR \(s\.sent_at = \? AND s\.comment_id > \?\)\)/);
+    assert.match(sql, /WHERE s\.sent_at >= \? AND \(s\.sent_at > \? OR \(s\.sent_at = \? AND s\.comment_id > \?\)\)/);
     assert.match(sql, /ORDER BY s\.sent_at ASC, s\.comment_id ASC/);
-    assert.deepEqual(bindings, [100, 100, 'c5', 51]);
+    assert.deepEqual(bindings, [100, 100, 100, 'c5', 51]);
   });
 
   it('binds every filter in the order its condition appears', () => {
@@ -570,9 +570,9 @@ describe('logs query', () => {
     );
     assert.match(
       sql,
-      /WHERE s\.dm_status = \? AND s\.ig_user_id = \? AND s\.rule_id = \? AND s\.sent_at >= \? AND s\.sent_at < \? AND \(s\.sent_at < \?/,
+      /WHERE s\.dm_status = \? AND s\.ig_user_id = \? AND s\.rule_id = \? AND s\.sent_at >= \? AND s\.sent_at < \? AND s\.sent_at <= \? AND \(s\.sent_at < \?/,
     );
-    assert.deepEqual(bindings, ['failed', 'acct', 3, 10, 20, 15, 15, 'c1', 51]);
+    assert.deepEqual(bindings, ['failed', 'acct', 3, 10, 20, 15, 15, 15, 'c1', 51]);
   });
 
   it('has no WHERE at all on an unfiltered first page', () => {

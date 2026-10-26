@@ -1,4 +1,6 @@
+import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
+import { sentLogQuery } from '../src/db.ts';
 import { LOGS_PAGE_SIZE } from '../src/logs.ts';
 import { DAY, NOW, seedAccount, seedRule, seedSent } from './support/seed.ts';
 import { Browser, adminPath, signedInAdmin } from './support/worker.ts';
@@ -157,5 +159,22 @@ describe('the logs page', () => {
     const reflected = (await admin.get(adminPath(`/logs?from=${hostile}&before=1&before_id=${hostile}`))).text;
     expect(reflected).toContain('“&quot;&gt;&lt;script&gt;alert(2)&lt;/script&gt;”');
     expect(reflected).not.toContain('<script');
+  });
+
+  it('reads about one page of rows from D1, however deep the page is', async () => {
+    await seedAccount();
+    const newestFirst = await seedMany(300, (i) => NOW - DAY + Math.floor(i / 7));
+    // The send 200 rows down, as the Older link on page four carries it.
+    const deep = Number(newestFirst[199]);
+    for (const dir of ['older', 'newer'] as const) {
+      const { sql, bindings } = sentLogQuery(
+        {},
+        { dir, sent_at: NOW - DAY + Math.floor(deep / 7), comment_id: `c${pad(deep)}` },
+        LOGS_PAGE_SIZE + 1,
+      );
+      const { results, meta } = await env.DB.prepare(sql).bind(...bindings).all();
+      expect(results).toHaveLength(LOGS_PAGE_SIZE + 1);
+      expect(meta.rows_read, dir).toBeLessThan(2 * LOGS_PAGE_SIZE);
+    }
   });
 });
