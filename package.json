@@ -9,8 +9,10 @@
     "deploy": "wrangler deploy",
     "db:migrate:local": "wrangler d1 execute ig-comment-dm --local --file=migrations/001_init.sql && wrangler d1 execute ig-comment-dm --local --file=migrations/002_webhook_events.sql",
     "db:migrate": "wrangler d1 execute ig-comment-dm --remote --file=migrations/001_init.sql && wrangler d1 execute ig-comment-dm --remote --file=migrations/002_webhook_events.sql",
-    "test": "node --experimental-strip-types --test scripts/test-unit.ts",
-    "typecheck": "tsc --noEmit",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "node --experimental-strip-types --test scripts/test-unit.ts",
+    "test:integration": "vitest run",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p test",
     "selftest": "node --experimental-strip-types scripts/selftest.ts",
     "keys": "node --experimental-strip-types scripts/keys.ts"
   },
@@ -18,8 +20,12 @@
     "hono": "^4.13.13"
   },
   "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.4.7",
     "@cloudflare/workers-types": "^5.20260905.1",
+    "@msw/cloudflare": "0.2.0",
+    "msw": "3.0.3",
     "typescript": "^7.0.2",
+    "vitest": "5.0.5",
     "wrangler": "^4.147.0"
   },
   "description": "Self-hosted Instagram comment-to-DM automation on a single Cloudflare Worker.",
