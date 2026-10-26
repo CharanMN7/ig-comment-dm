@@ -110,19 +110,28 @@ export function csrfFrom(html: string): string {
 
 /** A cookie jar and form poster, standing in for the operator's browser. */
 export class Browser {
-  #cookies = new Map<string, string>();
+  #cookies = new Map<string, { value: string; strict: boolean }>();
   lastPage = '';
 
   get cookieHeader(): string {
-    return [...this.#cookies].map(([k, v]) => `${k}=${v}`).join('; ');
+    return this.#header(false);
+  }
+
+  cookie(name: string): string | undefined {
+    return this.#cookies.get(name)?.value;
   }
 
   setCookie(name: string, value: string): void {
-    this.#cookies.set(name, value);
+    this.#cookies.set(name, { value, strict: false });
   }
 
-  async get(path: string): Promise<Reply> {
-    return this.#send(path, { method: 'GET' });
+  /**
+   * `crossSite` is a navigation another site started, such as Instagram
+   * redirecting back after login. A real browser leaves SameSite=Strict
+   * cookies off those, so the admin session cookie never arrives with them.
+   */
+  async get(path: string, opts: { crossSite?: boolean } = {}): Promise<Reply> {
+    return this.#send(path, { method: 'GET' }, opts.crossSite ?? false);
   }
 
   async post(path: string, fields: Record<string, string>): Promise<Reply> {
@@ -138,9 +147,17 @@ export class Browser {
     return this.post(path, { csrf: csrfFrom(this.lastPage), ...fields });
   }
 
-  async #send(path: string, init: RequestInit): Promise<Reply> {
+  #header(crossSite: boolean): string {
+    return [...this.#cookies]
+      .filter(([, c]) => !(crossSite && c.strict))
+      .map(([k, c]) => `${k}=${c.value}`)
+      .join('; ');
+  }
+
+  async #send(path: string, init: RequestInit, crossSite = false): Promise<Reply> {
     const headers = new Headers(init.headers);
-    if (this.#cookies.size) headers.set('Cookie', this.cookieHeader);
+    const cookies = this.#header(crossSite);
+    if (cookies) headers.set('Cookie', cookies);
     const reply = await request(path, { ...init, headers });
     for (const line of reply.setCookies) {
       const [pair] = line.split(';');
@@ -148,7 +165,7 @@ export class Browser {
       const name = pair!.slice(0, eq).trim();
       const value = pair!.slice(eq + 1).trim();
       if (/max-age=0/i.test(line) || value === '') this.#cookies.delete(name);
-      else this.#cookies.set(name, value);
+      else this.#cookies.set(name, { value, strict: /samesite=strict/i.test(line) });
     }
     if (reply.headers.get('Content-Type')?.includes('text/html')) this.lastPage = reply.text;
     return reply;
@@ -163,4 +180,18 @@ export async function signedInAdmin(): Promise<Browser> {
   if (done.status !== 302) throw new Error(`setup failed with ${done.status}: ${done.text.slice(0, 200)}`);
   await browser.get(adminPath('/rules'));
   return browser;
+}
+
+// --- Connect -----------------------------------------------------------------
+
+/** Starts Connect as `browser` and returns the state Instagram will echo back. */
+export async function startConnect(browser: Browser, query = ''): Promise<string> {
+  const res = await browser.get(`/connect/start${query}`);
+  if (res.status !== 302) throw new Error(`/connect/start answered ${res.status}: ${res.text.slice(0, 200)}`);
+  return new URL(res.location!).searchParams.get('state')!;
+}
+
+/** Instagram's redirect back to the callback, made by the browser that started Connect. */
+export function returnFromInstagram(browser: Browser, query: Record<string, string>): Promise<Reply> {
+  return browser.get(`/connect/callback?${new URLSearchParams(query)}`, { crossSite: true });
 }

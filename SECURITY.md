@@ -45,6 +45,10 @@ Sessions are stateless cookies signed with HMAC-SHA256 (`SESSION_SIGNING_KEY`),
 marked `HttpOnly`, `SameSite=Strict`, and `Secure` on HTTPS. Every mutating form
 carries a CSRF token bound to the session.
 
+Connecting an Instagram account needs the same logged-in session. The OAuth
+`state` is signed, expires after 10 minutes, and only completes in the browser
+that started it, which holds a matching short-lived cookie.
+
 ### What is encrypted
 
 Instagram access tokens are encrypted at rest with **AES-256-GCM** using

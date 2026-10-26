@@ -11,9 +11,27 @@ import {
 import type { SessionData } from './types.ts';
 
 export const SESSION_COOKIE = 'igcdm_session';
+export const CONNECT_COOKIE = 'igcdm_connect';
+export const OAUTH_STATE_TTL_SECONDS = 600;
 
 function cookieSecure(publicBaseUrl: string): boolean {
   return publicBaseUrl.startsWith('https://');
+}
+
+function serializeCookie(
+  name: string,
+  value: string,
+  opts: { path: string; sameSite: 'Strict' | 'Lax'; maxAge: number; publicBaseUrl: string },
+): string {
+  const parts = [`${name}=${value}`, `Path=${opts.path}`, 'HttpOnly', `SameSite=${opts.sameSite}`, `Max-Age=${opts.maxAge}`];
+  if (cookieSecure(opts.publicBaseUrl)) parts.push('Secure');
+  return parts.join('; ');
+}
+
+function readCookie(cookieHeader: string | undefined, name: string): string | null {
+  if (!cookieHeader) return null;
+  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
+  return match ? match[1] : null;
 }
 
 export function serializeSessionCookie(
@@ -21,15 +39,7 @@ export function serializeSessionCookie(
   publicBaseUrl: string,
   maxAge: number,
 ): string {
-  const parts = [
-    `${SESSION_COOKIE}=${value}`,
-    'Path=/',
-    'HttpOnly',
-    'SameSite=Strict',
-    `Max-Age=${maxAge}`,
-  ];
-  if (cookieSecure(publicBaseUrl)) parts.push('Secure');
-  return parts.join('; ');
+  return serializeCookie(SESSION_COOKIE, value, { path: '/', sameSite: 'Strict', maxAge, publicBaseUrl });
 }
 
 export function clearSessionCookie(publicBaseUrl: string): string {
@@ -55,10 +65,8 @@ export async function readSession(
   signingKeyB64: string,
   cookieHeader: string | undefined,
 ): Promise<SessionData | null> {
-  if (!cookieHeader) return null;
-  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`));
-  if (!match) return null;
-  const token = match[1];
+  const token = readCookie(cookieHeader, SESSION_COOKIE);
+  if (!token) return null;
   const dot = token.lastIndexOf('.');
   if (dot <= 0) return null;
   const payload = token.slice(0, dot);
@@ -81,30 +89,58 @@ export async function readSession(
   }
 }
 
-export async function makeOauthState(signingKeyB64: string): Promise<string> {
+/**
+ * The admin session cookie is SameSite=Strict, so the browser leaves it off
+ * Instagram's cross-site redirect back to /connect/callback. /connect/start
+ * does see it, so that is where the admin is checked. It hands Instagram a
+ * signed state, and hands this browser a Lax cookie holding a MAC of the
+ * state's nonce. The callback needs both. The state alone is not enough: it
+ * has been through Instagram and the address bar.
+ */
+export async function makeOauthState(signingKeyB64: string): Promise<{ state: string; cookie: string }> {
+  const key = sessionSigningKey(signingKeyB64);
+  const n = randomHex(16);
   const payload = bytesToB64Url(
-    new TextEncoder().encode(JSON.stringify({ exp: nowSeconds() + 600, n: randomHex(16) })),
+    new TextEncoder().encode(JSON.stringify({ p: 'oauth', exp: nowSeconds() + OAUTH_STATE_TTL_SECONDS, n })),
   );
-  const mac = await hmacSignBytes(sessionSigningKey(signingKeyB64), payload);
-  return `${payload}.${bytesToB64Url(mac)}`;
+  const mac = await hmacSignBytes(key, payload);
+  // A base64url payload can't contain ':', so this MAC can never double as a
+  // state or session signature made with the same key.
+  const binding = await hmacSignBytes(key, `connect:${n}`);
+  return { state: `${payload}.${bytesToB64Url(mac)}`, cookie: bytesToB64Url(binding) };
 }
 
-export async function verifyOauthState(signingKeyB64: string, state: string): Promise<boolean> {
+export async function verifyOauthState(
+  signingKeyB64: string,
+  state: string,
+  cookieHeader: string | undefined,
+): Promise<boolean> {
+  const key = sessionSigningKey(signingKeyB64);
   const dot = state.lastIndexOf('.');
   if (dot <= 0) return false;
   const payload = state.slice(0, dot);
+  const cookie = readCookie(cookieHeader, CONNECT_COOKIE);
+  if (!cookie) return false;
   let mac: Uint8Array;
+  let binding: Uint8Array;
   try {
     mac = b64UrlToBytes(state.slice(dot + 1));
+    binding = b64UrlToBytes(cookie);
   } catch {
     return false;
   }
-  const ok = await hmacVerifyBytes(sessionSigningKey(signingKeyB64), payload, mac);
-  if (!ok) return false;
+  if (!(await hmacVerifyBytes(key, payload, mac))) return false;
+  let data: { p?: unknown; exp?: unknown; n?: unknown };
   try {
-    const data = JSON.parse(new TextDecoder().decode(b64UrlToBytes(payload))) as { exp?: number };
-    return typeof data.exp === 'number' && data.exp >= nowSeconds();
+    data = JSON.parse(new TextDecoder().decode(b64UrlToBytes(payload))) as typeof data;
   } catch {
     return false;
   }
+  if (data.p !== 'oauth' || typeof data.exp !== 'number' || data.exp < nowSeconds()) return false;
+  if (typeof data.n !== 'string') return false;
+  return hmacVerifyBytes(key, `connect:${data.n}`, binding);
+}
+
+export function serializeConnectCookie(value: string, publicBaseUrl: string, maxAge: number): string {
+  return serializeCookie(CONNECT_COOKIE, value, { path: '/connect', sameSite: 'Lax', maxAge, publicBaseUrl });
 }

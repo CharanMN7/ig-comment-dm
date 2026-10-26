@@ -218,8 +218,8 @@ Instagram rejected the Connect attempt before showing the permission screen.
 is the Facebook App ID. You need the **Instagram App ID**, from Instagram → API
 setup with Instagram login → Business login settings.
 
-The Connect page prints the App ID this program is actually sending. Compare it
-to the dashboard.
+The Connect page (admin → **Accounts → Connect a new account**) prints the App
+ID this program is actually sending. Compare it to the dashboard.
 
 ```bash
 npx wrangler secret put META_APP_ID
@@ -261,7 +261,8 @@ Step 2 is the one people miss.
 
 **Also check which account the browser is logged into.** When you click Connect,
 Instagram uses whatever account that browser is signed in as. One profile working
-and another failing is almost always this. Use a private window.
+and another failing is almost always this. Open a private window, log in to your
+admin page there, and click Connect from that window.
 
 ---
 
