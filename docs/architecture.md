@@ -58,7 +58,7 @@ Follow-up DMs are out of scope. They need the person to reply first (24h window)
 | GET | `/connect/callback` | Code → short-lived → long-lived token, fetch `user_id`/`username`, encrypt, **upsert** account. |
 | GET/POST | `/a/:secret/*` | Admin. `:secret` is `ADMIN_URL_SECRET` (32-char). Wrong secret → 404. |
 
-Admin pages (password + CSRF on POSTs): `/` dashboard, `/rules`, `/rules/:id/delete` (confirmation page, then POST), `/test` (dry run, sends nothing, picks the rule through the same `chooseRule` as the pipeline), `/accounts`, first-run `/setup`, `/login`, `/logout`, `POST /run-cron`.
+Admin pages (password + CSRF on POSTs): `/` dashboard, `/logs` (every `sent` row, keyset-paginated on `sent_at` and `comment_id`, filters in the query string), `/rules`, `/rules/:id/delete` (confirmation page, then POST), `/test` (dry run, sends nothing, picks the rule through the same `chooseRule` as the pipeline), `/accounts`, first-run `/setup`, `/login`, `/logout`, `POST /run-cron`.
 
 Unlisted, session-gated, used by `scripts/selftest.ts`:
 

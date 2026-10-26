@@ -369,7 +369,7 @@ The private message lands in that other account's Instagram **inbox**, or in
 On **Home**, look at two lists:
 
 - **Did Instagram reach us?** A row here means Meta POSTed to your webhook. **Wrong secret** means add `FACEBOOK_APP_SECRET`. Empty while a friend already commented usually means the app is still in Development, or Hidden Words hid the comment.
-- **Last 20 sends** is the DM / skip / fail log.
+- **Last 20 sends** is the DM / skip / fail log. **Logs** in the menu has everything older.
 
 In the Meta app, the webhook must be subscribed to **comments** with
 **Include values** on. Use **Test** next to that field, then **Send to My

@@ -220,7 +220,7 @@ Then comment from a **different** Instagram account — a friend's phone works. 
 | Panel | What it tells you |
 |---|---|
 | **Did Instagram reach us?** | Whether Meta is POSTing at all. Empty means the problem is on Meta's side, not yours. `Wrong secret` means `FACEBOOK_APP_SECRET` is missing. |
-| **Last 20 sends** | Every DM, skip, and failure, with the reason. |
+| **Last 20 sends** | Every DM, skip, and failure, with the reason. **Logs** in the menu has the full history, filtered by status, account, rule or date. |
 | **Red banners** | An account needs reconnecting, the nightly job has stalled, or a secret is misconfigured. |
 
 ### Get told when it stops working
