@@ -223,6 +223,16 @@ Then comment from a **different** Instagram account — a friend's phone works. 
 | **Last 20 sends** | Every DM, skip, and failure, with the reason. |
 | **Red banners** | An account needs reconnecting, the nightly job has stalled, or a secret is misconfigured. |
 
+### Get told when it stops working
+
+The red banners only help if someone opens the panel. Point any uptime monitor at:
+
+```
+https://ig-comment-dm.YOURNAME.workers.dev/health
+```
+
+It answers `200` while the database responds and both scheduled jobs are running, and `503` when either has stalled, so you hear about a dead nightly refresh before tokens start expiring. It needs no login and shows no usernames, ids or secrets: only account counts and the time each job last ran. [What a 503 means](docs/troubleshooting.md#health-answers-503).
+
 ---
 
 ## Things that will surprise you
@@ -286,6 +296,7 @@ Instagram's rules, not ours. Each of these is enforced by Meta and cost someone 
 - [x] `npm run setup` — clone to deployed in one command
 - [x] `npm run doctor` — diagnoses a live deployment
 - [x] Tracked database migrations, applied by `npm run deploy` before the new code goes live
+- [x] `/health` endpoint for uptime monitors, with no login and nothing identifying in it
 - [x] Multi-account support on a single deployment
 - [x] Hosted privacy, terms, and data-deletion pages for Meta review
 
@@ -362,7 +373,6 @@ Everything below is [an open issue](https://github.com/CharanMN7/ig-comment-dm/i
 
 | Issue | Feature | Why it matters |
 |:--|---|---|
-| [#46](https://github.com/CharanMN7/ig-comment-dm/issues/46) | **Health check endpoint** | Uptime monitoring without a login |
 | [#47](https://github.com/CharanMN7/ig-comment-dm/issues/47) | **Operational event log** | Cron failures are invisible until something breaks |
 | [#49](https://github.com/CharanMN7/ig-comment-dm/issues/49) | **Export rules and logs** | Your data, portable |
 | [#50](https://github.com/CharanMN7/ig-comment-dm/issues/50) | **Dark mode** | The panel is white at 1am |

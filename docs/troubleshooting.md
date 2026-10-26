@@ -31,6 +31,7 @@ and it still does not work.
 - [The DM failed but the public reply worked](#the-dm-failed-but-the-public-reply-worked)
 - [Red banner: an account needs reconnecting](#red-banner-an-account-needs-reconnecting)
 - [Red banner: the daily check has not run](#red-banner-the-daily-check-has-not-run)
+- [/health answers 503](#health-answers-503)
 - [Home shows a table of secrets needing attention](#home-shows-a-table-of-secrets-needing-attention)
 - [Reading the logs directly](#reading-the-logs-directly)
 - [Still stuck](#still-stuck)
@@ -145,14 +146,18 @@ logged as skipped with the reason.
 **Confirm:** admin → **Test**, paste the exact comment text, and see which rule
 lights up. This sends nothing to anyone.
 
-Matching ignores case, emoji, and punctuation, and matches whole words —
-`guide` matches `Guide!` and `guide 🙏` but not `guides`.
+Matching ignores case, emoji, punctuation, and accents on Latin letters, and
+matches whole words — `guide` matches `Guide!` and `guide 🙏` but not `guides`,
+and `cafe` matches `café`.
 
 > [!NOTE]
-> Keywords in Cyrillic, Arabic, Chinese, Japanese, and other non-Latin scripts
-> **do not currently match**, and accented keywords only match if the accents
-> are typed identically. This is a known bug, not a configuration mistake — see
-> [the open issues](https://github.com/CharanMN7/ig-comment-dm/labels/area%3A%20matching).
+> Keywords work in any script, including Cyrillic, Arabic, Chinese and Japanese.
+> Accents are folded only on Latin letters (`dien` matches `điện`, `lodz`
+> matches `łódź`). Marks in other scripts are part of the word, so type a
+> non-Latin keyword with the same marks the comment uses. Chinese, Japanese,
+> Thai and other scripts written without spaces have no word edges to check,
+> so there a keyword also matches inside a longer word: `ガイド` matches
+> `ガイドライン`.
 
 ### 8. The keyword is too short
 
@@ -420,8 +425,46 @@ from an older config can drop them.
 npx wrangler deploy
 ```
 
-**Run it by hand right now** from the admin Home page ("Run the daily check"), or
+**Run it by hand right now** from the admin Home page ("Check connections now"), or
 watch for the next scheduled run.
+
+---
+
+## /health answers 503
+
+`/health` is the URL to give an uptime monitor. It needs no login and returns
+only counts and timestamps, never a username, an account id or a secret:
+
+```json
+{
+  "ok": true,
+  "database": "ok",
+  "accounts": { "active": 2, "needs_reconnect": 0 },
+  "cron": "ok",
+  "poll": "ok",
+  "last_cron_ok_at": 1759320000,
+  "last_poll_ok_at": 1759406280
+}
+```
+
+`200` means healthy and `503` means something needs fixing, so the monitor only
+has to check the status code. Open the URL in a browser to see which part
+failed:
+
+| The body says | What it means | Fix |
+|---|---|---|
+| `"database": "error"` | The Worker could not read D1, or the tables are missing. | Run `npm run db:migrate`. If the tables exist, check [Cloudflare's status page](https://www.cloudflarestatus.com) and `npx wrangler tail`. |
+| `"cron": "stale"` | The nightly token refresh has not succeeded in over 3 days, or has never run in the 26 hours since `/health` was first checked. | See [the daily check has not run](#red-banner-the-daily-check-has-not-run). |
+| `"poll": "stale"` | The 5-minute comment poll has not finished in over an hour. | Usually the cron triggers were dropped. Redeploy with `npx wrangler deploy`. |
+
+`"starting"` means a job has not run yet on a new deploy. It counts as
+healthy, but only until the job is overdue: a day and two hours for the nightly
+refresh, an hour for the poll. Press **Check connections now** on Home to run
+the nightly job straight away.
+
+`accounts.needs_reconnect` above 0 does not make `/health` fail, because a
+monitor can't fix it. You fix it in the admin panel: see [an account needs
+reconnecting](#red-banner-an-account-needs-reconnecting).
 
 ---
 

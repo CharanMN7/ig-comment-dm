@@ -49,6 +49,7 @@ Follow-up DMs are out of scope. They need the person to reply first (24h window)
 | Method | Path | Role |
 |---|---|---|
 | GET | `/` | `ok` — deploy smoke check |
+| GET, HEAD | `/health` | For uptime monitors. No auth, `no-store`, `noindex`. One D1 read: account counts and the two job timestamps. `200` healthy, `503` if D1 fails or a job is stale. No ids, usernames or secrets. |
 | GET | `/privacy`, `/terms`, `/data-deletion` | Static HTML for Meta Publish. |
 | GET | `/webhook` | Meta verify handshake. Right `hub.verify_token` → echo `hub.challenge`. Wrong → 403. |
 | POST | `/webhook` | Verify signature (either secret), log event, return **200 immediately**, process in `waitUntil`. |
