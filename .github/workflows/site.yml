@@ -1,0 +1,89 @@
+name: Site
+
+# The landing page and docs in site/, deployed to GitHub Pages. On a pull
+# request this is a build check only: it builds the site and checks every
+# internal link. It runs only when site/ changes, so don't make it a required
+# check, or pull requests that never touch site/ would wait on it forever.
+on:
+  pull_request:
+    paths:
+      - 'site/**'
+      - '.github/workflows/site.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'site/**'
+      - '.github/workflows/site.yml'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: site-${{ github.ref }}
+  # Cancel superseded PR builds, but never a Pages deploy halfway through.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build site
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: read
+    defaults:
+      run:
+        working-directory: site
+    env:
+      DEPLOY: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/master' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      # The URL GitHub serves the site from, custom domain included. The build
+      # derives Astro's base path from it. PR builds use the default in
+      # astro.config.ts instead, since they never deploy.
+      - name: Read the Pages URL
+        id: pages
+        if: env.DEPLOY == 'true'
+        uses: actions/configure-pages@v6
+
+      - run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          SITE_URL: ${{ steps.pages.outputs.base_url }}
+
+      - name: Check internal links
+        run: npm run check-links
+        env:
+          SITE_URL: ${{ steps.pages.outputs.base_url }}
+
+      - name: Upload the site for Pages
+        if: env.DEPLOY == 'true'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/dist
+
+  deploy:
+    name: Deploy to Pages
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v5

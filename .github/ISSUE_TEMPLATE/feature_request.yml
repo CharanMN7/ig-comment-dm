@@ -46,7 +46,7 @@ body:
     id: constraints
     attributes:
       label: Does it fit the project?
-      description: See [CONTRIBUTING.md](../blob/master/CONTRIBUTING.md#deciding-what-belongs-here).
+      description: See [what belongs here](https://charanmn7.github.io/ig-comment-dm/docs/contributing/#deciding-what-belongs-here).
       options:
         - label: It works on Cloudflare's free tier
         - label: It does not require a database other than D1
