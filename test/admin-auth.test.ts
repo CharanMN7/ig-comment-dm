@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it, vi } from 'vitest';
 import { DAY, FROZEN_NOW_MS, NOW, ruleRows, seedAccount, systemValue } from './support/seed.ts';
+import { lockSecondsFor } from '../src/throttle.ts';
 import { ADMIN_PASSWORD, Browser, adminPath, csrfFrom, request, signedInAdmin } from './support/worker.ts';
 
 const ruleForm = { ig_user_id: '17841400000000001', label: 'Guide', keywords: 'guide', dm_text: 'hello' };
@@ -137,6 +138,39 @@ describe('login', () => {
     vi.setSystemTime(FROZEN_NOW_MS + 61_000);
     const after = await browser.post(adminPath('/login'), { csrf, password: ADMIN_PASSWORD });
     expect(after.status).toBe(302);
+  });
+
+  it('counts every wrong password when several arrive at once', async () => {
+    await signedInAdmin();
+    const guessers = await Promise.all(
+      Array.from({ length: 5 }, async () => {
+        const browser = new Browser();
+        await browser.get(adminPath('/login'));
+        return browser;
+      }),
+    );
+    const replies = await Promise.all(guessers.map((b, i) => b.submit(adminPath('/login'), { password: `wrong ${i}` })));
+    expect(replies.map((r) => r.status)).toEqual([401, 401, 401, 401, 401]);
+    expect(await systemValue('login_fail_count')).toBe('5');
+  });
+
+  it('keeps the longest lock when a burst of wrong passwords goes past the free attempts', async () => {
+    await signedInAdmin();
+    const guessers = await Promise.all(
+      Array.from({ length: 9 }, async () => {
+        const browser = new Browser();
+        await browser.get(adminPath('/login'));
+        return browser;
+      }),
+    );
+    const replies = await Promise.all(guessers.map((b, i) => b.submit(adminPath('/login'), { password: `wrong ${i}` })));
+    // A guess that reads the lock before it is set gets checked and counted;
+    // one that arrives after gets 429 without being checked. Either way, the
+    // lock must match the count, not whichever write landed last.
+    const counted = replies.filter((r) => r.status === 401).length;
+    expect(counted + replies.filter((r) => r.status === 429).length).toBe(9);
+    expect(await systemValue('login_fail_count')).toBe(String(counted));
+    expect(await systemValue('login_locked_until')).toBe(String(NOW + lockSecondsFor(counted)));
   });
 
   it('doubles the lock on the next wrong password after it expires', async () => {

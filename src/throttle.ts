@@ -53,11 +53,27 @@ export function lockRemaining(state: ThrottleState, now: number): number {
 }
 
 export async function recordFailure(db: D1Database): Promise<number> {
-  const state = await readThrottle(db);
-  const fails = state.fails + 1;
-  const lock = lockSecondsFor(fails);
-  await systemSet(db, FAILS_KEY, String(fails));
-  if (lock > 0) await systemSet(db, LOCKED_UNTIL_KEY, String(nowSeconds() + lock));
+  // Increment and lock in SQL, not read-then-write in the Worker. Wrong
+  // passwords posted in parallel all read the same count, so five at once used
+  // to count as one, and a later, shorter lock could overwrite a longer one.
+  const row = await db
+    .prepare(
+      `INSERT INTO system (key, value) VALUES (?, '1')
+       ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1
+       RETURNING value`,
+    )
+    .bind(FAILS_KEY)
+    .first<{ value: string | number }>();
+  const lock = lockSecondsFor(toInt(String(row?.value ?? '')));
+  if (lock > 0) {
+    await db
+      .prepare(
+        `INSERT INTO system (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = MAX(CAST(value AS INTEGER), CAST(excluded.value AS INTEGER))`,
+      )
+      .bind(LOCKED_UNTIL_KEY, String(nowSeconds() + lock))
+      .run();
+  }
   return lock;
 }
 
