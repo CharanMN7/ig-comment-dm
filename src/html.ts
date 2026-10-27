@@ -21,6 +21,7 @@ p { margin: 0.5rem 0; }
 .banner a { color: #411; font-weight: 650; }
 .ok { background: #e7f6ea; border: 1px solid #2a6; color: #143; padding: 0.7rem 0.85rem; margin: 0 0 1rem; }
 .err { color: #a11; }
+p.message { white-space: pre-wrap; }
 table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e4e4e0; }
 th, td { text-align: left; padding: 0.4rem 0.55rem; border-bottom: 1px solid #eee; vertical-align: top; font-size: 0.9rem; }
 th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; color: #555; background: #fafafa; }
@@ -37,6 +38,13 @@ label.choice { display: flex; gap: 0.6rem; align-items: flex-start; min-height: 
 label.choice input { flex: none; width: 1.2rem; height: 1.2rem; margin: 0.1rem 0 0; }
 label.choice .muted { display: block; }
 .rule-form input[type=text], .rule-form select, .rule-form button { min-height: 44px; }
+/* No client JS (the CSP has no script-src), so the rule form reacts to the
+   "every comment" box with :has(). A browser without :has() shows every field;
+   the server ignores keywords on such a rule, so nothing breaks. */
+.rule-form .when-all, .rule-form .needs-post { display: none; }
+.rule-form:has(#match_all:checked) .when-all { display: block; }
+.rule-form:has(#match_all:checked) .when-keywords { display: none; }
+.rule-form:has(#match_all:checked):has(#media_id option[value=""]:checked) .needs-post { display: block; }
 .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-top: 0.75rem; }
 button, .btn {
   background: #111; color: #fff; border: 0; padding: 0.42rem 0.8rem; font: inherit; cursor: pointer;

@@ -190,7 +190,7 @@ Your secrets live in Cloudflare, so updating never touches them.
 
 Open your admin URL (printed by `npm run setup` — bookmark it) and create a password on the first visit. Then **Accounts → Connect a new account**.
 
-You can connect several Instagram accounts to one deployment. Each one needs to be an [Instagram Tester](docs/setup.md#part-2--instagram-tester-invites) on your Meta app.
+You can connect several Instagram accounts to one deployment. Each one needs to be an [Instagram Tester](https://charanmn7.github.io/ig-comment-dm/docs/setup/#2-invite-each-instagram-account-as-a-tester) on your Meta app.
 
 ### Write a rule
 
@@ -201,11 +201,17 @@ You can connect several Instagram accounts to one deployment. Each one needs to 
 | **Name** | For you only. `Free guide`. |
 | **Keywords** | One per line. **At least 3 characters**, counted after emoji and punctuation are dropped — `AI` would fire on "again" and "email". |
 | **How to look for them** | **Whole words only** (the default): `guide` matches "Guide please!" but not "guides". **Anywhere in the comment**: also catches `#launch2026` and "guides", but `art` would match "start". |
-| **The DM** | Under 1,000 characters. Put everything they need here. |
-| **Public reply** | Optional. Shows under the comment, only once the DM has gone through. |
+| **Exclusions** | Optional, one per line. A comment containing any of them is skipped by this rule even when a keyword matches: `how much`, `already have it`, `not interested`. |
+| **The DM** | Under 1,000 characters. Put everything they need here. `{username}` puts in their Instagram name. |
+| **Public reply** | Optional. Shows under the comment, only once the DM has gone through. `{username}` works here too. |
 | **Which posts** | All posts and reels, or pick one from the dropdown. |
+| **Reply to every comment on this post** | For giveaways and waitlists. Everyone who comments on that one post gets the DM, no keyword needed, and the keyword fields disappear. It needs a specific post: on all posts it would message everyone who ever comments, so it is refused. |
 
-Matching ignores case, emoji, punctuation, and accents on Latin letters, on both the keyword and the comment. A whole-words rule needs the keyword to stand on its own; switch a rule to **Anywhere in the comment** for hashtag and brand campaigns. A rule scoped to a specific post beats a rule that applies to everything.
+Matching ignores case, emoji, punctuation, and accents on Latin letters, on both the keyword and the comment. A whole-words rule needs the keyword to stand on its own; switch a rule to **Anywhere in the comment** for hashtag and brand campaigns.
+
+When more than one rule could answer a comment, the first of these wins: a keyword rule for that post, then a keyword rule for all posts, then a rule that replies to every comment on that post. So a specific keyword on a giveaway reel still gets its own DM. Within each group the oldest rule wins.
+
+Exclusions are found the same way as the rule's keywords, and they belong to that rule alone. When a comment trips one, matching carries on to the next rule, so another rule without that exclusion can still reply. If no rule replies because of an exclusion, Home lists the comment as `Skipped: matched exclusion “how much”`, and the five-minute check leaves it alone from then on.
 
 > [!TIP]
 > **Put everything in that one message.** Instagram allows exactly one private reply per comment, ever. You do not get a follow-up unless they reply to you first.
@@ -233,7 +239,7 @@ The red banners only help if someone opens the panel. Point any uptime monitor a
 https://ig-comment-dm.YOURNAME.workers.dev/health
 ```
 
-It answers `200` while the database responds and both scheduled jobs are running, and `503` when either has stalled, so you hear about a dead nightly refresh before tokens start expiring. It needs no login and shows no usernames, ids or secrets: only account counts and the time each job last ran. [What a 503 means](docs/troubleshooting.md#health-answers-503).
+It answers `200` while the database responds and both scheduled jobs are running, and `503` when either has stalled, so you hear about a dead nightly refresh before tokens start expiring. It needs no login and shows no usernames, ids or secrets: only account counts and the time each job last ran. [What a 503 means](https://charanmn7.github.io/ig-comment-dm/docs/troubleshooting/#health-answers-503).
 
 ---
 
@@ -262,8 +268,11 @@ Instagram's rules, not ours. Each of these is enforced by Meta and cost someone 
 
 - [x] Comment → one official Instagram private reply, end to end
 - [x] Optional public reply under the comment
+- [x] `{username}` placeholder in the DM and public reply
 - [x] Keyword rules with case, emoji, and punctuation normalisation, matched on word boundaries
 - [x] Per-rule choice of whole-word or anywhere-in-the-comment matching, for hashtag campaigns
+- [x] Per-rule exclusions, so "how much is the guide?" does not burn the one private reply
+- [x] Reply-to-every-comment rules for giveaways and waitlists, limited to one post
 - [x] Post-scoped rules take priority over account-wide rules
 - [x] Reel and post picker, so nobody has to hunt for a Graph media id
 - [x] Self-comment guard — never DMs the account owner
@@ -321,14 +330,11 @@ Everything below is [an open issue](https://github.com/CharanMN7/ig-comment-dm/i
 | [#26](https://github.com/CharanMN7/ig-comment-dm/issues/26) | **Follow gate** | Deliver the link only after they follow |
 | [#27](https://github.com/CharanMN7/ig-comment-dm/issues/27) | **Follow-up DM after a delay** | A second touch inside the 24-hour window |
 | [#29](https://github.com/CharanMN7/ig-comment-dm/issues/29) | **Reply to DMs and story replies** | The same keyword rules, triggered by inbound messages |
-| [#30](https://github.com/CharanMN7/ig-comment-dm/issues/30) | **`{username}` and `{link}` placeholders** | Personalised copy without a rule per person |
 | [#31](https://github.com/CharanMN7/ig-comment-dm/issues/31) | **Public reply variations** | Rotate replies so a comment section does not read like a bot |
-| [#32](https://github.com/CharanMN7/ig-comment-dm/issues/32) | **Match any comment** | Fire on every comment on a post, no keyword needed |
 | [#33](https://github.com/CharanMN7/ig-comment-dm/issues/33) | **Bind a rule to the next reel you post** | Set the automation up before the content exists |
 | [#34](https://github.com/CharanMN7/ig-comment-dm/issues/34) | **Ad-comment to organic-post mapping** | Boosted posts report a different media id and silently miss |
 | [#35](https://github.com/CharanMN7/ig-comment-dm/issues/35) | **Per-account rate limiting** | Stay under Meta's 750 private replies per hour |
 | [#36](https://github.com/CharanMN7/ig-comment-dm/issues/36) | **Send every matching rule's public reply** | Today the second matching rule is silently dropped |
-| [#22](https://github.com/CharanMN7/ig-comment-dm/issues/22) | **Negative keywords** | Skip "not interested", "how much is the guide" |
 | [#37](https://github.com/CharanMN7/ig-comment-dm/issues/37) | **Bulk rule import from CSV** | Set up thirty posts without thirty forms |
 | [#38](https://github.com/CharanMN7/ig-comment-dm/issues/38) | **Rule templates** | Working starting points per niche |
 
@@ -383,9 +389,8 @@ Everything below is [an open issue](https://github.com/CharanMN7/ig-comment-dm/i
 </details>
 
 > [!TIP]
-> **New here?** These four are self-contained, need no Meta app to test, and have the approach written out in the issue:
+> **New here?** These three are self-contained, need no Meta app to test, and have the approach written out in the issue:
 > [#19 non-Latin keyword matching](https://github.com/CharanMN7/ig-comment-dm/issues/19) ·
-> [#30 `{username}` placeholders](https://github.com/CharanMN7/ig-comment-dm/issues/30) ·
 > [#50 dark mode](https://github.com/CharanMN7/ig-comment-dm/issues/50) ·
 > [#48 human-readable Meta errors](https://github.com/CharanMN7/ig-comment-dm/issues/48)
 

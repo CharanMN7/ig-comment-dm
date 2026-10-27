@@ -130,24 +130,91 @@ export function isMatchMode(value: string): value is MatchMode {
   return value === 'word' || value === 'contains';
 }
 
-export type RuleMatch = { rule: Rule; keyword: string };
+/** `keyword` is null when the rule replies to every comment on its post. */
+export type RuleMatch = { rule: Rule; keyword: string | null };
+
+/** A rule whose keyword matched, passed over because one of its exclusions matched too. */
+export type RuleExclusion = { rule: Rule; keyword: string | null; exclusion: string };
+
+export type MatchVerdict = { match: RuleMatch | null; excluded: RuleExclusion[] };
+
+function firstMatching(normalizedComment: string, keywords: string[], mode: MatchMode): string | null {
+  for (const keyword of keywords) {
+    if (keywordMatches(normalizedComment, keyword, mode)) return keyword;
+  }
+  return null;
+}
 
 /**
- * Media-scoped rules (matching this post) win over rules with no media_id.
- * First match inside that order wins; stop looking.
+ * The one matcher. The webhook, the 5-minute sweep and the Test page all go
+ * through it, so a comment can never be skipped by one and answered by another.
+ *
+ * Order: keyword rules scoped to this post, then keyword rules for all posts,
+ * then rules that reply to every comment on this post. The first to match
+ * fires. A match-all rule comes last so a specific keyword on the same post,
+ * or an account-wide keyword rule, still gets its own message out. A match-all
+ * rule with no post is never considered: account-wide it would DM every
+ * commenter on every post, and the admin form refuses to save one.
+ *
+ * Exclusions belong to their rule, not to the account, and apply to match-all
+ * rules too. A rule whose keyword matches but whose exclusion also matches is
+ * passed over, and matching carries on in the same order, so a later rule
+ * without that exclusion can still fire. That keeps a rule's effect readable
+ * from its own form: adding "how much" to the guide rule cannot silently mute
+ * the launch rule. Every rule passed over is returned, so a skip can say which
+ * exclusion caused it.
  */
 export function matchComment(
   rules: Rule[],
   commentText: string,
   mediaId: string | undefined,
-): RuleMatch | null {
+): MatchVerdict {
   const normalized = normalizeCommentText(commentText);
-  const scoped = rules.filter((r) => r.media_id != null && r.media_id !== '' && r.media_id === mediaId);
-  const global = rules.filter((r) => r.media_id == null || r.media_id === '');
-  for (const rule of [...scoped, ...global]) {
-    for (const keyword of parseKeywords(rule.keywords)) {
-      if (keywordMatches(normalized, keyword, rule.match_mode)) return { rule, keyword };
+  const hasPost = (r: Rule) => r.media_id != null && r.media_id !== '';
+  const scoped = rules.filter((r) => hasPost(r) && r.media_id === mediaId);
+  const global = rules.filter((r) => !hasPost(r));
+  const ordered = [
+    ...scoped.filter((r) => r.match_all !== 1),
+    ...global.filter((r) => r.match_all !== 1),
+    ...scoped.filter((r) => r.match_all === 1),
+  ];
+  const excluded: RuleExclusion[] = [];
+  for (const rule of ordered) {
+    const matchAll = rule.match_all === 1;
+    const keyword = matchAll ? null : firstMatching(normalized, parseKeywords(rule.keywords), rule.match_mode);
+    if (!matchAll && keyword === null) continue;
+    const exclusion = firstMatching(normalized, parseKeywords(rule.exclude_keywords), rule.match_mode);
+    if (exclusion !== null) {
+      excluded.push({ rule, keyword, exclusion });
+      continue;
     }
+    return { match: { rule, keyword }, excluded };
+  }
+  return { match: null, excluded };
+}
+
+/**
+ * Recorded on the skipped `sent` row. A skip is final, like any other outcome,
+ * so the sweep never reconsiders it, and Home shows the operator why a comment
+ * that mentioned a keyword got nothing.
+ */
+export function exclusionSkipReason(excluded: RuleExclusion): string {
+  return `Skipped: matched exclusion “${excluded.exclusion}”`;
+}
+
+/**
+ * An exclusion found inside a keyword's own text excludes every comment that
+ * keyword could ever match, so the keyword is dead on arrival. Caught at save
+ * time because at match time it looks exactly like a working exclusion.
+ */
+export function keywordSwallowedBy(
+  keywords: string[],
+  exclusions: string[],
+  mode: MatchMode,
+): { keyword: string; exclusion: string } | null {
+  for (const keyword of keywords) {
+    const exclusion = firstMatching(normalizeCommentText(keyword), exclusions, mode);
+    if (exclusion !== null) return { keyword, exclusion };
   }
   return null;
 }
@@ -156,6 +223,9 @@ export const KEYWORD_MIN_LENGTH = 3;
 
 export const KEYWORD_TOO_SHORT_MESSAGE =
   "Keywords under 3 characters match inside other words — 'AI' would fire on 'again' and 'email'.";
+
+export const EXCLUSION_TOO_SHORT_MESSAGE =
+  'Exclusions need at least 3 characters too, the same as keywords. Try a short phrase instead, like “no thanks”.';
 
 const HAS_LETTER_OR_NUMBER = /[\p{L}\p{N}]/u;
 
@@ -169,11 +239,11 @@ const HAS_LETTER_OR_NUMBER = /[\p{L}\p{N}]/u;
  * survive normalising without being a letter, hence the explicit test rather
  * than only checking for an empty string.
  */
-export function keywordProblem(keyword: string): string | null {
+export function keywordProblem(keyword: string, tooShortMessage = KEYWORD_TOO_SHORT_MESSAGE): string | null {
   const normalized = normalizeCommentText(keyword);
   if (!HAS_LETTER_OR_NUMBER.test(normalized)) {
     return `“${keyword}” has no letters or numbers. Emoji and punctuation are ignored when matching, so it could never match. Use a word instead.`;
   }
-  if ([...normalized].length < KEYWORD_MIN_LENGTH) return KEYWORD_TOO_SHORT_MESSAGE;
+  if ([...normalized].length < KEYWORD_MIN_LENGTH) return tooShortMessage;
   return null;
 }

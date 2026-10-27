@@ -11,6 +11,9 @@ export const CRON_STALE_SECONDS = 72 * 60 * 60;
 export const POLL_STALE_SECONDS = 60 * 60;
 export const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 export const DM_TEXT_MAX = 1000;
+// Meta documents no length limit for replies posted through the API. The DM's
+// limit is far above any real public reply and keeps the two fields alike.
+export const PUBLIC_REPLY_MAX = 1000;
 
 export function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);

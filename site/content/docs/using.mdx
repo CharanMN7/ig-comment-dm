@@ -1,0 +1,129 @@
+---
+description: Connect accounts, write keyword rules, test a rule without messaging anyone, and read the logs.
+---
+
+Everything here happens in your admin panel, at the admin URL `npm run setup` printed (`https://ig-comment-dm.YOURNAME.workers.dev/a/ADMIN_URL_SECRET`). The first visit asks you to create a password.
+
+## Connect an account
+
+**Accounts → Connect a new account.** Instagram asks you to allow access; allow it. The Connect page also shows the exact OAuth redirect URIs and the Instagram App ID the Worker is sending, which helps when Meta rejects the login.
+
+You can connect several Instagram accounts to one deployment. Each one has to be an [Instagram Tester](/setup#2-invite-each-instagram-account-as-a-tester) on your Meta app, with its tester invite accepted and its **Webhook subscription** turned on in Meta.
+
+Connect uses whichever Instagram account that browser is logged into. If one profile connects and another doesn't, that's usually why: open a private window, log in to your admin page there, and click Connect from that window.
+
+Connecting needs you to be logged in to the admin panel; the Connect page refuses anyone who isn't. **Pause** on the Accounts page stops DMs for an account without disconnecting it, and the nightly job keeps its token fresh while it's paused.
+
+## Write a rule
+
+**Rules → New rule.**
+
+| Field | What to put |
+|---|---|
+| **Name** | For you only, e.g. `Free guide`. |
+| **Keywords** | One per line, **at least 3 characters** each, counted after emoji and punctuation are dropped. `AI` would fire on "again" and "email", so the form rejects it. |
+| **How to look for them** | **Whole words only** (the default): `guide` matches "Guide please!" but not "guides". **Anywhere in the comment**: also catches `#launch2026` and "guides", but `art` would match "start". |
+| **Exclusions** | Optional, one per line. A comment containing any of them is skipped by this rule even when a keyword matches: `how much`, `already have it`, `not interested`. |
+| **The DM** | Up to 1,000 characters. Put everything they need in this one message. `{username}` puts in their Instagram name. |
+| **Public reply** | Optional. Posted under their comment, and only once the DM has gone through. `{username}` works here too. |
+| **Which posts** | **All posts and reels** (which includes reels), or one post picked from the dropdown. |
+| **Reply to every comment on this post** | For giveaways and waitlists. Everyone who comments on that one post gets the DM, no keyword needed, and the keyword fields disappear. It needs a specific post: on all posts it would message everyone who ever comments, so it's refused. |
+
+<Tip>
+**Put everything in that one message.** Instagram allows exactly one private reply per comment, ever. You don't get a follow-up unless they reply to you first.
+</Tip>
+
+The post dropdown lists your recent posts and reels after you connect. A post's ID is a long number, not the share link `instagram.com/reel/…`.
+
+<Frame caption="Rules → New rule.">
+  <div className="shot" data-shot="admin-12-new-rule.png">Screenshot coming</div>
+</Frame>
+
+### How keywords match
+
+- Matching ignores case, emoji and punctuation, on both the keyword and the comment: `guide` matches `Guide!` and `guide 🙏`.
+- Accents on Latin letters don't matter: `cafe` matches `café`, `preco` matches `PREÇO`, `dien` matches `điện` and `lodz` matches `łódź`. Marks in other scripts are part of the word, so type a non-Latin keyword with the same marks the comment uses.
+- With **Whole words only**, the keyword has to stand on its own: `guide` doesn't match `guides` or `#guide2026`. Switch the rule to **Anywhere in the comment** for hashtag and brand campaigns.
+- Keywords work in any script, including Cyrillic, Arabic, Chinese and Japanese. Chinese, Japanese, Thai and other scripts written without spaces have no word edges to check, so there a keyword also matches inside a longer word: `ガイド` matches `ガイドライン`.
+- The 3-character minimum counts characters in every script, so a two-character keyword like `指南` can't be saved. A keyword that's only emoji or punctuation (`🔥🔥🔥`) is refused too, because it could never match anything.
+
+Exclusions are found the same way as the rule's keywords, and they belong to that rule alone. When a comment trips one, matching carries on to the next rule, so another rule without that exclusion can still reply. If no rule replies because of an exclusion, Home lists the comment as `Skipped: matched exclusion “how much”`, and the five-minute check leaves it alone from then on.
+
+When more than one rule could answer a comment, the first of these wins: a keyword rule for that post, then a keyword rule for all posts, then a rule that replies to every comment on that post. So a specific keyword on a giveaway reel still gets its own DM. Within each group the oldest rule wins, and one comment gets one DM. **Pause** on the Rules page turns a rule off without deleting it.
+
+### Replying to every comment
+
+A rule with **Reply to every comment on this post** ticked has no keywords: every comment on its post matches. Each comment gets its own DM, so someone who comments three times gets it three times. Exclusions still apply, matched as whole words.
+
+On an older post, the five-minute check also reads the post's 25 newest comments from the last 72 hours and answers any it hasn't handled, up to 10 per check. Comments it already skipped stay skipped. On the Test page, pick the post under "Which posts" to see such a rule match.
+
+## Test a rule
+
+**Test →** paste a sample comment. It shows which rule would fire, using the same rule choice as a real comment, and the comment as it was matched, with case, emoji and punctuation stripped out. Paused rules aren't tested. Nothing is sent to anyone.
+
+<Frame caption="Test: a sample comment and the rule it would fire.">
+  <div className="shot" data-shot="admin-13-test.png">Screenshot coming</div>
+</Frame>
+
+Then try it for real: comment on your post from a **different** Instagram account; a friend's phone works. Your own comments on your own posts are ignored on purpose, and the friend doesn't need to be a tester. The DM lands in their inbox, or in **Message requests** if they don't follow you.
+
+While you test, turn off Instagram's Hidden Words filter on the creator account. Comments it hides never reach the Worker.
+
+## Read the Home page
+
+| Panel | What it tells you |
+|---|---|
+| **Totals** | People reached, DMs sent, skipped and failed, for today, the last 7 and 30 days, and all time. Days start at midnight UTC, and the 7- and 30-day totals include today. People reached counts each person once, and only if a DM actually went out. With more than one account, each also gets its own. |
+| **Did Instagram reach us?** | Whether Meta is POSTing to your webhook at all. Empty means the problem is on Meta's side, usually an app still in Development. `Wrong secret` means `FACEBOOK_APP_SECRET` is missing or wrong. `Not signed` rows are scanners, not Meta, and are safe to ignore. |
+| **Last 20 sends** | Every DM, skip and failure, with the reason and the exact error from Meta. |
+| **Red banners** | An account needs reconnecting, the nightly job has stalled, or a secret is misconfigured. |
+
+<Frame caption="Home: Did Instagram reach us? and Last 20 sends.">
+  <div className="shot" data-shot="admin-14-home.png">Screenshot coming</div>
+</Frame>
+
+**Check connections now** on Home runs the nightly job on demand: it refreshes tokens and re-registers the webhook subscription. It's harmless to run as often as you like.
+
+Tokens last 60 days and the nightly job refreshes them. If an account shows **Reconnect**, click it: it takes about 20 seconds and keeps your rules and history.
+
+## Get told when it stops working
+
+The red banners only help if someone opens the panel. Point any uptime monitor at:
+
+```
+https://ig-comment-dm.YOURNAME.workers.dev/health
+```
+
+It answers `200` while the database responds and both scheduled jobs are running, and `503` when either has stalled, so you hear about a dead nightly refresh before tokens start expiring. It needs no login and shows no usernames, IDs or secrets: only account counts and the time each job last ran. [What a 503 means](/troubleshooting#health-answers-503).
+
+## Logs
+
+**Live Worker logs.** Leave this running, reproduce the problem, and watch:
+
+```bash
+npx wrangler tail
+```
+
+Nothing secret is ever logged (account IDs appear, tokens and keys never do), so this output is safe to paste into an issue.
+
+**What Instagram actually sent:**
+
+```bash
+npx wrangler d1 execute ig-comment-dm --remote --command \
+  "SELECT received_at, status, object, error FROM webhook_events ORDER BY received_at DESC LIMIT 20;"
+```
+
+**Why a specific comment was skipped:**
+
+```bash
+npx wrangler d1 execute ig-comment-dm --remote --command \
+  "SELECT comment_id, dm_status, reply_status, error, sent_at FROM sent ORDER BY sent_at DESC LIMIT 20;"
+```
+
+**A health check of the whole deployment:**
+
+```bash
+npm run doctor
+```
+
+It checks your secrets, database tables, connected accounts, active rules, rejected webhooks and the scheduled jobs, and names the fix for anything it finds.

@@ -1,0 +1,77 @@
+---
+description: Pull the latest code into your copy and redeploy. Your secrets and data stay in Cloudflare and aren't touched.
+---
+
+{/* TODO: an `npm run update` command is coming in a separate PR. When it lands, lead this page with it and keep the manual steps below as the fallback. */}
+
+<Note>
+**`npm run update` is on its way.** It will do the steps on this page in one command. Until it lands, update by hand as below.
+</Note>
+
+Meta renames dashboard screens, retires OAuth hosts and changes how it signs webhooks often enough that you'll want fixes from upstream. Nothing in the code differs between deployments: your per-copy values are Cloudflare secrets and rows in your D1 database, and neither lives in the repository. Updating is pulling code and deploying it.
+
+## If you cloned this repository
+
+This is the setup from the [self-setup guide](/setup#3-deploy). Your `origin` is `CharanMN7/ig-comment-dm`.
+
+```bash
+cd ig-comment-dm
+git pull
+npm install
+npm run deploy
+```
+
+`npm run deploy` applies any new database migrations, then deploys. If Wrangler lists migrations and asks to continue, say yes. Use it rather than `npx wrangler deploy`, which would put new code live without the tables and columns it needs.
+
+## If you forked it
+
+Fork when you want to keep changes of your own. Sync with upstream, then deploy from your fork.
+
+On GitHub, open your fork and click **Sync fork → Update branch**. Then:
+
+```bash
+cd ig-comment-dm
+git pull
+npm install
+npm run deploy
+```
+
+Or do the sync from the command line:
+
+```bash
+git remote add upstream https://github.com/CharanMN7/ig-comment-dm.git   # once
+git fetch upstream
+git merge upstream/master
+git push                                                                  # back to your fork
+npm install
+npm run deploy
+```
+
+If you've changed files that upstream also changed, `git merge` stops and asks you to resolve the conflicts first.
+
+## If git refuses to pull
+
+On your first deploy, Wrangler writes your D1 `database_id` into your local `wrangler.toml`. Keep that change, and don't commit it. If an update also touches `wrangler.toml`, `git pull` stops; set your copy aside, pull, and put it back:
+
+```bash
+git stash
+git pull
+git stash pop
+```
+
+## Database migrations
+
+When an update changes the database, it adds a numbered file to `migrations/`. `npm run deploy` applies the new ones before the new code goes live. Wrangler records each file it applies in a `d1_migrations` table, so each migration runs once per database:
+
+```bash
+npm run db:migrate:list   # what's pending
+npm run db:migrate        # apply it without deploying
+```
+
+If your copy predates migration tracking, the first tracked run applies `001` and `002` again. That's harmless: both only create tables and indexes if they don't exist, so the replay changes nothing and just records them.
+
+If you deployed with `npx wrangler deploy` and the admin panel now reports "no such column", see [Troubleshooting](/troubleshooting#errors-mention-no-such-column-after-an-update).
+
+## After updating
+
+Run `npm run doctor` to check the deployment, then open your admin panel's Home page. If it shows a table of secrets needing attention, each row names the problem and the command that fixes it.

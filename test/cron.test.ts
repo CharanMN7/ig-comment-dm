@@ -24,8 +24,9 @@ function igTime(unix: number): string {
   return new Date(unix * 1000).toISOString().replace(/\.\d{3}Z$/, '+0000');
 }
 
-function comment(id: string, text: string, opts: { from?: string; at?: number } = {}) {
-  return { id, text, timestamp: igTime(opts.at ?? NOW - 120), from: { id: opts.from ?? '9100000000000001', username: 'a_fan' } };
+function comment(id: string, text: string, opts: { from?: string; at?: number; username?: string | null } = {}) {
+  const from = { id: opts.from ?? '9100000000000001', ...(opts.username === null ? {} : { username: opts.username ?? 'a_fan' }) };
+  return { id, text, timestamp: igTime(opts.at ?? NOW - 120), from };
 }
 
 function commentsByMedia(byMedia: Record<string, unknown[] | { status: number }>) {
@@ -89,6 +90,61 @@ describe('the 5-minute comment poll', () => {
     expect((await sentRows()).map((r) => r.comment_id)).toEqual(['c-tag']);
   });
 
+  it('records an excluded comment as skipped, exactly as the webhook would, and never revisits it', async () => {
+    await seedAccount();
+    const ruleId = await seedRule({ keywords: ['guide'], excludeKeywords: ['how much'] });
+    meta.on('GET', '/me/media', { json: { data: [{ id: 'm1' }] } });
+    meta.on(
+      'GET',
+      '/:id/comments',
+      commentsByMedia({ m1: [comment('c-price', 'how much is the guide?'), comment('c-guide', 'guide please'), comment('c-other', 'lovely')] }),
+    );
+
+    await runScheduled(POLL);
+
+    expect(dmTargets()).toEqual(['c-guide']);
+    expect(await sentRows()).toEqual([
+      expect.objectContaining({ comment_id: 'c-guide', dm_status: 'ok', rule_id: ruleId }),
+      expect.objectContaining({ comment_id: 'c-price', dm_status: 'skipped', rule_id: ruleId, error: 'Skipped: matched exclusion “how much”' }),
+    ]);
+
+    meta.clearCalls();
+    await runScheduled(POLL);
+    expect(dmTargets()).toEqual([]);
+    expect(await sentRows()).toHaveLength(2);
+  });
+
+  it('lets another rule answer a comment one rule excludes, as the webhook does', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'], mediaId: 'm1', excludeKeywords: ['how much'], dmText: 'reel guide' });
+    const fallback = await seedRule({ keywords: ['guide'], dmText: 'price list' });
+    meta.on('GET', '/:id/comments', commentsByMedia({ m1: [comment('c-price', 'how much is the guide?')] }));
+    await runScheduled(POLL);
+    expect(meta.callsTo('POST', '/:id/messages').map((c) => c.body)).toEqual([
+      { recipient: { comment_id: 'c-price' }, message: { text: 'price list' } },
+    ]);
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'ok', rule_id: fallback })]);
+  });
+
+  it('answers recent comments on a match-all post, inside the lookback and the per-sweep cap', async () => {
+    await seedAccount();
+    await seedRule({ keywords: [], matchAll: true, mediaId: 'giveaway-reel' });
+    meta.on(
+      'GET',
+      '/:id/comments',
+      commentsByMedia({
+        'giveaway-reel': [
+          ...Array.from({ length: 11 }, (_, i) => comment(`c${String(i).padStart(2, '0')}`, `entry ${i}`)),
+          comment('c-self', 'thanks everyone', { from: IG_USER }),
+          comment('c-old', 'me too', { at: NOW - 73 * 60 * 60 }),
+        ],
+      }),
+    );
+    await runScheduled(POLL);
+    expect(dmTargets()).toEqual(Array.from({ length: 10 }, (_, i) => `c${String(i).padStart(2, '0')}`));
+    expect(meta.callsTo('GET', '/me/media')).toEqual([]);
+  });
+
   it('does not DM a comment the webhook already handled', async () => {
     await seedAccount();
     await seedRule();
@@ -97,6 +153,28 @@ describe('the 5-minute comment poll', () => {
     await runScheduled(POLL);
     await runScheduled(POLL);
     expect(dmTargets()).toEqual(['c1']);
+  });
+
+  it('puts the username from the comment listing into the DM and public reply', async () => {
+    await seedAccount();
+    await seedRule({ dmText: 'Hi {username}, here you go', publicReply: 'Sent, {username}!' });
+    meta.on('GET', '/me/media', { json: { data: [{ id: 'm1' }] } });
+    meta.on(
+      'GET',
+      '/:id/comments',
+      commentsByMedia({ m1: [comment('c-named', 'guide', { username: 'polled_fan' }), comment('c-anon', 'guide', { username: null })] }),
+    );
+
+    await runScheduled(POLL);
+
+    expect(meta.callsTo('POST', '/:id/messages').map((c) => c.body)).toEqual([
+      { recipient: { comment_id: 'c-named' }, message: { text: 'Hi polled_fan, here you go' } },
+      { recipient: { comment_id: 'c-anon' }, message: { text: 'Hi, here you go' } },
+    ]);
+    expect(meta.callsTo('POST', '/:id/replies').map((c) => [c.path, c.body])).toEqual([
+      ['/c-named/replies', { message: 'Sent, polled_fan!' }],
+      ['/c-anon/replies', { message: 'Sent!' }],
+    ]);
   });
 
   it('skips accounts with no active rules without calling Instagram', async () => {

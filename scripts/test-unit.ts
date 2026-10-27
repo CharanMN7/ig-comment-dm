@@ -15,22 +15,35 @@ import { STALE_PENDING_SECONDS } from '../src/cron.ts';
 import { isSelfComment } from '../src/guard.ts';
 import { parseWebhookPayload } from '../src/process.ts';
 import {
+  EXCLUSION_TOO_SHORT_MESSAGE,
   KEYWORD_CACHE_MAX,
   KEYWORD_TOO_SHORT_MESSAGE,
   compileKeyword,
   escapeRegex,
+  exclusionSkipReason,
   isMatchMode,
   keywordMatches,
   keywordProblem,
+  keywordSwallowedBy,
   matchComment,
   normalizeCommentText,
 } from '../src/match.ts';
+import {
+  USERNAME_GROWTH,
+  cleanUsername,
+  countUsernameTokens,
+  fillPlaceholders,
+  worstCaseLength,
+} from '../src/placeholders.ts';
+import { MATCH_ALL_NEEDS_POST_MESSAGE, readRuleFields } from '../src/routes/admin.ts';
 import type { Rule } from '../src/types.ts';
 
 function rule(partial: Partial<Rule> & Pick<Rule, 'id' | 'keywords' | 'label'>): Rule {
   return {
     ig_user_id: 'acct',
     match_mode: 'word',
+    exclude_keywords: '[]',
+    match_all: 0,
     media_id: null,
     dm_text: 'hello',
     public_reply_text: null,
@@ -349,6 +362,11 @@ describe('keywordProblem', () => {
     }
   });
 
+  it('can name the field in its too-short message', () => {
+    assert.equal(keywordProblem('no', EXCLUSION_TOO_SHORT_MESSAGE), EXCLUSION_TOO_SHORT_MESSAGE);
+    assert.equal(keywordProblem('no thanks', EXCLUSION_TOO_SHORT_MESSAGE), null);
+  });
+
   it('counts digits as characters', () => {
     assert.equal(keywordProblem('2026'), null);
     assert.equal(keywordProblem('#42'), KEYWORD_TOO_SHORT_MESSAGE);
@@ -366,38 +384,326 @@ describe('matchComment', () => {
   });
 
   it('prefers a media-scoped rule over a global rule', () => {
-    const hit = matchComment([global, scoped], 'guide please', 'MEDIA1');
+    const hit = matchComment([global, scoped], 'guide please', 'MEDIA1').match;
     assert.equal(hit?.rule.id, 2);
     assert.equal(hit?.rule.dm_text, 'scoped-dm');
   });
 
   it('falls back to a global rule on other posts', () => {
-    const hit = matchComment([global, scoped], 'guide please', 'OTHER');
+    const hit = matchComment([global, scoped], 'guide please', 'OTHER').match;
     assert.equal(hit?.rule.id, 1);
   });
 
   it('returns the first matching rule and stops', () => {
     const a = rule({ id: 10, label: 'a', keywords: JSON.stringify(['hello']) });
     const b = rule({ id: 11, label: 'b', keywords: JSON.stringify(['hello']) });
-    const hit = matchComment([a, b], 'hello there', undefined);
+    const hit = matchComment([a, b], 'hello there', undefined).match;
     assert.equal(hit?.rule.id, 10);
   });
 
   it('returns null when nothing matches', () => {
-    assert.equal(matchComment([global], 'nice photo', undefined), null);
+    assert.deepEqual(matchComment([global], 'nice photo', undefined), { match: null, excluded: [] });
   });
 
   it('names the keyword that matched, as the operator typed it', () => {
     const r = rule({ id: 3, label: 'launch', keywords: JSON.stringify(['Guide', 'LAUNCH']), match_mode: 'contains' });
-    assert.deepEqual(matchComment([r], 'so ready for #launch2026', undefined), { rule: r, keyword: 'LAUNCH' });
+    assert.deepEqual(matchComment([r], 'so ready for #launch2026', undefined), {
+      match: { rule: r, keyword: 'LAUNCH' },
+      excluded: [],
+    });
   });
 
   it('uses each rule\'s own match mode', () => {
     const word = rule({ id: 4, label: 'word', keywords: JSON.stringify(['launch']) });
     const contains = rule({ id: 5, label: 'contains', keywords: JSON.stringify(['launch']), match_mode: 'contains' });
-    assert.equal(matchComment([word, contains], '#launch2026', undefined)?.rule.id, 5);
-    assert.equal(matchComment([word, contains], 'launch day', undefined)?.rule.id, 4);
-    assert.equal(matchComment([word], '#launch2026', undefined), null);
+    assert.equal(matchComment([word, contains], '#launch2026', undefined).match?.rule.id, 5);
+    assert.equal(matchComment([word, contains], 'launch day', undefined).match?.rule.id, 4);
+    assert.equal(matchComment([word], '#launch2026', undefined).match, null);
+  });
+});
+
+describe('exclusions', () => {
+  const guide = rule({
+    id: 20,
+    label: 'guide',
+    keywords: JSON.stringify(['guide']),
+    exclude_keywords: JSON.stringify(['how much', 'already have']),
+  });
+
+  it('stops a rule whose keyword matched, and says which exclusion did it', () => {
+    assert.deepEqual(matchComment([guide], 'How much is the GUIDE??', undefined), {
+      match: null,
+      excluded: [{ rule: guide, keyword: 'guide', exclusion: 'how much' }],
+    });
+  });
+
+  it('leaves the rule alone when no exclusion matches', () => {
+    assert.equal(matchComment([guide], 'guide please', undefined).match?.rule.id, 20);
+  });
+
+  it('only counts a rule as excluded when its keyword matched', () => {
+    assert.deepEqual(matchComment([guide], 'how much for a shoutout', undefined), { match: null, excluded: [] });
+  });
+
+  it('uses the same normalisation as keywords', () => {
+    assert.equal(matchComment([guide], 'I ALREADY-HAVE the guide 🙏', undefined).match, null);
+    const accented = rule({ id: 21, label: 'preco', keywords: JSON.stringify(['guia']), exclude_keywords: JSON.stringify(['preco']) });
+    assert.equal(matchComment([accented], 'qual o PREÇO do guia?', undefined).match, null);
+  });
+
+  it("uses the rule's own match mode", () => {
+    const word = rule({ id: 22, label: 'word', keywords: JSON.stringify(['guide']), exclude_keywords: JSON.stringify(['price']) });
+    const contains = { ...word, id: 23, match_mode: 'contains' as const };
+    // "prices" is not the whole word "price", so only the contains rule is stopped.
+    assert.equal(matchComment([word], 'guide prices?', undefined).match?.rule.id, 22);
+    assert.deepEqual(matchComment([contains], 'guide prices?', undefined).excluded.map((e) => e.exclusion), ['price']);
+  });
+
+  it('works in non-Latin scripts', () => {
+    const cyrillic = rule({ id: 24, label: 'гид', keywords: JSON.stringify(['гид']), exclude_keywords: JSON.stringify(['сколько']) });
+    assert.equal(matchComment([cyrillic], 'Сколько стоит гид?', undefined).match, null);
+    assert.equal(matchComment([cyrillic], 'нужен гид', undefined).match?.rule.id, 24);
+  });
+
+  it('is per rule: a later rule without that exclusion still fires', () => {
+    const scoped = { ...guide, id: 25, label: 'scoped guide', media_id: 'MEDIA1' };
+    const fallback = rule({ id: 26, label: 'any guide', keywords: JSON.stringify(['guide']) });
+    const verdict = matchComment([fallback, scoped], 'how much is the guide', 'MEDIA1');
+    assert.equal(verdict.match?.rule.id, 26);
+    assert.deepEqual(verdict.excluded, [{ rule: scoped, keyword: 'guide', exclusion: 'how much' }]);
+  });
+
+  it('lists every rule passed over, in matching order, when none fires', () => {
+    const other = rule({ id: 27, label: 'other', keywords: JSON.stringify(['guide']), exclude_keywords: JSON.stringify(['how much']) });
+    const verdict = matchComment([guide, other], 'how much is the guide', undefined);
+    assert.equal(verdict.match, null);
+    assert.deepEqual(verdict.excluded.map((e) => e.rule.id), [20, 27]);
+  });
+
+  it('treats a rule saved before exclusions existed as having none', () => {
+    const old = rule({ id: 28, label: 'old', keywords: JSON.stringify(['guide']), exclude_keywords: '' });
+    assert.equal(matchComment([old], 'how much is the guide', undefined).match?.rule.id, 28);
+  });
+
+  it('writes the skip reason the operator sees on Home', () => {
+    assert.equal(
+      exclusionSkipReason({ rule: guide, keyword: 'guide', exclusion: 'how much' }),
+      'Skipped: matched exclusion “how much”',
+    );
+  });
+});
+
+describe('match-all rules', () => {
+  const giveaway = rule({ id: 30, label: 'giveaway', keywords: '[]', match_all: 1, media_id: 'REEL1' });
+
+  it('match every comment on their post, with no keyword', () => {
+    assert.deepEqual(matchComment([giveaway], 'love this 😍', 'REEL1'), { match: { rule: giveaway, keyword: null }, excluded: [] });
+    assert.equal(matchComment([giveaway], '🔥', 'REEL1').match?.rule.id, 30);
+    assert.equal(matchComment([giveaway], '', 'REEL1').match?.rule.id, 30);
+  });
+
+  it('ignore any keywords stored on the rule', () => {
+    const stale = { ...giveaway, keywords: JSON.stringify(['guide']) };
+    assert.equal(matchComment([stale], 'love this', 'REEL1').match?.rule.id, 30);
+  });
+
+  it('never fire on other posts, or when the post is unknown', () => {
+    assert.equal(matchComment([giveaway], 'love this', 'REEL2').match, null);
+    assert.equal(matchComment([giveaway], 'love this', undefined).match, null);
+  });
+
+  it('never fire without a post, even if one reached the database', () => {
+    const accountWide = { ...giveaway, media_id: null };
+    assert.deepEqual(matchComment([accountWide], 'love this', 'REEL1'), { match: null, excluded: [] });
+    assert.deepEqual(matchComment([{ ...giveaway, media_id: '' }], 'love this', 'REEL1'), { match: null, excluded: [] });
+  });
+
+  it('come after every keyword rule: post keyword, then all-posts keyword, then match-all', () => {
+    const postKeyword = rule({ id: 31, label: 'post keyword', keywords: JSON.stringify(['guide']), media_id: 'REEL1' });
+    const allPostsKeyword = rule({ id: 32, label: 'all posts keyword', keywords: JSON.stringify(['guide', 'price']) });
+    // Listed match-all first and oldest, to show precedence is not row order.
+    const rules = [giveaway, allPostsKeyword, postKeyword];
+    assert.equal(matchComment(rules, 'guide please', 'REEL1').match?.rule.id, 31);
+    assert.equal(matchComment(rules, 'price?', 'REEL1').match?.rule.id, 32);
+    assert.equal(matchComment(rules, 'love it', 'REEL1').match?.rule.id, 30);
+  });
+
+  it('honour their own exclusions, as whole words', () => {
+    const picky = { ...giveaway, exclude_keywords: JSON.stringify(['spam']) };
+    assert.deepEqual(matchComment([picky], 'this is SPAM', 'REEL1'), {
+      match: null,
+      excluded: [{ rule: picky, keyword: null, exclusion: 'spam' }],
+    });
+    assert.equal(matchComment([picky], 'no spammers here', 'REEL1').match?.rule.id, 30);
+  });
+
+  it("are not stopped by another rule's exclusion", () => {
+    const strict = rule({ id: 33, label: 'strict', keywords: JSON.stringify(['guide']), exclude_keywords: JSON.stringify(['how much']), media_id: 'REEL1' });
+    const verdict = matchComment([strict, giveaway], 'how much is the guide', 'REEL1');
+    assert.equal(verdict.match?.rule.id, 30);
+    assert.deepEqual(verdict.excluded.map((e) => e.rule.id), [33]);
+  });
+});
+
+describe('readRuleFields', () => {
+  const valid = {
+    ig_user_id: 'acct',
+    label: 'Giveaway',
+    keywords: '',
+    match_mode: 'word',
+    exclude_keywords: '',
+    media_id: 'REEL1',
+    dm_text: 'You are in!',
+    public_reply_text: '',
+  };
+
+  it('rejects a match-all rule with no post', () => {
+    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', media_id: '' }), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
+    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', media_id: '   ' }), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
+  });
+
+  it('accepts a match-all rule on one post without keywords, and keeps none', () => {
+    const read = readRuleFields({ ...valid, match_all: '1', keywords: 'AI\n🔥', match_mode: 'contains' });
+    assert.ok('row' in read);
+    assert.deepEqual(
+      { keywords: read.row.keywords, match_mode: read.row.match_mode, match_all: read.row.match_all, media_id: read.row.media_id },
+      { keywords: '[]', match_mode: 'word', match_all: 1, media_id: 'REEL1' },
+    );
+  });
+
+  it('still checks the exclusions of a match-all rule', () => {
+    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', exclude_keywords: 'no' }), { error: EXCLUSION_TOO_SHORT_MESSAGE });
+  });
+
+  it('needs keywords when the box is not ticked, and stores match_all 0', () => {
+    assert.deepEqual(readRuleFields(valid), { error: 'Add at least one keyword, one per line.' });
+    const read = readRuleFields({ ...valid, keywords: 'guide', media_id: '' });
+    assert.ok('row' in read);
+    assert.equal(read.row.match_all, 0);
+    assert.equal(read.row.media_id, null);
+  });
+});
+
+describe('keywordSwallowedBy', () => {
+  it('finds a keyword that one of its exclusions would always stop', () => {
+    assert.deepEqual(keywordSwallowedBy(['free guide', 'pdf'], ['guide'], 'word'), { keyword: 'free guide', exclusion: 'guide' });
+    assert.deepEqual(keywordSwallowedBy(['GUIDE!'], ['guide'], 'word'), { keyword: 'GUIDE!', exclusion: 'guide' });
+    assert.deepEqual(keywordSwallowedBy(['guidebook'], ['guide'], 'contains'), { keyword: 'guidebook', exclusion: 'guide' });
+  });
+
+  it('allows exclusions that only sometimes overlap', () => {
+    assert.equal(keywordSwallowedBy(['guide'], ['how much', 'guidebook'], 'word'), null);
+    assert.equal(keywordSwallowedBy(['guidebook'], ['guide'], 'word'), null);
+    assert.equal(keywordSwallowedBy(['guide'], [], 'word'), null);
+  });
+});
+
+describe('fillPlaceholders: with a username', () => {
+  it('puts the name in for every {username}', () => {
+    assert.equal(fillPlaceholders('Hey {username}! Enjoy, {username}.', 'sarah'), 'Hey sarah! Enjoy, sarah.');
+  });
+
+  it('matches the token in any capitalisation', () => {
+    assert.equal(fillPlaceholders('{Username} / {USERNAME} / {uSeRnAmE}', 'sarah'), 'sarah / sarah / sarah');
+  });
+
+  it('leaves unknown tokens, {link} and near-misses exactly as typed', () => {
+    const text = 'Get it at {link} {foo} { username } {user name} {username';
+    assert.equal(fillPlaceholders(text, 'sarah'), text);
+    assert.equal(fillPlaceholders(text, null), text);
+  });
+
+  it('keeps an @ the creator typed, so @{username} becomes a mention', () => {
+    assert.equal(fillPlaceholders('Thanks @{username}!', 'sarah.k_99'), 'Thanks @sarah.k_99!');
+  });
+
+  it('drops an @ Instagram put on the name, so it never doubles', () => {
+    assert.equal(fillPlaceholders('Hi {username}', '@sarah'), 'Hi sarah');
+  });
+
+  it('does not read $ patterns in the name as replacement syntax', () => {
+    assert.equal(cleanUsername('$&'), null);
+    assert.equal(fillPlaceholders('Hi {username}', 'a$b'), 'Hi');
+  });
+});
+
+describe('fillPlaceholders: with no usable username', () => {
+  for (const [why, value] of [
+    ['missing', undefined],
+    ['null', null],
+    ['empty', ''],
+    ['not a string', 12345 as unknown as string],
+    ['longer than Instagram allows', 'a'.repeat(31)],
+    ['outside the username alphabet', 'sarah <b>'],
+  ] as const) {
+    it(`removes the token cleanly when the name is ${why}`, () => {
+      const out = fillPlaceholders('Hey {username}, here is the guide', value);
+      assert.equal(out, 'Hey, here is the guide');
+      assert.doesNotMatch(out, /undefined|null|[{}]/);
+    });
+  }
+
+  it('accepts a name of exactly 30 characters', () => {
+    assert.equal(fillPlaceholders('Hi {username}', 'a'.repeat(30)), `Hi ${'a'.repeat(30)}`);
+  });
+
+  for (const [text, expected] of [
+    ['Hey {username}, here you go', 'Hey, here you go'],
+    ['Hey {username}! Here you go', 'Hey! Here you go'],
+    ['Hey {username}. Here you go', 'Hey. Here you go'],
+    ['Hey {username}', 'Hey'],
+    ['Hey {username} here you go', 'Hey here you go'],
+    ['Thanks, {username}!', 'Thanks!'],
+    ['Thanks, {username}', 'Thanks'],
+    ['Hi, {username}, here you go', 'Hi, here you go'],
+    ['Hi @{username} welcome', 'Hi welcome'],
+    ['Thanks @{username}!', 'Thanks!'],
+    ['{username}, here you go', 'here you go'],
+    ['{username} here you go', 'here you go'],
+    ['¡Hola {username}!', '¡Hola!'],
+    ['Merci {username} !', 'Merci !'],
+    ['Hey{username} you', 'Hey you'],
+    ['Hey {username}{username} you', 'Hey you'],
+  ] as const) {
+    it(`tidies only around the token: ${JSON.stringify(text)}`, () => {
+      assert.equal(fillPlaceholders(text, null), expected);
+    });
+  }
+
+  it('leaves every other space and line break the creator typed exactly as it was', () => {
+    const text = '  Hi  there,\n\n\tHey {username}, the  guide:\nhttps://example.com  \n\n\nBye ';
+    assert.equal(fillPlaceholders(text, null), '  Hi  there,\n\n\tHey, the  guide:\nhttps://example.com  \n\n\nBye ');
+  });
+
+  it('removes a line that held only the token, with its line break', () => {
+    assert.equal(fillPlaceholders('Hi\n{username}\nHere you go', null), 'Hi\nHere you go');
+    assert.equal(fillPlaceholders('{username}\nHere you go', null), 'Here you go');
+    assert.equal(fillPlaceholders('Here you go\n@{username}', null), 'Here you go');
+  });
+
+  it('removes a paragraph that held only the token without leaving a double gap', () => {
+    assert.equal(fillPlaceholders('Hi\n\n{username}\n\nHere you go', null), 'Hi\n\nHere you go');
+    assert.equal(fillPlaceholders('{username}\n\nHere you go', null), 'Here you go');
+    assert.equal(fillPlaceholders('Here you go\n\n{username}', null), 'Here you go');
+    assert.equal(fillPlaceholders('Hi\r\n\r\n{username}\r\n\r\nThere', null), 'Hi\r\n\r\nThere');
+  });
+
+  it('can leave nothing at all, which the form refuses to save', () => {
+    assert.equal(fillPlaceholders('{username}', null), '');
+  });
+});
+
+describe('placeholder length', () => {
+  it('counts every {username}, in any capitalisation', () => {
+    assert.equal(countUsernameTokens('{username} {Username} {link} {foo}'), 2);
+  });
+
+  it('assumes each {username} grows to a 30-character name', () => {
+    assert.equal(USERNAME_GROWTH, 20);
+    assert.equal(worstCaseLength('plain'), 5);
+    assert.equal(worstCaseLength('Hi {username} and @{USERNAME}'), 29 + 2 * 20);
+    const longest = fillPlaceholders('Hi {username} and @{USERNAME}', 'a'.repeat(30));
+    assert.equal(longest.length, worstCaseLength('Hi {username} and @{USERNAME}'));
   });
 });
 

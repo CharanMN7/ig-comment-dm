@@ -1,0 +1,327 @@
+---
+description: Deploy the Worker to your Cloudflare account, then set up the Meta developer app screen by screen. About 15 minutes of clicking, most of it in Meta's dashboard.
+---
+
+The Cloudflare half is one command:
+
+```bash
+npm run setup
+```
+
+It checks your Cloudflare login, deploys the Worker (which creates the D1 database), applies the database migrations, asks for the three values that come from Meta, generates the four secrets you don't have to think about, sets `PUBLIC_BASE_URL`, and deploys again. At the end it prints the exact strings you paste back into Meta: the OAuth redirect URIs, the webhook callback URL and verify token, the three legal-page URLs, and your admin URL.
+
+The Meta half is clicking through someone else's website, which no script can do for you. That's Parts 1, 2, 4 and 5 below. If you'd rather an agent did the clicking, see the [agent setup guide](/agent-setup).
+
+Already deployed and something's broken? Go to [Troubleshooting](/troubleshooting) instead.
+
+## Before you start
+
+| What | Why |
+|---|---|
+| An Instagram **professional** account (Creator or Business) | A personal account can't use the Instagram API. In the Instagram app: Settings → Account type and tools → Switch to professional account. |
+| A free [Cloudflare](https://dash.cloudflare.com/sign-up) account | The Worker runs on your account, at your cost. The free plan is enough. |
+| A free [Meta for Developers](https://developers.facebook.com/) account | Signed in with the Facebook login that can manage the Instagram account you're automating. |
+| [Node.js](https://nodejs.org/) 20 or newer | Runs the setup script, `wrangler` and the tests. |
+
+Keep a password manager or a private note open. `npm run setup` prints your admin URL and webhook verify token once, and you'll copy secrets out of Meta's dashboard. Don't post any of them anywhere public.
+
+## 1. Create the Meta app
+
+1. Open [developers.facebook.com/apps](https://developers.facebook.com/apps/).
+2. Click **Create app**.
+3. If it asks for a use case, pick **Other**, then continue. If it asks for an app type, pick **Business**.
+4. Give the app a name you'll recognise, for example `Comment to DM`, and click **Create app**.
+5. On the app dashboard, find **Add products** (or **Add use case**) and add **Instagram**.
+6. Open **Instagram → API setup with Instagram login**. The wording may be "Business login".
+
+<Frame caption="Create app: use case Other, app type Business.">
+  <div className="shot" data-shot="meta-01-create-app.png">Screenshot coming</div>
+</Frame>
+
+You'll publish the app in Part 5. Until then it's in Development mode, and Meta delivers only the dashboard's **Test** button, never real comments. Your own tester accounts can go Live without App Review. Don't submit for App Review unless strangers will connect their own Instagram accounts.
+
+### Copy three values
+
+Under **Instagram → API setup with Instagram login → Business login settings**:
+
+- Copy **Instagram App ID**. This is `META_APP_ID`.
+- Click **Show** next to **Instagram App Secret**. This is `META_APP_SECRET`.
+
+Then open **App settings → Basic** in the left sidebar:
+
+- Click **Show** next to **App secret**. This is `FACEBOOK_APP_SECRET`.
+
+These are not your Instagram password. They identify this app to Instagram.
+
+<Frame caption="Business login settings. The Instagram App ID is on this screen, not at the top of the dashboard.">
+  <div className="shot" data-shot="meta-02-business-login-settings.png">Screenshot coming</div>
+</Frame>
+
+<Warning>
+**The number at the top of the Meta dashboard is the Facebook App ID**, not the Instagram App ID. Put it in `META_APP_ID` and Connect fails with **Invalid redirect_uri**.
+</Warning>
+
+`META_APP_SECRET` and `FACEBOOK_APP_SECRET` are **two different secrets**. Meta often signs live comment notifications with the Facebook one. If only the Instagram secret is stored, every live comment is rejected as **Wrong secret** and nothing is sent.
+
+Don't paste the token from **Generate access tokens** into Cloudflare. Connecting through the admin panel stores a token for each account. That screen matters for one thing only: the per-account **Webhook subscription** toggle in Part 4.
+
+<Frame caption="App settings → Basic. The App secret here is FACEBOOK_APP_SECRET, a different value from the Instagram App Secret.">
+  <div className="shot" data-shot="meta-03-basic-settings.png">Screenshot coming</div>
+</Frame>
+
+### Where every secret comes from
+
+| Secret | Where it comes from |
+|---|---|
+| `META_APP_ID` | Instagram → API setup with Instagram login → **3. Set up Instagram business login** → **Business login settings** → **Instagram App ID**. Not the ID at the top of the dashboard. |
+| `META_APP_SECRET` | Same page → **Instagram App Secret** → Show. Not the generated token. |
+| `FACEBOOK_APP_SECRET` | **App settings → Basic → App secret** → Show. Different from the Instagram App Secret, and required for live comment notifications to be accepted. |
+| `WEBHOOK_VERIFY_TOKEN` | You make it: `openssl rand -hex 16`, or `npm run keys`. Type the **same** value into Meta's webhook **Verify token** box. |
+| `TOKEN_ENCRYPTION_KEY` | You make it: `openssl rand -base64 32`, or `npm run keys`. Never from Meta. Must decode to exactly 32 bytes. |
+| `SESSION_SIGNING_KEY` | You make it: another `openssl rand -base64 32`, or `npm run keys`. Never from Meta. Never reuse the key above. |
+| `ADMIN_URL_SECRET` | You make it: `openssl rand -hex 16`, or `npm run keys`. It goes in the admin URL. |
+| `PUBLIC_BASE_URL` | Your Worker URL with no trailing slash, e.g. `https://ig-comment-dm.YOURNAME.workers.dev`. |
+
+`npm run setup` generates the last five for you. If you set secrets by hand, `npm run keys` prints the four self-generated ones at the correct size in one go, so you can't paste a truncated `openssl` output by accident.
+
+## 2. Invite each Instagram account as a tester
+
+A Facebook **Admin** role on the app is **not enough**. Every Instagram username you'll connect must be an **Instagram Tester**, even if the account is yours and even if you've already connected a different one.
+
+For **each** account:
+
+1. In the Meta app: **App roles → Roles → Add people**.
+2. Choose **Instagram Tester**. Not Developer, not Tester.
+3. Type the account's Instagram **username**, select it, and click Add.
+4. On a phone or browser **logged into that same Instagram account**, open [instagram.com/accounts/manage_access](https://www.instagram.com/accounts/manage_access/) → **Tester invites** → **Accept**.
+
+<Frame caption="App roles → Roles → Add people → Instagram Tester.">
+  <div className="shot" data-shot="meta-04-add-instagram-tester.png">Screenshot coming</div>
+</Frame>
+
+<Frame caption="instagram.com/accounts/manage_access → Tester invites → Accept, logged in as the account you invited.">
+  <div className="shot" data-shot="ig-05-accept-tester-invite.png">Screenshot coming</div>
+</Frame>
+
+Skip step 4 and Connect fails with **Insufficient developer role**.
+
+When you click Connect, Instagram must be logged in as the account you just invited. A different account already logged in on that browser is the usual reason one profile works and another doesn't. If that happens, open a private window, log in to your admin page there, and click Connect from that window.
+
+If Meta refuses to add the username because it already has a role on the business that owns the app, that's a separate problem. [Open an issue](https://github.com/CharanMN7/ig-comment-dm/issues/new/choose) with the exact message.
+
+## 3. Deploy
+
+```bash
+git clone https://github.com/CharanMN7/ig-comment-dm.git
+cd ig-comment-dm
+npm install
+npx wrangler login
+npm run setup
+```
+
+`npm run setup` deploys once, which creates the D1 database, then applies the migrations that create the tables, asks for the three Meta values from Part 1, generates and stores the four self-issued secrets, sets `PUBLIC_BASE_URL` to your real Worker URL, and deploys again.
+
+It's safe to re-run. Deploys are idempotent, migrations the database has already recorded are skipped, and it leaves existing secrets alone unless you pass `--rotate` (`npm run setup -- --rotate`). If it stops partway, [Deploying by hand](#deploying-by-hand) below lists what it was going to run next.
+
+<Frame caption="The end of npm run setup: the values to paste into Meta, and your admin URL.">
+  <div className="shot" data-shot="cli-06-npm-run-setup.png">Screenshot coming</div>
+</Frame>
+
+Your admin panel is at:
+
+```
+https://ig-comment-dm.YOURNAME.workers.dev/a/ADMIN_URL_SECRET
+```
+
+with `ADMIN_URL_SECRET` replaced by the 32-character value. `npm run setup` prints the full link once. Bookmark it. Anyone who has it still needs your password, but don't share it.
+
+Open it. The first visit asks you to **create a password**. There's no "forgot password" email; if you forget it, see [Locked out of the admin page](/troubleshooting#locked-out-of-the-admin-page).
+
+Run `npm run doctor` at any point from here on to check that the deployment, secrets and database are healthy.
+
+## 4. Point Meta at your Worker
+
+Back in the Meta app dashboard.
+
+### Login return address
+
+Meta doesn't show a field called just "oauth". Do this:
+
+1. Left menu: **Instagram → API setup with Instagram login**. The wording may be "API setup with Instagram business login".
+2. Find **3. Set up Instagram business login** and click **Set up**. A popup asks for a **Redirect URL**.
+3. Paste:
+
+   ```
+   https://ig-comment-dm.YOURNAME.workers.dev/connect/callback
+   ```
+
+4. Save, then click **Business login settings**.
+5. Under **OAuth redirect URIs**, paste **both** lines. They're also shown on the admin **Accounts** page and on Connect.
+
+   ```
+   https://ig-comment-dm.YOURNAME.workers.dev/connect/callback
+   https://ig-comment-dm.YOURNAME.workers.dev/connect/callback/
+   ```
+
+<Frame caption="Business login settings → OAuth redirect URIs, with and without the trailing slash.">
+  <div className="shot" data-shot="meta-07-redirect-uris.png">Screenshot coming</div>
+</Frame>
+
+Both lines matter, one with the trailing slash and one without. Meta requires an exact match to a listed URI, and the dashboard often adds the trailing slash on its own, so a login that works from one entry point and not another is usually missing a line.
+
+If you only see **Facebook Login → Valid OAuth Redirect URIs**, you're on the wrong screen. Stay on the Instagram product. They're different settings pages even though they sound alike.
+
+Save. You'll click **Connect** from the admin panel in Part 6. If it says **Invalid redirect_uri**, the usual cause is the Facebook App ID in `META_APP_ID` instead of the **Instagram App ID** from Business login settings.
+
+### Webhook
+
+**Instagram → API setup with Instagram login → Configure webhooks**, sometimes a **Webhooks** item in the left menu.
+
+1. Click **Configure**. Callback URL:
+
+   ```
+   https://ig-comment-dm.YOURNAME.workers.dev/webhook
+   ```
+
+2. Verify token: paste your `WEBHOOK_VERIFY_TOKEN`.
+3. Click **Save**. Subscribe to **comments** and leave **Include values** on. You can turn the other fields off.
+
+<Frame caption="Configure webhooks: callback URL, verify token, and the comments field subscribed with Include values on.">
+  <div className="shot" data-shot="meta-08-webhook.png">Screenshot coming</div>
+</Frame>
+
+If verification fails, either the Worker isn't deployed or `WEBHOOK_VERIFY_TOKEN` doesn't match what you typed into Meta.
+
+### Turn on the webhook for each account
+
+The callback URL isn't enough on its own. On the same **API setup with Instagram login** page, find **Generate access tokens**. For **each** account you'll connect:
+
+1. If the username is missing, click **Add Instagram account**, log in as that account, and finish.
+2. On that row, set **Webhook subscription** to **On**. Leave it Off and Instagram never tells your Worker about comments.
+3. Don't click **Generate token** for this, and never paste that token into Cloudflare: Connect stores its own. If Meta won't let you flip the switch until you generate a token, generate it, flip the switch, and ignore the token it shows you.
+
+<Frame caption="Generate access tokens: Webhook subscription On for every account you connect.">
+  <div className="shot" data-shot="meta-09-webhook-subscription.png">Screenshot coming</div>
+</Frame>
+
+The person who **comments** doesn't need to be in this list. The account that **owns the post or reel** does.
+
+## 5. Publish the app
+
+Real comment notifications are only delivered once the app is **Live**. Development mode is the usual reason for "I set everything up and nothing happens."
+
+1. Your Worker already serves these three pages:
+
+   ```
+   https://ig-comment-dm.YOURNAME.workers.dev/privacy
+   https://ig-comment-dm.YOURNAME.workers.dev/terms
+   https://ig-comment-dm.YOURNAME.workers.dev/data-deletion
+   ```
+
+2. In the Meta app, open **Publish** in the left sidebar. Paste the three URLs into privacy policy, terms of service and data deletion.
+3. Click **Publish** so the app is Live.
+4. Keep your Instagram accounts as **Instagram Testers**, and keep **Webhook subscription** On.
+
+<Frame caption="Publish, with the three legal URLs from your Worker filled in.">
+  <div className="shot" data-shot="meta-10-publish.png">Screenshot coming</div>
+</Frame>
+
+You don't need App Review while only tester accounts connect. App Review is for other people's Instagram accounts.
+
+## 6. Connect and send your first DM
+
+1. Open your bookmarked admin URL and log in.
+2. Go to **Accounts → Connect a new account**. Instagram asks you to allow access. Allow it.
+3. Go to **Rules → New rule**, add a keyword such as `guide` and the message to send. [Using it](/using#write-a-rule) explains every field.
+4. Go to **Test**, paste a sample comment and check the right rule lights up. This sends nothing to anyone.
+
+<Frame caption="Admin → Accounts → Connect a new account.">
+  <div className="shot" data-shot="admin-11-connect.png">Screenshot coming</div>
+</Frame>
+
+Open **Home** once after connecting. In Meta, **Generate access tokens → Webhook subscription** must be **On** for each connected account.
+
+Now comment on your own post or reel from a **different** Instagram account; a friend's phone is fine. The friend doesn't need to be an Instagram Tester. Your own comments on your own posts are ignored on purpose. The DM lands in the other account's **inbox**, or in **Message requests** if they don't follow you.
+
+Finish Part 5 before expecting a comment to fire instantly. Until the app is Live, Meta only delivers the webhook **Test** button. The Worker also checks recent comments every 5 minutes, so a real comment can still get its DM while you wait.
+
+On **Home**, two lists tell you what happened:
+
+- **Did Instagram reach us?** A row here means Meta POSTed to your webhook. **Wrong secret** means `FACEBOOK_APP_SECRET` is missing. Empty, after a friend has commented, usually means the app is still in Development or Hidden Words hid the comment.
+- **Last 20 sends** is the log of every DM, skip and failure.
+
+To check the webhook on its own: in Meta, on the webhook's **comments** field (subscribed, with **Include values** on), click **Test**, then **Send to My Server**. Clicking Test alone only previews the sample and sends nothing. The test should show up under **Did Instagram reach us?** immediately.
+
+Turn off Instagram's **Hidden Words** and comment filters on the creator account while testing. Filtered comments never reach the Worker, even when everything else is right.
+
+If something here doesn't work, [Troubleshooting](/troubleshooting) goes through each symptom.
+
+## Deploying by hand
+
+This is what `npm run setup` runs, in order, for when it stops partway or you want to see each step.
+
+```bash
+cd ig-comment-dm
+npm install
+npx wrangler login
+```
+
+Wrangler creates the D1 database from the `database_name` in `wrangler.toml` on your first deploy. There's no `wrangler d1 create` step and no database ID to copy into a config file, so a fresh clone deploys with zero file edits.
+
+```bash
+npx wrangler deploy
+```
+
+Wrangler prints a URL like `https://ig-comment-dm.YOURNAME.workers.dev`. That's your Worker.
+
+Don't add a `[limits]` / `cpu_ms` block to `wrangler.toml`. That setting is for paid Workers only, and on the Free plan the deploy fails with an error that CPU limits aren't supported.
+
+Create the tables:
+
+```bash
+npm run db:migrate
+```
+
+That runs `wrangler d1 migrations apply DB --remote`. It applies the files in `migrations/` in order and records each one in a `d1_migrations` table, so a later run applies only the migrations added since; `npm run db:migrate:list` shows what's pending. The tables come after the first deploy only because the database doesn't exist before it. When you update to a newer version later, deploy with `npm run deploy`, which applies new migrations before the new code goes live.
+
+Generate the four secrets you issue yourself:
+
+```bash
+npm run keys
+```
+
+Or with `openssl`:
+
+```bash
+openssl rand -base64 32    # TOKEN_ENCRYPTION_KEY
+openssl rand -base64 32    # SESSION_SIGNING_KEY  (run it again; don't reuse the first)
+openssl rand -hex 16       # ADMIN_URL_SECRET     (32 characters)
+openssl rand -hex 16       # WEBHOOK_VERIFY_TOKEN
+```
+
+Put every secret into Cloudflare. Paste each value when prompted, then press Enter:
+
+```bash
+npx wrangler secret put META_APP_ID
+npx wrangler secret put META_APP_SECRET
+npx wrangler secret put FACEBOOK_APP_SECRET
+npx wrangler secret put WEBHOOK_VERIFY_TOKEN
+npx wrangler secret put TOKEN_ENCRYPTION_KEY
+npx wrangler secret put ADMIN_URL_SECRET
+npx wrangler secret put SESSION_SIGNING_KEY
+npx wrangler secret put PUBLIC_BASE_URL
+```
+
+You don't have the live URL for `PUBLIC_BASE_URL` until after the first deploy. Use a placeholder like `https://example.com`, deploy once, then set the real URL and deploy again. Connect no longer uses this secret for Instagram's return address (it uses the host you actually opened), but session cookies still read it.
+
+```bash
+npx wrangler secret put PUBLIC_BASE_URL
+# paste: https://ig-comment-dm.YOURNAME.workers.dev
+# (no trailing slash)
+
+npx wrangler deploy
+```
+
+Then carry on from [your admin panel](#3-deploy) in Part 3.
+
+Rotating a secret later is covered in [Security](/security#rotating-a-secret). Running a copy on your own machine is in [Contributing](/contributing#local-setup).

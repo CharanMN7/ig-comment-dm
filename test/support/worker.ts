@@ -79,6 +79,8 @@ export async function postWebhook(
 export type CommentOpts = {
   commentId?: string;
   fromId?: string;
+  /** `null` leaves the username off the payload, as Meta sometimes does. */
+  username?: string | null;
   text?: string;
   mediaId?: string;
   igUserId?: string;
@@ -89,7 +91,10 @@ export function commentValue(opts: CommentOpts = {}) {
   return {
     id: opts.commentId ?? '17900000000000001',
     text: opts.text ?? 'Guide please!',
-    from: { id: opts.fromId ?? '9100000000000001', username: 'a_fan' },
+    from: {
+      id: opts.fromId ?? '9100000000000001',
+      ...(opts.username === null ? {} : { username: opts.username ?? 'a_fan' }),
+    },
     media: { id: opts.mediaId ?? '18000000000000777', media_product_type: 'REELS' },
   };
 }

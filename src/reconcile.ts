@@ -74,7 +74,10 @@ export async function reconcileComments(env: Env): Promise<void> {
         const ts = commentUnix(comment.timestamp);
         if (ts != null && (ts < since || now - ts > COMMENT_MAX_AGE_SECONDS)) continue;
         if (isSelfComment(comment.from?.id, account.ig_user_id)) continue;
-        if (!matchComment(rules, comment.text, mediaId)) continue;
+        // An excluded comment goes through processComment too, so its skip is
+        // recorded like the webhook's would be and the next sweep leaves it alone.
+        const { match, excluded } = matchComment(rules, comment.text, mediaId);
+        if (!match && excluded.length === 0) continue;
         if ((await countSentByComment(env.DB, comment.id)) > 0) continue;
         try {
           await processComment(env, account.ig_user_id, ts, {

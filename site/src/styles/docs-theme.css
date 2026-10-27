@@ -1,0 +1,155 @@
+/*
+ * Docs theme for @inkform/astro: the framework's `--fw-*` tokens, set to the
+ * same palette as the landing page (src/styles/site.css). Instagram's own
+ * neutrals (#dbdbdb hairlines, #737373 secondary text, true black in dark
+ * mode) with one violet-blue accent from Instagram's brand palette. System
+ * fonts only, so the docs fetch no font files.
+ */
+
+:root {
+  --fw-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --fw-font-heading: var(--fw-font);
+  --fw-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --fw-bg: #ffffff;
+  --fw-bg-subtle: #fafafa;
+  --fw-fg: #1f1f1f;
+  --fw-muted: #6b6b6b;
+  --fw-border: #e4e4e4;
+  --fw-border-strong: #dbdbdb;
+  --fw-card: #ffffff;
+  --fw-card-hover: #fafafa;
+  --fw-code-bg: #f5f5f6;
+  --fw-kbd-bg: #efefef;
+
+  --fw-primary: #5851db;
+  --fw-primary-fg: #ffffff;
+  --fw-primary-subtle: #5851db14;
+  --fw-primary-cta-bg: #000000;
+
+  --fw-radius: 10px;
+  --fw-radius-sm: 6px;
+  --fw-shadow: none;
+  --fw-shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.12);
+  --fw-ring: 0 0 0 3px #5851db40;
+
+  --fw-content-w: 44rem;
+}
+
+html.dark {
+  --fw-bg: #000000;
+  --fw-bg-subtle: #0e0e0f;
+  --fw-fg: #f2f2f2;
+  --fw-muted: #a8a8a8;
+  --fw-border: #262626;
+  --fw-border-strong: #363636;
+  --fw-card: #0e0e0f;
+  --fw-card-hover: #161617;
+  --fw-code-bg: #121213;
+  --fw-kbd-bg: #262626;
+
+  --fw-primary: #a29dff;
+  --fw-primary-fg: #000000;
+  --fw-primary-subtle: #a29dff1f;
+  --fw-primary-cta-bg: #f2f2f2;
+
+  --fw-shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
+  --fw-ring: 0 0 0 3px #a29dff55;
+}
+
+/* Sentence-case labels, matching the rest of the type. */
+.fw-toc-title {
+  font-size: 0.8125rem;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.fw-sidebar-group-label {
+  font-size: 0.8125rem;
+  font-weight: 650;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--fw-fg);
+}
+
+.fw-page-title {
+  letter-spacing: -0.025em;
+}
+
+/* The agent prompt is prose in a code block: wrap it instead of making
+   readers scroll sideways to read an instruction. */
+.fw-prose pre:has(> code[data-language='text']) {
+  white-space: pre-wrap;
+}
+.fw-prose pre:has(> code[data-language='text']) code {
+  white-space: inherit;
+}
+
+/*
+ * Screenshot slots. @inkform/astro doesn't let a site register its own MDX
+ * components, so a slot is the kit's <Frame> around a plain element:
+ *
+ *   <Frame caption="…">
+ *     <div className="shot" data-shot="meta-01-create-app.png">Screenshot coming</div>
+ *   </Frame>
+ *
+ * Swapping in the real image means replacing the div with
+ * <img src="/screenshots/meta-01-create-app.png" alt="…" />.
+ */
+.fw-frame {
+  box-shadow: none;
+}
+
+.fw-frame .shot {
+  position: relative;
+  display: grid;
+  place-content: center;
+  gap: 0.35rem;
+  width: 100%;
+  aspect-ratio: 21 / 9;
+  padding: 2.75rem 1rem 1.5rem;
+  text-align: center;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--fw-muted);
+  background:
+    linear-gradient(var(--fw-border), var(--fw-border)) top 1.75rem left 0 / 100% 1px no-repeat,
+    radial-gradient(circle, var(--fw-border-strong) 0 3.5px, transparent 4px) 0.85rem 0.6rem / 12px 12px no-repeat,
+    radial-gradient(circle, var(--fw-border-strong) 0 3.5px, transparent 4px) 1.6rem 0.6rem / 12px 12px no-repeat,
+    radial-gradient(circle, var(--fw-border-strong) 0 3.5px, transparent 4px) 2.35rem 0.6rem / 12px 12px no-repeat,
+    var(--fw-bg-subtle);
+}
+
+.fw-frame .shot::after {
+  content: attr(data-shot);
+  font-family: var(--fw-mono);
+  font-size: 0.75rem;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+  .fw-frame .shot {
+    aspect-ratio: 4 / 3;
+  }
+}
+
+/* Phones: the drawer already lists the header links, and there's no
+   keyboard to press ⌘K on, so the header keeps only what fits at 375px. */
+@media (max-width: 40rem) {
+  .fw-shell-header-inner {
+    gap: 0.5rem;
+  }
+  .fw-shell-topnav {
+    display: none;
+  }
+  .fw-search-trigger kbd {
+    display: none;
+  }
+}
+
+/* Bare URLs used as link text (instagram.com/accounts/manage_access) can be
+   wider than a phone. */
+.fw-prose a {
+  overflow-wrap: anywhere;
+}

@@ -15,6 +15,7 @@ wrangler.local.toml
 # Build output
 node_modules/
 dist/
+site/.astro/
 /tmp-worker-build/
 
 # Noise

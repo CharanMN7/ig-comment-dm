@@ -3,6 +3,7 @@ import { html } from 'hono/html';
 import {
   CRON_STALE_SECONDS,
   DM_TEXT_MAX,
+  PUBLIC_REPLY_MAX,
   decryptAesGcm,
   encryptAesGcm,
   hashPassword,
@@ -37,8 +38,23 @@ import {
 } from '../db.ts';
 import { findConfigProblems } from '../config.ts';
 import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
-import { isMatchMode, keywordProblem, normalizeCommentText, parseKeywords } from '../match.ts';
+import {
+  EXCLUSION_TOO_SHORT_MESSAGE,
+  KEYWORD_TOO_SHORT_MESSAGE,
+  isMatchMode,
+  keywordProblem,
+  keywordSwallowedBy,
+  normalizeCommentText,
+  parseKeywords,
+} from '../match.ts';
 import { listRecentMedia, oauthRedirectUri } from '../meta.ts';
+import {
+  SAMPLE_USERNAME,
+  USERNAME_GROWTH,
+  countUsernameTokens,
+  fillPlaceholders,
+  worstCaseLength,
+} from '../placeholders.ts';
 import { chooseRule } from '../process.ts';
 import { CRON_FIRST_RUN_SECONDS, jobState } from './health.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
@@ -592,17 +608,19 @@ async function recentMediaOptions(
   return out;
 }
 
-function parseKeywordLines(raw: string): { ok: true; keywords: string[] } | { ok: false; error: string } {
-  const keywords = raw
+function keywordLines(raw: string): string[] {
+  return raw
     .split(/\r?\n/)
     .map((s) => s.trim())
     .filter(Boolean);
-  if (keywords.length === 0) return { ok: false, error: 'Add at least one keyword, one per line.' };
-  for (const keyword of keywords) {
-    const problem = keywordProblem(keyword);
-    if (problem) return { ok: false, error: problem };
+}
+
+function firstKeywordProblem(words: string[], tooShortMessage: string): string | null {
+  for (const word of words) {
+    const problem = keywordProblem(word, tooShortMessage);
+    if (problem) return problem;
   }
-  return { ok: true, keywords };
+  return null;
 }
 
 type RuleFormValues = {
@@ -610,6 +628,8 @@ type RuleFormValues = {
   label: string;
   keywords: string;
   match_mode: string;
+  exclude_keywords: string;
+  match_all: boolean;
   media_id: string;
   dm_text: string;
   public_reply_text: string;
@@ -621,6 +641,8 @@ function formValuesFromRule(rule: Rule): RuleFormValues {
     label: rule.label,
     keywords: parseKeywords(rule.keywords).join('\n'),
     match_mode: rule.match_mode,
+    exclude_keywords: parseKeywords(rule.exclude_keywords).join('\n'),
+    match_all: rule.match_all === 1,
     media_id: rule.media_id ?? '',
     dm_text: rule.dm_text,
     public_reply_text: rule.public_reply_text ?? '',
@@ -634,11 +656,15 @@ function formValuesFromPost(f: Record<string, string>): RuleFormValues {
     label: f.label ?? '',
     keywords: f.keywords ?? '',
     match_mode: f.match_mode ?? 'word',
+    exclude_keywords: f.exclude_keywords ?? '',
+    match_all: f.match_all === '1',
     media_id: f.media_id ?? '',
     dm_text: f.dm_text ?? '',
     public_reply_text: f.public_reply_text ?? '',
   };
 }
+
+const EVERY_COMMENT_WORDS = 'Every comment on its post';
 
 const MATCH_MODE_WORDS: Record<MatchMode, string> = {
   word: 'Whole words only',
@@ -687,38 +713,69 @@ function ruleForm(opts: {
             ? html`<option value="${v.media_id}" selected>Saved ID · ${v.media_id}</option>`
             : html``}
         </select>
-        <p class="muted">
+        <p class="muted when-keywords">
           Leave this on <b>All posts and reels</b> unless you want one reel only. A reel’s ID is a long number
           from Instagram, not the share link (<code>instagram.com/reel/…</code>). If the list is empty, leave it
           on all posts — that still covers reels.
         </p>
+        <p class="muted when-all">Pick the one post or reel whose commenters should all get the message.</p>
       </fieldset>
 
       <fieldset class="group">
         <legend>Which comments get a message</legend>
-        <label for="keywords">Keywords</label>
-        <textarea id="keywords" name="keywords" required placeholder="guide&#10;freebie">${v.keywords}</textarea>
-        <p class="muted">
-          One per line. A comment with any of these gets your message. Capitals, accents, emoji and
-          punctuation don’t matter, so “GUIDE!!” counts as “guide”. Each keyword needs at least 3 letters.
+        <label class="choice">
+          <input type="checkbox" id="match_all" name="match_all" value="1" ${v.match_all ? 'checked' : ''} />
+          <span>
+            <b>Reply to every comment on this post</b>
+            <span class="muted">
+              For giveaways and waitlists: everyone who comments gets the message, no keyword needed. Each
+              comment gets its own message, so someone who comments three times gets it three times.
+            </span>
+          </span>
+        </label>
+        <p class="err needs-post">
+          Pick one post or reel under “Which posts” above. This can’t be used on all posts: it would message
+          everyone who comments on anything, and Instagram may restrict the account.
         </p>
-        <fieldset class="choices">
-          <legend>How to look for them</legend>
-          <label class="choice">
-            <input type="radio" name="match_mode" value="word" ${contains ? '' : 'checked'} />
-            <span>
-              <b>${MATCH_MODE_WORDS.word}</b> (recommended)
-              <span class="muted">“guide” matches “Guide please!” but not “guides” or “guidelines”.</span>
-            </span>
-          </label>
-          <label class="choice">
-            <input type="radio" name="match_mode" value="contains" ${contains ? 'checked' : ''} />
-            <span>
-              <b>${MATCH_MODE_WORDS.contains}</b>
-              <span class="muted">Contains also catches #launch2026, but “art” would match “start”.</span>
-            </span>
-          </label>
-        </fieldset>
+        <p class="muted when-all">
+          Older posts: every 5 minutes a check also reads the post’s 25 newest comments from the last 3 days,
+          and any it hasn’t handled before get the message too, up to 10 messages per check. Comments it
+          already skipped stay skipped.
+        </p>
+        <div class="when-keywords">
+          <label for="keywords">Keywords</label>
+          <textarea id="keywords" name="keywords" placeholder="guide&#10;freebie">${v.keywords}</textarea>
+          <p class="muted">
+            One per line. A comment with any of these gets your message. Capitals, accents, emoji and
+            punctuation don’t matter, so “GUIDE!!” counts as “guide”. Each keyword needs at least 3 letters.
+          </p>
+          <fieldset class="choices">
+            <legend>How to look for them</legend>
+            <label class="choice">
+              <input type="radio" name="match_mode" value="word" ${contains ? '' : 'checked'} />
+              <span>
+                <b>${MATCH_MODE_WORDS.word}</b> (recommended)
+                <span class="muted">“guide” matches “Guide please!” but not “guides” or “guidelines”.</span>
+              </span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="match_mode" value="contains" ${contains ? 'checked' : ''} />
+              <span>
+                <b>${MATCH_MODE_WORDS.contains}</b>
+                <span class="muted">Contains also catches #launch2026, but “art” would match “start”.</span>
+              </span>
+            </label>
+          </fieldset>
+        </div>
+        <label for="exclude_keywords">Exclusions (optional)</label>
+        <textarea id="exclude_keywords" name="exclude_keywords" placeholder="how much&#10;already have it&#10;not interested">${v.exclude_keywords}</textarea>
+        <p class="muted">
+          Skip comments that contain any of these, even when a keyword matches. One per line. Useful for
+          “how much is the guide?” or “I already have the guide”, which mention your keyword but don’t want
+          the message. They are found the same way as your keywords. Another rule without these exclusions
+          can still reply.
+        </p>
+        <p class="muted when-all">On a rule that replies to every comment, exclusions are found as whole words.</p>
       </fieldset>
 
       <fieldset class="group">
@@ -728,12 +785,14 @@ function ruleForm(opts: {
         <p class="muted">
           Up to 1,000 characters. Instagram allows one private message per comment, so put everything they
           need in this one, link included.
+          <code>{username}</code> puts in their Instagram name and counts as 30. It’s the only placeholder for now.
         </p>
         <label for="public_reply_text">Public reply under their comment (optional)</label>
-        <textarea id="public_reply_text" name="public_reply_text">${v.public_reply_text}</textarea>
+        <textarea id="public_reply_text" name="public_reply_text" maxlength="${String(PUBLIC_REPLY_MAX)}">${v.public_reply_text}</textarea>
         <p class="muted">
           Everyone reading the comments sees this, for example “Sent you a DM!”. Leave it blank to reply
-          privately only. If the private message fails, the public reply is not posted either.
+          privately only. If the private message fails, the public reply is not posted either. Up to 1,000
+          characters, and <code>{username}</code> works here too.
         </p>
       </fieldset>
 
@@ -772,7 +831,8 @@ adminRoutes.get('/rules', async (c) => {
                 </thead>
                 <tbody>
                   ${rules.map((r) => {
-                    const kws = parseKeywords(r.keywords).join(', ');
+                    const kws = r.match_all === 1 ? EVERY_COMMENT_WORDS : parseKeywords(r.keywords).join(', ');
+                    const exclusions = parseKeywords(r.exclude_keywords);
                     return html`<tr>
                       <td>${r.label}</td>
                       <td>@${accountMap.get(r.ig_user_id) ?? r.ig_user_id}</td>
@@ -780,6 +840,9 @@ adminRoutes.get('/rules', async (c) => {
                         ${kws}
                         ${r.match_mode === 'contains'
                           ? html`<div class="muted">${MATCH_MODE_WORDS.contains}</div>`
+                          : html``}
+                        ${exclusions.length
+                          ? html`<div class="muted">Exclusions: ${exclusions.join(', ')}</div>`
                           : html``}
                       </td>
                       <td>${r.active ? 'Yes' : 'Paused'}</td>
@@ -831,8 +894,34 @@ adminRoutes.get('/rules/new', async (c) => {
   );
 });
 
-function readRuleFields(form: Record<string, string>) {
-  const parsed = parseKeywordLines(form.keywords ?? '');
+const count = (n: number): string => n.toLocaleString('en-US');
+
+/**
+ * Checked against the longest the text can become once a name is put in, not
+ * against what was typed, so a rule that saves always fits Instagram's limit.
+ */
+function messageProblem(what: string, text: string, max: number): string | null {
+  if (!fillPlaceholders(text, null).trim()) {
+    return `${what} needs more than {username}. Instagram sometimes leaves the name out, and then there would be nothing to send.`;
+  }
+  const longest = worstCaseLength(text);
+  if (longest <= max) return null;
+  const limit = `${what} must be ${count(max)} characters or fewer.`;
+  if (!countUsernameTokens(text)) return `${limit} This one is ${count(text.length)}.`;
+  return `${limit} This one is ${count(text.length)}, and each {username} can add up to ${USERNAME_GROWTH} characters for a long name, so it could reach ${count(longest)}.`;
+}
+
+export const MATCH_ALL_NEEDS_POST_MESSAGE =
+  '“Reply to every comment” needs one post. Pick it under “Which posts”, or untick the box. On all posts it would message everyone who comments on anything, and Instagram may restrict the account.';
+
+/**
+ * Exported for the unit tests. CSS can hide a field but cannot stop a form
+ * being posted, so this, not the form, is what keeps a match-all rule off
+ * "All posts".
+ */
+export function readRuleFields(form: Record<string, string>) {
+  const keywords = keywordLines(form.keywords ?? '');
+  const exclusions = keywordLines(form.exclude_keywords ?? '');
   // Browsers submit each textarea line break as CRLF but count it as one
   // character against maxlength. Without this, a message that fit the box
   // could still fail the length check below.
@@ -841,20 +930,38 @@ function readRuleFields(form: Record<string, string>) {
   const ig = (form.ig_user_id ?? '').trim();
   const media = (form.media_id ?? '').trim();
   const pub = (form.public_reply_text ?? '').replace(/\r\n/g, '\n').trim();
-  // A form from before match modes existed sends no choice; that rule matched whole words.
-  const matchMode = form.match_mode ?? 'word';
+  const matchAll = form.match_all === '1';
   if (!label) return { error: 'Give this rule a name.' };
   if (!ig) return { error: 'Pick an Instagram account.' };
-  if (!parsed.ok) return { error: parsed.error };
-  if (!isMatchMode(matchMode)) {
-    return { error: 'Choose how to look for keywords: whole words only, or anywhere in the comment.' };
+  if (matchAll && !media) return { error: MATCH_ALL_NEEDS_POST_MESSAGE };
+  // A match-all rule hides the keywords and the radios, and the matcher never
+  // reads its keywords, so neither is checked or kept. Its exclusions are
+  // still matched, as whole words, which is what the form tells the operator.
+  let matchMode: MatchMode = 'word';
+  if (!matchAll) {
+    if (keywords.length === 0) return { error: 'Add at least one keyword, one per line.' };
+    const keywordError = firstKeywordProblem(keywords, KEYWORD_TOO_SHORT_MESSAGE);
+    if (keywordError) return { error: keywordError };
+    // A form from before match modes existed sends no choice; that rule matched whole words.
+    const chosen = form.match_mode ?? 'word';
+    if (!isMatchMode(chosen)) {
+      return { error: 'Choose how to look for keywords: whole words only, or anywhere in the comment.' };
+    }
+    matchMode = chosen;
   }
-  if (!dm) return { error: 'Write the private message to send.' };
-  if (dm.length > DM_TEXT_MAX) {
+  const exclusionError = firstKeywordProblem(exclusions, EXCLUSION_TOO_SHORT_MESSAGE);
+  if (exclusionError) return { error: exclusionError };
+  const swallowed = matchAll ? null : keywordSwallowedBy(keywords, exclusions, matchMode);
+  if (swallowed) {
     return {
-      error: `The private message must be 1,000 characters or fewer. This one is ${dm.length.toLocaleString('en-US')}.`,
+      error: `The keyword “${swallowed.keyword}” could never get a message, because it contains the exclusion “${swallowed.exclusion}”. Remove one of them.`,
     };
   }
+  if (!dm) return { error: 'Write the private message to send.' };
+  const dmProblem = messageProblem('The private message', dm, DM_TEXT_MAX);
+  if (dmProblem) return { error: dmProblem };
+  const pubProblem = pub ? messageProblem('The public reply', pub, PUBLIC_REPLY_MAX) : null;
+  if (pubProblem) return { error: pubProblem };
   if (media && looksLikePostUrl(media)) {
     return {
       error:
@@ -865,8 +972,10 @@ function readRuleFields(form: Record<string, string>) {
     row: {
       ig_user_id: ig,
       label,
-      keywords: JSON.stringify(parsed.keywords),
+      keywords: JSON.stringify(matchAll ? [] : keywords),
       match_mode: matchMode,
+      exclude_keywords: JSON.stringify(exclusions),
+      match_all: matchAll ? 1 : 0,
       media_id: media || null,
       dm_text: dm,
       public_reply_text: pub || null,
@@ -975,7 +1084,10 @@ adminRoutes.get('/rules/:id/delete', async (c) => {
         <table>
           <tr><th>Name</th><td>${rule.label}</td></tr>
           <tr><th>Account</th><td>@${account?.username ?? rule.ig_user_id}</td></tr>
-          <tr><th>Keywords</th><td>${parseKeywords(rule.keywords).join(', ')}</td></tr>
+          <tr>
+            <th>Keywords</th>
+            <td>${rule.match_all === 1 ? EVERY_COMMENT_WORDS : parseKeywords(rule.keywords).join(', ')}</td>
+          </tr>
         </table>
         <p>
           Matching comments will stop getting a private message. This cannot be undone. To stop it for now
@@ -1026,7 +1138,10 @@ adminRoutes.get('/test', async (c) => {
                   <option value="">All posts and reels</option>
                   ${posts.map((p) => html`<option value="${p.id}">${p.label}</option>`)}
                 </select>
-                <p class="muted">Leave on all posts unless you limited a rule to one reel.</p>
+                <p class="muted">
+                  Leave on all posts unless you limited a rule to one reel. A rule that replies to every comment
+                  only shows up when you pick its post here.
+                </p>
                 <div class="row"><button type="submit">See what would happen</button></div>
               </form>
             `}
@@ -1040,11 +1155,30 @@ adminRoutes.post('/test', async (c) => {
   const ig = form.ig_user_id ?? '';
   const text = form.text ?? '';
   const media = form.media_id?.trim() || undefined;
-  const match = await chooseRule(c.env.DB, ig, text, media);
+  const { match, excluded } = await chooseRule(c.env.DB, ig, text, media);
   const base = c.get('adminBase');
   // Shown either way: when a test does not match, the cleaned-up text is
   // usually the explanation (the hashtag symbol is gone, the accent folded).
   const readAs = html`<tr><th>Comment, as matched</th><td>${normalizeCommentText(text) || '(nothing left)'}</td></tr>`;
+  const exclusions = excluded.length
+    ? html`
+        <h2>${match ? 'Passed over first' : 'Skipped because of an exclusion'}</h2>
+        <table>
+          <thead><tr><th>Rule</th><th>Keyword found</th><th>Exclusion found</th></tr></thead>
+          <tbody>
+            ${excluded.map(
+              (e) =>
+                html`<tr><td>${e.rule.label}</td><td>${e.keyword ?? EVERY_COMMENT_WORDS}</td><td>${e.exclusion}</td></tr>`,
+            )}
+          </tbody>
+        </table>
+        ${match
+          ? html`<p class="muted">An exclusion only stops its own rule, so the next matching rule replies instead.</p>`
+          : html``}
+      `
+    : html``;
+  const savedReply = match?.rule.public_reply_text?.trim() ?? '';
+  const usesName = match ? countUsernameTokens(`${match.rule.dm_text}\n${savedReply}`) > 0 : false;
   return c.html(
     layout({
       title: 'Test',
@@ -1058,24 +1192,46 @@ adminRoutes.post('/test', async (c) => {
                 This would match the rule <b>${match.rule.label}</b>.
               </div>
               <table>
-                <tr><th>Keyword found</th><td>${match.keyword}</td></tr>
-                <tr><th>Matching</th><td>${MATCH_MODE_WORDS[match.rule.match_mode]}</td></tr>
+                ${match.keyword === null
+                  ? html`<tr><th>Matched because</th><td>This rule replies to every comment on this post.</td></tr>`
+                  : html`
+                      <tr><th>Keyword found</th><td>${match.keyword}</td></tr>
+                      <tr><th>Matching</th><td>${MATCH_MODE_WORDS[match.rule.match_mode]}</td></tr>
+                    `}
                 ${readAs}
               </table>
+              ${usesName
+                ? html`<p class="muted">
+                    <code>{username}</code> is filled in with <b>${SAMPLE_USERNAME}</b>, a sample name. Real
+                    messages use the name of whoever commented.
+                  </p>`
+                : html``}
               <h2>Private message that would be sent</h2>
-              <p>${match.rule.dm_text}</p>
-              ${match.rule.public_reply_text
-                ? html`<h2>Public reply that would be posted</h2><p>${match.rule.public_reply_text}</p>`
+              <p class="message">${fillPlaceholders(match.rule.dm_text, SAMPLE_USERNAME)}</p>
+              ${savedReply
+                ? html`<h2>Public reply that would be posted</h2>
+                    <p class="message">${fillPlaceholders(savedReply, SAMPLE_USERNAME)}</p>`
                 : html`<p class="muted">No public reply for this rule.</p>`}
+              ${exclusions}
             `
-          : html`
-              <p>No rule would match this comment. Nothing would be sent.</p>
-              <table>${readAs}</table>
-              <p class="muted">
-                Rules set to <b>${MATCH_MODE_WORDS.word}</b> skip keywords inside longer words and hashtags: “guide” does
-                not match “guides” or “#guide2026”. Paused rules are not tested.
-              </p>
-            `}
+          : excluded.length
+            ? html`
+                <p>
+                  Nothing would be sent. This comment has a rule’s keyword, but also one of that rule’s
+                  exclusions, so it would be skipped.
+                </p>
+                ${exclusions}
+                <table>${readAs}</table>
+              `
+            : html`
+                <p>No rule would match this comment. Nothing would be sent.</p>
+                <table>${readAs}</table>
+                <p class="muted">
+                  Rules set to <b>${MATCH_MODE_WORDS.word}</b> skip keywords inside longer words and hashtags: “guide”
+                  does not match “guides” or “#guide2026”. Paused rules are not tested, and a rule that replies to
+                  every comment is only tested on its own post.
+                </p>
+              `}
         <p><a href="${base}/test">Test another</a></p>
       `,
     }),

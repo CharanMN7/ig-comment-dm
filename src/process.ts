@@ -10,8 +10,9 @@ import {
   updateSent,
 } from './db.ts';
 import { isSelfComment } from './guard.ts';
-import { type RuleMatch, matchComment } from './match.ts';
+import { type MatchVerdict, exclusionSkipReason, matchComment } from './match.ts';
 import { type MetaCallResult, sendPrivateReply, sendPublicReply } from './meta.ts';
+import { fillPlaceholders } from './placeholders.ts';
 import type { Env } from './types.ts';
 
 type CommentValue = {
@@ -107,7 +108,7 @@ export async function chooseRule(
   igUserId: string,
   text: string,
   mediaId: string | undefined,
-): Promise<RuleMatch | null> {
+): Promise<MatchVerdict> {
   return matchComment(await listActiveRules(db, igUserId), text, mediaId);
 }
 
@@ -174,19 +175,28 @@ export async function processComment(
   });
   if (!claimed) return;
 
-  const rule = (await chooseRule(env.DB, account.ig_user_id, text, mediaId))?.rule;
-  if (!rule) {
+  const { match, excluded } = await chooseRule(env.DB, account.ig_user_id, text, mediaId);
+  if (!match) {
+    // When several rules were excluded, the first in matching order is the one
+    // that would have fired, so that is the rule and the reason Home shows.
+    const passedOver = excluded[0];
     await updateSent(env.DB, commentId, {
-      rule_id: null,
+      rule_id: passedOver?.rule.id ?? null,
       dm_status: 'skipped',
       reply_status: null,
-      error: 'no matching rule',
+      error: passedOver ? exclusionSkipReason(passedOver) : 'no matching rule',
       sent_at: nowSeconds(),
     });
     return;
   }
+  const { rule } = match;
 
-  const publicText = rule.public_reply_text?.trim();
+  // Both webhook and poll payloads carry the name on `from`. When Instagram
+  // leaves it out, the text still goes, with `{username}` tidied away.
+  const username = value.from?.username;
+  const dmText = fillPlaceholders(rule.dm_text, username);
+  const savedReply = rule.public_reply_text?.trim();
+  const publicText = savedReply ? fillPlaceholders(savedReply, username) : '';
 
   let token: string;
   try {
@@ -202,7 +212,7 @@ export async function processComment(
     return;
   }
 
-  const dm = await sendOrFail(() => sendPrivateReply(account.ig_user_id, token, commentId, rule.dm_text));
+  const dm = await sendOrFail(() => sendPrivateReply(account.ig_user_id, token, commentId, dmText));
   let replyStatus: string | null = null;
   const errors: string[] = [];
 

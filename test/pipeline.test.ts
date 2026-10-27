@@ -98,6 +98,41 @@ describe('a comment that matches an active rule', () => {
   });
 });
 
+describe('the {username} placeholder', () => {
+  it('puts the commenter\'s username into the DM and the public reply', async () => {
+    await seedAccount();
+    await seedRule({ dmText: 'Hey {username}, here is the guide: https://example.com/g', publicReply: 'Check your DMs, @{Username}!' });
+
+    await postWebhook(commentPayload({ username: 'sarah.k' }));
+
+    expect(dmCalls()).toEqual([
+      expect.objectContaining({ body: expect.objectContaining({ message: { text: 'Hey sarah.k, here is the guide: https://example.com/g' } }) }),
+    ]);
+    expect(replyCalls()).toEqual([expect.objectContaining({ body: { message: 'Check your DMs, @sarah.k!' } })]);
+    expect(await sentRow('17900000000000001')).toMatchObject({ dm_status: 'ok', reply_status: 'ok', error: null });
+  });
+
+  it('still sends both, with the token tidied away, when the payload has no username', async () => {
+    await seedAccount();
+    await seedRule({ dmText: 'Hey {username}, here is the guide:\n\nhttps://example.com/g', publicReply: 'Sent you a DM {username} 🙌' });
+
+    await postWebhook(commentPayload({ username: null }));
+
+    expect(dmCalls()).toEqual([
+      expect.objectContaining({ body: expect.objectContaining({ message: { text: 'Hey, here is the guide:\n\nhttps://example.com/g' } }) }),
+    ]);
+    expect(replyCalls()).toEqual([expect.objectContaining({ body: { message: 'Sent you a DM 🙌' } })]);
+    expect(await sentRow('17900000000000001')).toMatchObject({ dm_status: 'ok', reply_status: 'ok' });
+  });
+
+  it('sends text with no placeholder byte for byte, leaving other braces alone', async () => {
+    await seedAccount();
+    await seedRule({ dmText: 'Use code {SAVE10} at {link}' });
+    await postWebhook(commentPayload({ username: 'sarah' }));
+    expect(dmCalls()).toEqual([expect.objectContaining({ body: expect.objectContaining({ message: { text: 'Use code {SAVE10} at {link}' } }) })]);
+  });
+});
+
 describe('comments that must not trigger a DM', () => {
   it('records a non-matching comment as skipped and calls Meta for nothing', async () => {
     await seedAccount();
@@ -205,6 +240,96 @@ describe('match modes', () => {
     await postWebhook(commentPayload({ text: 'So ready for #launch2026 🚀' }));
     expect(meta.calls).toEqual([]);
     expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'skipped', error: 'no matching rule' })]);
+  });
+});
+
+describe('exclusions', () => {
+  it('skips a comment that matches an exclusion, records why, and calls Meta for nothing', async () => {
+    await seedAccount();
+    const ruleId = await seedRule({ keywords: ['guide'], excludeKeywords: ['how much', 'already have'], publicReply: 'Sent!' });
+    await postWebhook(commentPayload({ text: 'How much is the guide?' }));
+    expect(meta.calls).toEqual([]);
+    expect(await sentRows()).toEqual([
+      expect.objectContaining({ rule_id: ruleId, dm_status: 'skipped', reply_status: null, error: 'Skipped: matched exclusion “how much”' }),
+    ]);
+  });
+
+  it('keeps the skip when Meta delivers the comment again', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'], excludeKeywords: ['how much'] });
+    await postWebhook(commentPayload({ text: 'how much is the guide' }));
+    await postWebhook(commentPayload({ text: 'how much is the guide' }));
+    expect(meta.calls).toEqual([]);
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'skipped' })]);
+  });
+
+  it('still sends when the exclusion is not in the comment', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'], excludeKeywords: ['how much'] });
+    await postWebhook(commentPayload({ text: 'guide please' }));
+    expect(dmCalls()).toHaveLength(1);
+  });
+
+  it('lets another matching rule without that exclusion fire', async () => {
+    await seedAccount();
+    await seedRule({ label: 'Reel guide', keywords: ['guide'], mediaId: 'reel-1', excludeKeywords: ['how much'], dmText: 'reel guide' });
+    const fallback = await seedRule({ label: 'Any guide', keywords: ['guide'], dmText: 'price list and guide' });
+    await postWebhook(commentPayload({ mediaId: 'reel-1', text: 'how much is the guide' }));
+    expect(dmCalls()).toEqual([expect.objectContaining({ body: expect.objectContaining({ message: { text: 'price list and guide' } }) })]);
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'ok', rule_id: fallback, error: null })]);
+  });
+});
+
+describe('rules that reply to every comment on a post', () => {
+  it('DMs any comment on its post, with no keyword', async () => {
+    await seedAccount();
+    const ruleId = await seedRule({ keywords: [], matchAll: true, mediaId: 'reel-1', dmText: 'You are in the giveaway!' });
+    await postWebhook(commentPayload({ mediaId: 'reel-1', text: 'love this 😍' }));
+    expect(dmCalls()).toEqual([expect.objectContaining({ body: expect.objectContaining({ message: { text: 'You are in the giveaway!' } }) })]);
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'ok', rule_id: ruleId })]);
+  });
+
+  it('does nothing for comments on other posts', async () => {
+    await seedAccount();
+    await seedRule({ keywords: [], matchAll: true, mediaId: 'reel-1' });
+    await postWebhook(commentPayload({ mediaId: 'reel-2', text: 'love this' }));
+    expect(meta.calls).toEqual([]);
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'skipped', error: 'no matching rule' })]);
+  });
+
+  it('lets a keyword rule on the same post, or on all posts, win', async () => {
+    await seedAccount();
+    await seedRule({ keywords: [], matchAll: true, mediaId: 'reel-1', dmText: 'giveaway' });
+    await seedRule({ keywords: ['price'], dmText: 'price list' });
+    await seedRule({ keywords: ['guide'], mediaId: 'reel-1', dmText: 'reel guide' });
+    await postWebhook(commentPayload({ commentId: 'c-guide', mediaId: 'reel-1', text: 'guide please' }));
+    await postWebhook(commentPayload({ commentId: 'c-price', mediaId: 'reel-1', text: 'price?' }));
+    await postWebhook(commentPayload({ commentId: 'c-other', mediaId: 'reel-1', text: 'so cool' }));
+    expect(dmCalls().map((c) => (c.body as { message: { text: string } }).message.text)).toEqual(['reel guide', 'price list', 'giveaway']);
+  });
+
+  it('still ignores the operator, old comments and repeat deliveries', async () => {
+    await seedAccount();
+    await seedRule({ keywords: [], matchAll: true, mediaId: 'reel-1' });
+    await postWebhook(commentPayload({ commentId: 'c-self', mediaId: 'reel-1', fromId: IG_USER, text: 'thanks all!' }));
+    await postWebhook(commentPayload({ commentId: 'c-old', mediaId: 'reel-1', time: NOW - 7 * DAY - 1 }));
+    await postWebhook(commentPayload({ commentId: 'c-twice', mediaId: 'reel-1' }));
+    await postWebhook(commentPayload({ commentId: 'c-twice', mediaId: 'reel-1' }));
+    expect(dmCalls().map((c) => (c.body as { recipient: { comment_id: string } }).recipient.comment_id)).toEqual(['c-twice']);
+    expect((await sentRows()).map((r) => [r.comment_id, r.dm_status])).toEqual([
+      ['c-old', 'skipped'],
+      ['c-twice', 'ok'],
+    ]);
+  });
+
+  it('applies its exclusions', async () => {
+    await seedAccount();
+    const ruleId = await seedRule({ keywords: [], matchAll: true, mediaId: 'reel-1', excludeKeywords: ['already entered'] });
+    await postWebhook(commentPayload({ mediaId: 'reel-1', text: 'I already entered!' }));
+    expect(meta.calls).toEqual([]);
+    expect(await sentRows()).toEqual([
+      expect.objectContaining({ dm_status: 'skipped', rule_id: ruleId, error: 'Skipped: matched exclusion “already entered”' }),
+    ]);
   });
 });
 

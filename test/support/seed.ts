@@ -46,6 +46,8 @@ export async function seedRule(
     label?: string;
     keywords?: string[];
     matchMode?: MatchMode;
+    excludeKeywords?: string[];
+    matchAll?: boolean;
     mediaId?: string | null;
     dmText?: string;
     publicReply?: string | null;
@@ -57,6 +59,8 @@ export async function seedRule(
     label: opts.label ?? 'Free guide',
     keywords: JSON.stringify(opts.keywords ?? ['guide']),
     match_mode: opts.matchMode ?? 'word',
+    exclude_keywords: JSON.stringify(opts.excludeKeywords ?? []),
+    match_all: opts.matchAll ? 1 : 0,
     media_id: opts.mediaId ?? null,
     dm_text: opts.dmText ?? 'Here is your guide: https://example.com/guide',
     public_reply_text: opts.publicReply ?? null,
