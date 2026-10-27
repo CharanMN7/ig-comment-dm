@@ -131,14 +131,22 @@ connectRoutes.get('/callback', async (c) => {
     );
   }
   if (denied) {
+    // Anyone can put any text in this URL and send it round as a link to a
+    // page on this Worker's domain. Instagram's reason is shown only when the
+    // state and this browser's connect cookie verify, which means the
+    // operator's own Connect came back here; everyone else gets our words.
+    const state = c.req.query('state');
+    const own = !!state && (await verifyOauthState(c.env.SESSION_SIGNING_KEY, state, c.req.header('Cookie')));
     return c.html(
       layout({
         title: 'Not connected',
         body: html`
           <h1>Not connected</h1>
           <p>Instagram stopped the connection before it finished, so nothing changed. Try again from Accounts.</p>
-          <p class="muted">Instagram’s reason:</p>
-          <pre class="raw">${c.req.query('error_description') ?? denied}</pre>
+          ${own
+            ? html`<p class="muted">Instagram’s reason:</p>
+                <pre class="raw">${c.req.query('error_description') ?? denied}</pre>`
+            : html``}
           <p><a class="btn" href="/connect/accounts">Back to Accounts</a></p>
         `,
       }),
