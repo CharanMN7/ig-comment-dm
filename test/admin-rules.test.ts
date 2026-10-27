@@ -909,6 +909,18 @@ describe('the dry-run test page', () => {
     expect(page.text).not.toContain('sample');
   });
 
+  it('says the account is paused instead of that the rule would match', async () => {
+    await seedAccount({ active: false });
+    const admin = await signedInAdmin();
+    await seedRule({ label: 'Guide rule' });
+    await admin.get(adminPath('/test'));
+    const page = (await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'guide', media_id: '' })).text;
+    expect(page).not.toContain('This would match');
+    expect(page.replace(/\s+/g, ' ')).toContain(
+      `@creator is paused, so this comment would get no reply. Once you <a href="${adminPath('/accounts')}">resume it</a>, it would match the rule <b>Guide rule</b>.`,
+    );
+  });
+
   it('ignores paused rules', async () => {
     const admin = await adminWithAccount();
     await seedRule({ active: false });

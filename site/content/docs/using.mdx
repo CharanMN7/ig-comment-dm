@@ -12,7 +12,7 @@ You can connect several Instagram accounts to one deployment. Each one has to be
 
 Connect uses whichever Instagram account that browser is logged into. If one profile connects and another doesn't, that's usually why: open a private window, log in to your admin page there, and click Connect from that window.
 
-Connecting needs you to be logged in to the admin panel; the Connect page refuses anyone who isn't. **Pause** on the Accounts page stops DMs for an account without disconnecting it, and the nightly job keeps its token fresh while it's paused.
+Connecting needs you to be logged in to the admin panel; the Connect page refuses anyone who isn't. **Pause** on the Accounts page stops DMs for an account without disconnecting it, and the nightly job keeps its token fresh while it's paused. Comments Instagram delivers while it's paused are logged as skipped, so resuming doesn't answer them late.
 
 ## Write a rule
 
@@ -75,7 +75,7 @@ On an older post, the five-minute check also reads the post's 25 newest comments
 
 ## Test a rule
 
-**Test →** paste a sample comment. It shows which rule would send the DM, using the same rule choice as a real comment, the other matching rules and which of them would post a public reply, and the comment as it was matched, with case, emoji and punctuation stripped out. Paused rules aren't tested. Nothing is sent to anyone.
+**Test →** paste a sample comment. It shows which rule would send the DM, using the same rule choice as a real comment, the other matching rules and which of them would post a public reply, and the comment as it was matched, with case, emoji and punctuation stripped out. Paused rules aren't tested, and for a paused account it says so before naming the rule. Nothing is sent to anyone.
 
 <Frame caption="Test: a sample comment and the rule it would fire.">
   <div className="shot" data-shot="admin-13-test.png">Screenshot coming</div>

@@ -206,12 +206,12 @@ describe('comments that must not trigger a DM', () => {
     expect(await sentRows()).toEqual([]);
   });
 
-  it('drops comments for a paused account', async () => {
+  it('records a paused account’s comments as skipped, without calling Instagram', async () => {
     await seedAccount({ active: false });
     await seedRule();
     await postWebhook(commentPayload());
     expect(meta.calls).toEqual([]);
-    expect(await sentRows()).toEqual([]);
+    expect(await sentRows()).toMatchObject([{ rule_id: null, dm_status: 'skipped', error: 'account paused' }]);
   });
 
   it('ignores changes whose field is not comments', async () => {

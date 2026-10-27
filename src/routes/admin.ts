@@ -1467,6 +1467,7 @@ adminRoutes.post('/test', async (c) => {
   const text = form.text ?? '';
   const media = form.media_id?.trim() || undefined;
   const { match, also, excluded } = await chooseRule(c.env.DB, ig, text, media);
+  const account = await getAccount(c.env.DB, ig);
   const base = c.get('adminBase');
   // Shown either way: when a test does not match, the cleaned-up text is
   // usually the explanation (the hashtag symbol is gone, the accent folded).
@@ -1535,9 +1536,12 @@ adminRoutes.post('/test', async (c) => {
         <h1>Test result</h1>
         ${match
           ? html`
-              <div class="ok">
-                This would match the rule <b>${match.rule.label}</b>.
-              </div>
+              ${account && account.active !== 1
+                ? html`<div class="note">
+                    @${account.username} is paused, so this comment would get no reply. Once you
+                    <a href="${base}/accounts">resume it</a>, it would match the rule <b>${match.rule.label}</b>.
+                  </div>`
+                : html`<div class="ok">This would match the rule <b>${match.rule.label}</b>.</div>`}
               <div class="table-wrap"><table>
                 ${match.keyword === null
                   ? html`<tr><th>Matched because</th><td>This rule replies to every comment on this post.</td></tr>`
