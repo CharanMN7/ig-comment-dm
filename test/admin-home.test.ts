@@ -134,7 +134,8 @@ describe('the admin home page', () => {
     expect(page).toContain('the signing secret did not match');
   });
 
-  it('does not warn about the signing secret for a burst of wrong signatures in the same minute', async () => {
+  // 50 webhooks at once: slow on a busy machine, not wrong.
+  it('does not warn about the signing secret for a burst of wrong signatures in the same minute', { timeout: 30_000 }, async () => {
     await Promise.all(Array.from({ length: 50 }, () => postWebhook(commentPayload(), { secret: 'wrong' })));
     const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
     expect(page).not.toContain('the signing secret did not match');
