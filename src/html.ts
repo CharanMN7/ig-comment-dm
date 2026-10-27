@@ -14,6 +14,7 @@ header.top .brand { font-weight: 650; margin-right: 0.5rem; }
 header.top form { margin-left: auto; }
 h1 { font-size: 1.35rem; margin: 0 0 0.75rem; }
 h2 { font-size: 1.05rem; margin: 1.5rem 0 0.5rem; }
+h3 { font-size: 0.95rem; margin: 1rem 0 0.25rem; }
 p { margin: 0.5rem 0; }
 .muted { color: #555; font-size: 0.88rem; }
 .banner { background: #fde8e8; border: 1px solid #c23; color: #411; padding: 0.7rem 0.85rem; margin: 0 0 1rem; }
@@ -54,9 +55,12 @@ button, .btn {
 }
 button.secondary, a.btn.secondary { background: #fff; color: #111; border: 1px solid #bbb; }
 button.danger, a.btn.danger { background: #a11; }
-.kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; margin: 0.75rem 0 1.25rem; }
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem; margin: 0.75rem 0 0.5rem; }
+@media (max-width: 40rem) { .kpis { grid-template-columns: repeat(2, 1fr); } }
 .kpi { background: #fff; border: 1px solid #e4e4e0; padding: 0.65rem 0.75rem; }
 .kpi b { display: block; font-size: 1.35rem; }
+.kpi div { margin-top: 0.3rem; }
+.note { background: #fff; border: 1px solid #ccc; padding: 0.7rem 0.85rem; margin: 0 0 1rem; }
 pre.raw { background: #111; color: #eee; padding: 0.6rem 0.7rem; overflow: auto; font-size: 0.78rem; }
 .actions form { display: inline; }
 code { font-size: 0.88em; }

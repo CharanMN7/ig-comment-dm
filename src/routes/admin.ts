@@ -13,21 +13,25 @@ import {
 } from '../crypto.ts';
 import { ensureCommentSubscriptions, runCron } from '../cron.ts';
 import {
+  HEALTH_FIRST_SEEN_KEY,
+  type SendTotals,
   countSentByComment,
   deleteRule,
   getAccount,
   getRule,
   getSent,
+  healthSnapshot,
   insertRule,
   latestSignedWebhookStatus,
   listAccounts,
   listRules,
   recentSent,
   recentWebhookEvents,
+  sendTotals,
+  sendTotalsByAccount,
   setAccountActive,
   systemGet,
   systemSet,
-  todayCounters,
   toggleRule,
   updateRule,
   upsertAccount,
@@ -53,6 +57,7 @@ import {
 } from '../placeholders.ts';
 import { chooseRule } from '../process.ts';
 import { parsePublicReplies, serializePublicReplies } from '../replies.ts';
+import { CRON_FIRST_RUN_SECONDS, jobState } from './health.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
 import {
   clearFailures,
@@ -303,6 +308,46 @@ adminRoutes.post('/logout', async (c) => {
   return c.redirect(`${c.get('adminBase')}/login`, 302);
 });
 
+const DAY = 24 * 60 * 60;
+
+// Windows start at a UTC midnight, so "Last 7 days" is today and the six days
+// before it. One fixed clock means the numbers don't shift with the viewer.
+const TOTAL_WINDOWS = [
+  { label: 'Today (UTC)', days: 1 },
+  { label: 'Last 7 days', days: 7 },
+  { label: 'Last 30 days', days: 30 },
+  { label: 'All time', days: null },
+];
+
+function windowStarts(now: number): number[] {
+  const today = Math.floor(now / DAY) * DAY;
+  return TOTAL_WINDOWS.map((w) => (w.days == null ? 0 : today - (w.days - 1) * DAY));
+}
+
+function fmtCount(n: number): string {
+  return n.toLocaleString('en-US');
+}
+
+function totalsTiles(totals: SendTotals[]) {
+  return html`
+    <div class="kpis">
+      ${TOTAL_WINDOWS.map((w, i) => {
+        const t = totals[i] ?? { sent: 0, skipped: 0, failed: 0, reached: 0 };
+        const failed = `${fmtCount(t.failed)} failed`;
+        return html`<div class="kpi">
+          <span class="muted">${w.label}</span>
+          <b>${fmtCount(t.reached)}</b>
+          people reached
+          <div class="muted">
+            ${fmtCount(t.sent)} DMs sent<br />${fmtCount(t.skipped)} skipped<br />
+            ${t.failed ? html`<span class="err">${failed}</span>` : failed}
+          </div>
+        </div>`;
+      })}
+    </div>
+  `;
+}
+
 adminRoutes.on('GET', ['/', ''], async (c) => {
   const base = c.get('adminBase');
   const session = c.get('session');
@@ -318,13 +363,15 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   } catch {
     events = [];
   }
-  const dayStart = Math.floor(now / 86400) * 86400;
-  const counts = await todayCounters(c.env.DB, dayStart);
-  const lastCron = await systemGet(c.env.DB, 'last_cron_ok_at');
-  const lastCronN = lastCron ? parseInt(lastCron, 10) : NaN;
-  const lastPoll = await systemGet(c.env.DB, 'last_poll_ok_at');
-  const lastPollN = lastPoll ? parseInt(lastPoll, 10) : NaN;
-  const cronStale = !Number.isFinite(lastCronN) || now - lastCronN > CRON_STALE_SECONDS;
+  const starts = windowStarts(now);
+  const totals = await sendTotals(c.env.DB, starts);
+  // With one account the breakdown would repeat the totals, so skip its query.
+  const byAccount = accounts.length > 1 ? await sendTotalsByAccount(c.env.DB, starts) : null;
+  const health = await healthSnapshot(c.env.DB, now);
+  // Shares /health's clock, so a deploy nobody monitors still gets its grace
+  // period from the first time the operator opens Home.
+  if (health.firstSeenAt == null) await systemSet(c.env.DB, HEALTH_FIRST_SEEN_KEY, String(now));
+  const cron = jobState(health.lastCronOkAt, CRON_STALE_SECONDS, CRON_FIRST_RUN_SECONDS, health.firstSeenAt ?? now, now);
   const reconnect = accounts.filter((a) => a.needs_reconnect === 1 || a.token_expires_at <= now);
   const configProblems = findConfigProblems(c.env);
 
@@ -338,11 +385,22 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
       </div>
     `);
   }
-  if (cronStale) {
+  if (cron === 'starting') {
+    const todayRun = Math.floor(now / DAY) * DAY + 3 * 60 * 60;
+    const next = todayRun > now ? todayRun : todayRun + DAY;
+    banners.push(html`
+      <div class="note">
+        The daily Instagram check hasn’t run yet. It runs at 03:00 UTC every day, so expect the first run by
+        ${fmtWhen(next)}.
+      </div>
+    `);
+  } else if (cron === 'stale') {
     banners.push(html`
       <div class="banner">
-        The daily Instagram check hasn’t run in over 3 days. Message whoever set this up — the automatic
-        refresh job isn’t running.
+        ${health.lastCronOkAt == null
+          ? 'The daily Instagram check has never run, and its first run at 03:00 UTC is overdue.'
+          : 'The daily Instagram check hasn’t run in over 3 days.'}
+        Message whoever set this up — the automatic refresh job isn’t running.
       </div>
     `);
   }
@@ -383,11 +441,20 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
       body: html`
         ${banners}
         <h1>Home</h1>
-        <div class="kpis">
-          <div class="kpi"><span class="muted">Comments seen today</span><b>${String(counts.triggers)}</b></div>
-          <div class="kpi"><span class="muted">DMs sent today</span><b>${String(counts.sends)}</b></div>
-          <div class="kpi"><span class="muted">Failures today</span><b>${String(counts.failures)}</b></div>
-        </div>
+        ${totalsTiles(totals)}
+        <p class="muted">
+          Days start at 00:00 UTC, and the 7- and 30-day totals include today. People reached counts each
+          person once, and only if a DM actually went out to them.
+        </p>
+        ${byAccount
+          ? html`
+              <h2>By account</h2>
+              ${accounts.map(
+                (a) => html`<h3>@${a.username}</h3>
+                  ${totalsTiles(byAccount.get(a.ig_user_id) ?? [])}`,
+              )}
+            `
+          : html``}
 
         <h2>Accounts</h2>
         ${accounts.length === 0
@@ -498,9 +565,9 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
         <h2>Daily check</h2>
         <p class="muted">
           Last token refresh:
-          ${Number.isFinite(lastCronN) ? fmtWhen(lastCronN) : 'never'}.
+          ${health.lastCronOkAt != null ? fmtWhen(health.lastCronOkAt) : 'never'}.
           Last comment checker:
-          ${Number.isFinite(lastPollN) ? fmtWhen(lastPollN) : 'not yet'}.
+          ${health.lastPollOkAt != null ? fmtWhen(health.lastPollOkAt) : 'not yet'}.
         </p>
         <form method="post" action="${base}/run-cron">
           ${csrfField(session.csrf)}

@@ -16,14 +16,15 @@ export const healthRoutes = new Hono<{ Bindings: Env }>();
 
 // The daily job runs at 03:00 UTC, so a new deploy sees its first run within a
 // day. Two more hours absorb a slow trigger before a missing one counts.
-const CRON_FIRST_RUN_SECONDS = 26 * 60 * 60;
+export const CRON_FIRST_RUN_SECONDS = 26 * 60 * 60;
 
 type JobState = 'ok' | 'starting' | 'stale';
 
 // A job that has never run is "starting" for as long as its first run could
 // still be on the way, and no longer, so a deploy whose triggers never fire
-// still alerts instead of reporting healthy forever.
-function jobState(
+// still alerts instead of reporting healthy forever. The admin Home banner uses
+// the same verdict, so the panel and a monitor never disagree.
+export function jobState(
   lastOkAt: number | null,
   staleAfter: number,
   firstRunWithin: number,

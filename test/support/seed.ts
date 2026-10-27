@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { decryptAesGcm, encryptAesGcm } from '../../src/crypto.ts';
-import { insertRule, setAccountActive, toggleRule, upsertAccount } from '../../src/db.ts';
+import { insertRule, setAccountActive, toggleRule, tryClaimComment, upsertAccount } from '../../src/db.ts';
 import type { Account, MatchMode, Rule, Sent } from '../../src/types.ts';
 
 export const FROZEN_NOW_MS = Date.UTC(2026, 9, 1, 12, 0, 0);
@@ -70,6 +70,24 @@ export async function seedRule(
   const id = row!.id;
   if (opts.active === false) await toggleRule(env.DB, id);
   return id;
+}
+
+/** A `sent` row as the pipeline's claim writes it, already settled on a status. */
+export async function seedSent(opts: {
+  commentId: string;
+  status: 'ok' | 'skipped' | 'failed' | 'pending';
+  at: number;
+  commenterId?: string | null;
+  igUserId?: string;
+}): Promise<void> {
+  await tryClaimComment(env.DB, {
+    comment_id: opts.commentId,
+    ig_user_id: opts.igUserId ?? IG_USER,
+    commenter_id: opts.commenterId === undefined ? '9100000000000001' : opts.commenterId,
+    dm_status: opts.status,
+    error: null,
+    sent_at: opts.at,
+  });
 }
 
 // Compare rows with toMatchObject, not toEqual: a migration that adds a column
