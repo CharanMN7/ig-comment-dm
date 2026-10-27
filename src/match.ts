@@ -149,6 +149,12 @@ function firstMatching(normalizedComment: string, keywords: string[], mode: Matc
  * The one matcher. The webhook, the 5-minute sweep and the Test page all go
  * through it, so a comment can never be skipped by one and answered by another.
  *
+ * A comment on a boosted post's ad carries the ad's own media id, which no
+ * rule names: the post picker lists organic posts. `originalMediaId` is the
+ * post the ad was made from, so a rule scoped to that post still answers the
+ * traffic the boost paid for. Its rules go before any scoped to the ad's id,
+ * since the original is the post the operator picked.
+ *
  * Order: keyword rules scoped to this post, then keyword rules for all posts,
  * then rules that reply to every comment on this post. The first to match
  * fires. A match-all rule comes last so a specific keyword on the same post,
@@ -168,10 +174,12 @@ export function matchComment(
   rules: Rule[],
   commentText: string,
   mediaId: string | undefined,
+  originalMediaId?: string,
 ): MatchVerdict {
   const normalized = normalizeCommentText(commentText);
   const hasPost = (r: Rule) => r.media_id != null && r.media_id !== '';
-  const scoped = rules.filter((r) => hasPost(r) && r.media_id === mediaId);
+  const posts = [...new Set([originalMediaId, mediaId])].filter((id): id is string => id != null && id !== '');
+  const scoped = posts.flatMap((post) => rules.filter((r) => hasPost(r) && r.media_id === post));
   const global = rules.filter((r) => !hasPost(r));
   const ordered = [
     ...scoped.filter((r) => r.match_all !== 1),
