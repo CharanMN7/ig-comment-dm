@@ -175,6 +175,8 @@ describe('the logs page', () => {
       const { results, meta } = await env.DB.prepare(sql).bind(...bindings).all();
       expect(results).toHaveLength(LOGS_PAGE_SIZE + 1);
       expect(meta.rows_read, dir).toBeLessThan(2 * LOGS_PAGE_SIZE);
+      const plan = await env.DB.prepare(`EXPLAIN QUERY PLAN ${sql}`).bind(...bindings).all<{ detail: string }>();
+      expect(plan.results.map((r) => r.detail).join(' | '), dir).toMatch(/SEARCH s USING INDEX idx_sent_time \(sent_at[<>]\?\)/);
     }
   });
 });

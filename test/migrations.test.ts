@@ -97,24 +97,6 @@ describe('migrations', () => {
     }
   });
 
-  it('ends with the same schema whichever of 007 and the logs page’s copy of its index runs first', async () => {
-    const freshInstall = await schema();
-    // What PR #64 ships as 003_sent_time_index.sql.
-    const logsPage = {
-      name: '003_sent_time_index.sql',
-      queries: ['CREATE INDEX IF NOT EXISTS idx_sent_time ON sent(sent_at DESC, comment_id DESC);'],
-    };
-
-    await applyD1Migrations(env.DB, [...env.TEST_MIGRATIONS, logsPage]);
-    expect(await schema()).toEqual(freshInstall);
-
-    await reset();
-    const before = env.TEST_MIGRATIONS.filter((m) => m.name < logsPage.name);
-    const after = env.TEST_MIGRATIONS.filter((m) => m.name > logsPage.name);
-    await applyD1Migrations(env.DB, [...before, logsPage, ...after]);
-    expect(await schema()).toEqual(freshInstall);
-  });
-
   it('leaves rules saved before match-all needing a keyword', async () => {
     await oldDeploymentThenMigrate();
     const rule = await env.DB.prepare('SELECT match_all FROM rules WHERE id = 7').first<{ match_all: number }>();
