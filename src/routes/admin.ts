@@ -67,13 +67,7 @@ import { parsePublicReplies, serializePublicReplies } from '../replies.ts';
 import { CRON_FIRST_RUN_SECONDS, jobState } from './health.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
 import { LINK_MARKER, TEMPLATES, findTemplate, placeholderLinkIn, type RuleTemplate } from '../templates.ts';
-import {
-  clearFailures,
-  describeLock,
-  lockRemaining,
-  readThrottle,
-  recordFailure,
-} from '../throttle.ts';
+import { clearFailures, describeLock, lockRemaining, readThrottle, reserveAttempt } from '../throttle.ts';
 import type { Env, MatchMode, Rule, SessionData } from '../types.ts';
 
 type Vars = {
@@ -289,9 +283,14 @@ function loginPage(opts: { base: string; csrf: string; error?: string; lockedFor
       ${opts.error ? html`<p class="err" role="alert">${opts.error}</p>` : html``}
       ${opts.lockedFor
         ? html`<p class="muted">
-            Too many wrong passwords. Try again in ${describeLock(opts.lockedFor)}. Each further
-            attempt doubles the wait, up to an hour.
-          </p>`
+              Too many wrong passwords. Logging in is paused for ${describeLock(opts.lockedFor)}
+              on every browser, not just this one. A wrong password after that doubles the wait,
+              up to an hour.
+            </p>
+            <p class="muted">
+              Weren’t those yours? Then someone else has this page’s address. Whoever set this up can
+              give it a new one by changing <code>ADMIN_URL_SECRET</code>.
+            </p>`
         : html`
             <form method="post" action="${opts.base}/login">
               ${csrfField(opts.csrf)}
@@ -322,12 +321,18 @@ adminRoutes.post('/login', async (c) => {
   const base = c.get('adminBase');
   const csrf = c.get('session').csrf;
 
-  // Check the lock before hashing. PBKDF2 is the most expensive thing this
+  // Claim the attempt before hashing. PBKDF2 is the most expensive thing this
   // Worker does, so answering a locked-out attempt without running it also
   // stops the login form being used to burn CPU quota.
-  const remaining = lockRemaining(await readThrottle(c.env.DB), nowSeconds());
-  if (remaining > 0) {
-    return c.html(loginPage({ base, csrf, lockedFor: remaining }), 429);
+  //
+  // The lock covers the whole panel, not one browser or IP. A per-IP lock is
+  // dodged by anyone with more addresses, and a per-browser one by dropping
+  // the cookie. Its cost is that a guesser locks the operator out too, but
+  // only someone holding the secret URL can reach this form, and changing
+  // ADMIN_URL_SECRET shuts them out for good.
+  const attempt = await reserveAttempt(c.env.DB, nowSeconds());
+  if (!attempt.allowed) {
+    return c.html(loginPage({ base, csrf, lockedFor: attempt.lock }), 429);
   }
 
   const password = formOf(c).password ?? '';
@@ -336,13 +341,12 @@ adminRoutes.post('/login', async (c) => {
   const ok = hash && salt ? await verifyPassword(password, hash, salt) : false;
 
   if (!ok) {
-    const lock = await recordFailure(c.env.DB);
     return c.html(
       loginPage({
         base,
         csrf,
         error: 'Wrong password.',
-        lockedFor: lock > 0 ? lock : undefined,
+        lockedFor: attempt.lock || undefined,
       }),
       401,
     );

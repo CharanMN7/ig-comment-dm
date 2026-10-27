@@ -204,7 +204,9 @@ Your password and all your data are unaffected. Only the URL changes.
 
 ### Too many wrong passwords
 
-Five attempts are free. The sixth waits a minute, and each attempt after that doubles the wait, up to an hour. Waiting it out is the intended fix.
+Five wrong passwords are free. The sixth starts a one-minute wait, and each wrong password after a wait ends doubles the next one, up to an hour. Attempts made during a wait are refused without being checked, and don't make it longer. Waiting it out is the intended fix.
+
+The wait covers the whole panel, not one browser or network, so a phone on mobile data is locked out too. If the wrong passwords weren't yours, someone else has your admin URL. [Set a new `ADMIN_URL_SECRET`](#the-admin-page-shows-404) to shut them out, then clear the wait as below.
 
 To clear it immediately:
 

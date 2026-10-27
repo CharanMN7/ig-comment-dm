@@ -1,4 +1,3 @@
-import { nowSeconds } from './crypto.ts';
 import { systemGet, systemSet } from './db.ts';
 import { plural } from './html.ts';
 
@@ -53,29 +52,57 @@ export function lockRemaining(state: ThrottleState, now: number): number {
   return state.lockedUntil > now ? state.lockedUntil - now : 0;
 }
 
-export async function recordFailure(db: D1Database): Promise<number> {
-  // Increment and lock in SQL, not read-then-write in the Worker. Wrong
-  // passwords posted in parallel all read the same count, so five at once used
-  // to count as one, and a later, shorter lock could overwrite a longer one.
-  const row = await db
-    .prepare(
-      `INSERT INTO system (key, value) VALUES (?, '1')
-       ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1
-       RETURNING value`,
-    )
-    .bind(FAILS_KEY)
-    .first<{ value: string | number }>();
-  const lock = lockSecondsFor(toInt(String(row?.value ?? '')));
-  if (lock > 0) {
-    await db
+export type Reservation = {
+  allowed: boolean;
+  /**
+   * Seconds left on the lock: the one this attempt started, if it was the one
+   * to cross the line, or the one that refused it.
+   */
+  lock: number;
+};
+
+/**
+ * Claims one password check before the password is hashed, or refuses it.
+ *
+ * Counting a failure only after the hash meant attempts sent in parallel all
+ * read "unlocked" before any of them was counted, so none of them was held
+ * back. Here the count goes up, and the lock it earns is written, in one D1
+ * batch, which runs as a single transaction that no other request's
+ * statements can interleave with. Every attempt sees the ones that claimed a
+ * check before it, and parallel attempts get the same five free tries plus
+ * one as attempts sent one at a time.
+ *
+ * An attempt that turns out right clears the count; a wrong one has already
+ * been counted. Attempts refused while locked count for nothing, so the wait
+ * doubles only for wrong passwords tried after it ends.
+ */
+export async function reserveAttempt(db: D1Database, now: number): Promise<Reservation> {
+  const unlocked = `COALESCE((SELECT CAST(value AS INTEGER) FROM system WHERE key = ?2), 0) <= ?3`;
+  const [, claimed, , locked] = await db.batch<{ value: string | number }>([
+    db.prepare(`INSERT OR IGNORE INTO system (key, value) VALUES (?, '0')`).bind(FAILS_KEY),
+    db
       .prepare(
-        `INSERT INTO system (key, value) VALUES (?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = MAX(CAST(value AS INTEGER), CAST(excluded.value AS INTEGER))`,
+        `UPDATE system SET value = CAST(value AS INTEGER) + 1
+         WHERE key = ?1 AND ${unlocked}
+         RETURNING value`,
       )
-      .bind(LOCKED_UNTIL_KEY, String(nowSeconds() + lock))
-      .run();
-  }
-  return lock;
+      .bind(FAILS_KEY, LOCKED_UNTIL_KEY, now),
+    // lockSecondsFor in SQL, so the lock lands in the same transaction as the
+    // count that earned it. The shift is capped so it can't overflow, and the
+    // cast is there because D1 binds every JS number as a REAL.
+    db
+      .prepare(
+        `INSERT INTO system (key, value)
+         SELECT ?2, CAST(?3 + MIN(?5 << MIN(fails - ?4 - 1, 30), ?6) AS INTEGER)
+         FROM (SELECT CAST(value AS INTEGER) AS fails FROM system WHERE key = ?1)
+         WHERE fails > ?4 AND ${unlocked}
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .bind(FAILS_KEY, LOCKED_UNTIL_KEY, now, FREE_ATTEMPTS, BASE_LOCK_SECONDS, MAX_LOCK_SECONDS),
+    db.prepare(`SELECT value FROM system WHERE key = ?`).bind(LOCKED_UNTIL_KEY),
+  ]);
+  const lock = lockRemaining({ fails: 0, lockedUntil: toInt(String(locked?.results[0]?.value ?? '')) }, now);
+  return { allowed: (claimed?.results.length ?? 0) > 0, lock };
 }
 
 export async function clearFailures(db: D1Database): Promise<void> {

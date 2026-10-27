@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it, vi } from 'vitest';
 import { DAY, FROZEN_NOW_MS, NOW, ruleRows, seedAccount, systemValue } from './support/seed.ts';
-import { lockSecondsFor } from '../src/throttle.ts';
+import { FREE_ATTEMPTS, lockSecondsFor } from '../src/throttle.ts';
 import { ADMIN_PASSWORD, Browser, adminPath, csrfFrom, request, signedInAdmin } from './support/worker.ts';
 
 const ruleForm = { ig_user_id: '17841400000000001', label: 'Guide', keywords: 'guide', dm_text: 'hello' };
@@ -129,7 +129,9 @@ describe('login', () => {
 
     const sixth = await browser.post(adminPath('/login'), { csrf, password: 'wrong 6' });
     expect(sixth.status).toBe(401);
-    expect(sixth.text).toContain('Too many wrong passwords. Try again in 60 seconds.');
+    expect(sixth.text).toContain('Too many wrong passwords. Logging in is paused for 60 seconds');
+    // One lock covers the panel, so the page mustn't suggest another browser would get in.
+    expect(sixth.text).toContain('on every browser, not just this one');
     expect(await systemValue('login_locked_until')).toBe(String(NOW + 60));
 
     const locked = await browser.post(adminPath('/login'), { csrf, password: ADMIN_PASSWORD });
@@ -156,23 +158,48 @@ describe('login', () => {
     expect(await systemValue('login_fail_count')).toBe('5');
   });
 
-  it('keeps the longest lock when a burst of wrong passwords goes past the free attempts', async () => {
+  async function burst(passwords: string[]) {
     await signedInAdmin();
     const guessers = await Promise.all(
-      Array.from({ length: 9 }, async () => {
+      passwords.map(async () => {
         const browser = new Browser();
         await browser.get(adminPath('/login'));
         return browser;
       }),
     );
-    const replies = await Promise.all(guessers.map((b, i) => b.submit(adminPath('/login'), { password: `wrong ${i}` })));
-    // A guess that reads the lock before it is set gets checked and counted;
-    // one that arrives after gets 429 without being checked. Either way, the
-    // lock must match the count, not whichever write landed last.
-    const counted = replies.filter((r) => r.status === 401).length;
-    expect(counted + replies.filter((r) => r.status === 429).length).toBe(9);
-    expect(await systemValue('login_fail_count')).toBe(String(counted));
-    expect(await systemValue('login_locked_until')).toBe(String(NOW + lockSecondsFor(counted)));
+    return Promise.all(guessers.map((b, i) => b.submit(adminPath('/login'), { password: passwords[i]! })));
+  }
+
+  it('checks no more passwords than the free attempts allow when 60 arrive at once', async () => {
+    const replies = await burst(Array.from({ length: 60 }, (_, i) => `wrong ${i}`));
+    // 401 means the password was hashed and compared; 429 means it never was.
+    const checked = replies.filter((r) => r.status === 401).length;
+    expect(checked).toBe(FREE_ATTEMPTS + 1);
+    expect(replies.filter((r) => r.status === 429)).toHaveLength(60 - checked);
+    expect(await systemValue('login_fail_count')).toBe(String(FREE_ATTEMPTS + 1));
+    expect(await systemValue('login_locked_until')).toBe(String(NOW + 60));
+  });
+
+  it('refuses the right password when it arrives in a burst that already used the free attempts', async () => {
+    const replies = await burst([...Array.from({ length: 59 }, (_, i) => `wrong ${i}`), ADMIN_PASSWORD]);
+    const last = replies.at(-1)!;
+    expect(last.status).toBe(429);
+    expect(last.setCookies).toEqual([]);
+    expect(replies.filter((r) => r.status === 302)).toEqual([]);
+  });
+
+  it('locks for as long as lockSecondsFor says, up to the hour cap', async () => {
+    const { browser, csrf } = await loginPage();
+    let clock = FROZEN_NOW_MS;
+    for (let fails = 1; fails <= FREE_ATTEMPTS + 9; fails++) {
+      const res = await browser.post(adminPath('/login'), { csrf, password: `wrong ${fails}` });
+      expect(res.status).toBe(401);
+      const lock = lockSecondsFor(fails);
+      if (lock > 0) expect(await systemValue('login_locked_until')).toBe(String(clock / 1000 + lock));
+      clock += (lock + 1) * 1000;
+      vi.setSystemTime(clock);
+    }
+    expect(lockSecondsFor(FREE_ATTEMPTS + 9)).toBe(60 * 60);
   });
 
   it('doubles the lock on the next wrong password after it expires', async () => {
@@ -180,7 +207,7 @@ describe('login', () => {
     for (let i = 0; i < 6; i++) await browser.post(adminPath('/login'), { csrf, password: `wrong ${i}` });
     vi.setSystemTime(FROZEN_NOW_MS + 61_000);
     const seventh = await browser.post(adminPath('/login'), { csrf, password: 'wrong 7' });
-    expect(seventh.text).toContain('Try again in 2 minutes');
+    expect(seventh.text).toContain('Logging in is paused for 2 minutes');
     expect(await systemValue('login_locked_until')).toBe(String(NOW + 61 + 120));
   });
 });
