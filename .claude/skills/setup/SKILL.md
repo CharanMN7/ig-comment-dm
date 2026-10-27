@@ -148,7 +148,9 @@ All of this happens in the human's own admin tab. Describe it; don't drive it.
    wrong one connects, use a private window.
 2. **Rules → New rule**: a keyword such as `guide` and the DM to send. The
    [Using it](https://charanmn7.github.io/ig-comment-dm/docs/using/#write-a-rule) page
-   explains every field.
+   explains every field. Or **Start from a template** on the Rules page, which fills in the
+   form; the human replaces `PASTE-YOUR-LINK-HERE` with their own link, and the form won't
+   save until they do.
 3. **Test**: paste a sample comment and check the right rule lights up. It sends nothing.
 
 ## 8. Verify
