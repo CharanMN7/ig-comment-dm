@@ -1,0 +1,60 @@
+---
+title: Send once, log out everywhere
+date: 2026-10-27
+version: 0.4.0
+---
+
+Hardening from a review the same afternoon. A DM or public reply goes out once even when Instagram's answer gets lost, logging out ends every session, and webhooks that fail the signature check can no longer write to your database at will.
+
+<Warning>
+**Upgrading from 0.3.0**
+
+- Run `npm run update`, or `npm run deploy` after pulling by hand. Migration 009 adds the table that records extra public replies.
+- Deploying this version logs you out of the admin panel on every browser and device, once. Log in again. ([#128])
+</Warning>
+
+### Added
+
+- A rule can post its public reply when an earlier rule sent the DM, if you tick "Also post this public reply when another rule sends the DM". Up to two of these go out per comment, only after Instagram confirms the DM, and Home lists them under the send they belong to. Leave it off for any reply that says "Sent you a DM". ([#129])
+- Comments on a boosted post's ad match the rules for the original post. Before, a rule for one post ignored the comments on its boost. ([#123])
+- Home and `npm run doctor` remember when Instagram last reached the Worker, so after a quiet week they give the date instead of saying no notification has ever arrived. ([#138])
+
+### Changed
+
+- Each DM and public reply gets one attempt. If Instagram's answer is lost to a timeout, a server error or a dropped connection, the send is recorded as failed with "may have been delivered" and isn't retried, because a retry could send it twice. ([#124])
+- Comments on a paused account are skipped and logged as "account paused". Before, they waited, and resuming the account answered up to 72 hours of them at once. ([#137])
+- `npm run setup` shows the admin link and verify token as soon as it saves them. If a run stops before the end, the next one replaces both and shows the new ones, since Cloudflare can't show a saved secret again. ([#130])
+- `npm run selftest` needs `ADMIN_PASSWORD`, won't create a password on a deployed Worker unless you pass `--allow-setup`, and deletes its test account when it's done. ([#133])
+- For contributors: pull requests say whether AI was used, and the issue-assignment check runs again when a description is edited ([#122]). The slowest integration tests get more time on a busy machine ([#132]).
+
+### Fixed
+
+- `npm run setup` and `npm run doctor` stopped at "not logged in" on Windows. ([#127])
+- With two accounts connected and one needing to reconnect, the banner didn't say which. ([#131])
+- Saving a rule for an account that isn't connected gives a form error instead of a 500 page. ([#135])
+
+### Security
+
+- Logging out ends every session on every browser and device, and so does resetting the password. Before, a copied session cookie stayed valid for its full 30 days through both. ([#128])
+- A login attempt takes its place in the limit before the password is checked, so attempts sent in parallel share the same five free tries. ([#125])
+- Webhook POSTs that fail the signature check no longer write freely to D1. Unsigned ones write nothing, and a wrong signature is logged at most once a minute. Bodies over 256 KB are refused, and the "signing secret did not match" banner needs the three newest signed deliveries to fail. ([#126])
+- The Connect callback shows Instagram's error text only when your own Connect comes back, so nobody can link to a page on your Worker that shows words they chose. ([#134])
+- The project's GitHub Actions are pinned to commit SHAs, so a moved tag can't change what runs the secret scan or the docs deploy. ([#136])
+
+[#122]: https://github.com/CharanMN7/ig-comment-dm/pull/122
+[#123]: https://github.com/CharanMN7/ig-comment-dm/pull/123
+[#124]: https://github.com/CharanMN7/ig-comment-dm/pull/124
+[#125]: https://github.com/CharanMN7/ig-comment-dm/pull/125
+[#126]: https://github.com/CharanMN7/ig-comment-dm/pull/126
+[#127]: https://github.com/CharanMN7/ig-comment-dm/pull/127
+[#128]: https://github.com/CharanMN7/ig-comment-dm/pull/128
+[#129]: https://github.com/CharanMN7/ig-comment-dm/pull/129
+[#130]: https://github.com/CharanMN7/ig-comment-dm/pull/130
+[#131]: https://github.com/CharanMN7/ig-comment-dm/pull/131
+[#132]: https://github.com/CharanMN7/ig-comment-dm/pull/132
+[#133]: https://github.com/CharanMN7/ig-comment-dm/pull/133
+[#134]: https://github.com/CharanMN7/ig-comment-dm/pull/134
+[#135]: https://github.com/CharanMN7/ig-comment-dm/pull/135
+[#136]: https://github.com/CharanMN7/ig-comment-dm/pull/136
+[#137]: https://github.com/CharanMN7/ig-comment-dm/pull/137
+[#138]: https://github.com/CharanMN7/ig-comment-dm/pull/138
