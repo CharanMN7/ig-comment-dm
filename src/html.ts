@@ -20,12 +20,12 @@ header.top nav a:hover { text-decoration: underline; }
 header.top nav a[aria-current=page] { font-weight: 650; text-decoration: underline; text-underline-offset: 0.3em; }
 header.top .brand { font-weight: 650; margin-right: 0.5rem; }
 header.top form { margin-left: auto; }
-/* The name and five tap targets don't fit across a 375px phone. The name goes,
+/* The name and six tap targets don't fit across a 375px phone. The name goes,
    since the tab title and the installed app already say it, and anything still
    too wide (a larger text size) scrolls inside the nav rather than wrapping. */
 @media (max-width: 34rem) {
   header.top .brand { display: none; }
-  header.top nav { gap: 0.25rem; }
+  header.top nav { gap: 0.15rem; padding: 0.65rem 0.5rem; }
   header.top nav a { padding: 0 0.35rem; }
 }
 h1 { font-size: 1.35rem; margin: 0 0 0.75rem; }

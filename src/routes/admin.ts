@@ -735,10 +735,11 @@ adminRoutes.get('/logs', async (c) => {
     layout({
       title: 'Logs',
       base,
+      section: 'logs',
       csrf: c.get('session').csrf,
       body: html`
         <h1>Logs</h1>
-        ${query.notes.map((note) => html`<p class="err">${note}</p>`)}
+        ${query.notes.map((note) => html`<div class="note">${note}</div>`)}
         <form method="get" action="${base}/logs">
           <label for="status">Status</label>
           <select id="status" name="status">

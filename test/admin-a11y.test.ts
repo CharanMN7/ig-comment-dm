@@ -81,6 +81,7 @@ async function everyAdminPage(): Promise<Array<[string, string]>> {
     ['home on a new install', firstHome],
     ['rules, none yet', emptyRules],
     ['home', (await admin.get(adminPath('/'))).text],
+    ['logs', (await admin.get(adminPath('/logs?from=2026-02-30'))).text],
     ['rules', (await admin.get(adminPath('/rules'))).text],
     ['new rule', (await admin.get(adminPath('/rules/new'))).text],
     ['new rule from a template', (await admin.get(adminPath('/rules/new?template=guide'))).text],
@@ -131,6 +132,7 @@ describe('admin pages for assistive technology', () => {
 
   it.each([
     ['/', 'Home'],
+    ['/logs', 'Logs'],
     ['/rules', 'Rules'],
     ['/rules/new', 'Rules'],
     ['/test', 'Test'],
