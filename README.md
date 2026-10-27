@@ -199,6 +199,25 @@ Cloudflare's copy starts with fresh history, so the first run works out which ve
 
 By hand: `git remote add upstream https://github.com/CharanMN7/ig-comment-dm.git`, then `git merge -s ours --allow-unrelated-histories <the upstream commit Cloudflare copied>` once. After that, `git merge upstream/master` and `git push` work like on any fork.
 
+If you deploy from your computer instead and Cloudflare also builds your repository, push afterwards (the command offers to), or the next build from GitHub puts the old version back.
+
+</details>
+
+<details>
+<summary><b>Your copy has no <code>npm run update</code> yet?</b></summary>
+
+<br />
+
+Copies made before it existed can fetch the script once and run it directly. The update brings in the `npm run update` shortcut for next time:
+
+```bash
+git remote add upstream https://github.com/CharanMN7/ig-comment-dm.git
+git fetch upstream
+git checkout upstream/master -- scripts/update.ts scripts/update-lib.ts
+git commit -m "Add the update script"
+node --experimental-strip-types scripts/update.ts           # add --push for a Deploy button copy
+```
+
 </details>
 
 More in **[Updating your copy](https://charanmn7.github.io/ig-comment-dm/docs/updating/)**.

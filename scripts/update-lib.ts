@@ -98,13 +98,18 @@ export function onlyDatabaseIdChange(diff: string): string | null {
   return added;
 }
 
+/** The database_id line in a wrangler.toml, if it has one. */
+export function databaseIdLineIn(toml: string): string | null {
+  return toml.split('\n').find((l) => DATABASE_ID_LINE.test(l)) ?? null;
+}
+
 /**
  * Puts a set-aside database_id line back after the merge, under database_name.
  * Null when there is nowhere sensible to put it or the file already has one.
  */
 export function restoreDatabaseId(toml: string, line: string): string | null {
   const lines = toml.split('\n');
-  if (lines.some((l) => DATABASE_ID_LINE.test(l))) return null;
+  if (databaseIdLineIn(toml) !== null) return null;
   const at = lines.findIndex((l) => /^\s*database_name\s*=/.test(l));
   if (at === -1) return null;
   lines.splice(at + 1, 0, line);
@@ -136,36 +141,76 @@ export function newMigrations(nameStatus: string): string[] {
     .map(([, path]) => path);
 }
 
-/** Lines changed between two trees, from `git diff --numstat`. A binary file counts as one. */
-export function numstatTotal(numstat: string): number {
-  let total = 0;
-  for (const line of numstat.split('\n')) {
-    const [added, deleted] = line.split('\t');
-    if (added === undefined || deleted === undefined) continue;
-    total += added === '-' ? 1 : Number(added) + Number(deleted);
-  }
-  return total;
-}
-
-export interface Candidate {
-  sha: string;
-  /** Commit time, seconds. */
-  time: number;
-  /** Lines that differ from the copy's first commit, ignoring wrangler.toml. */
+export interface TreeDifference {
+  /** Lines that differ, leaving out wrangler.toml. */
   distance: number;
+  /** Lines that differ in wrangler.toml, which Cloudflare edits in a Deploy button copy. */
+  wranglerDistance: number;
+  /** Files the official commit has and the copy does not. */
+  lacking: string[];
 }
 
 /**
- * Picks the official commit a copy most likely started from: the closest match
- * to its first commit. Two commits can tie when one changed only wrangler.toml;
- * the copy was made from whichever was newest at the time, so prefer the newest
- * that is no later than the copy itself. `candidates` is newest first.
+ * Reads `git diff --numstat --summary --text --no-renames <official> <copy>`.
+ * --text matters: package-lock.json is marked -diff, and numstat would
+ * otherwise count a whole lockfile change as one line.
  */
-export function pickStartingPoint(candidates: Candidate[], copiedAt: number): Candidate | null {
+export function treeDifference(output: string): TreeDifference {
+  const diff: TreeDifference = { distance: 0, wranglerDistance: 0, lacking: [] };
+  for (const line of output.split('\n')) {
+    const deleted = line.match(/^ delete mode \d+ (.+)$/);
+    if (deleted) {
+      diff.lacking.push(deleted[1]);
+      continue;
+    }
+    const [added, removed, path] = line.split('\t');
+    if (path === undefined) continue;
+    const lines = added === '-' ? 1 : Number(added) + Number(removed);
+    if (path === 'wrangler.toml') diff.wranglerDistance += lines;
+    else diff.distance += lines;
+  }
+  return diff;
+}
+
+export interface Candidate extends TreeDifference {
+  sha: string;
+}
+
+/**
+ * Picks the official commit a copy most likely started from. Guessing too new
+ * is the dangerous direction: every official change up to the guess counts as
+ * already in the copy, so a change the copy never had is dropped without a
+ * word. Guessing too old only makes git compare a few changes it already has,
+ * which merge cleanly or show up as a clash. So:
+ *
+ * - A commit with a file the copy lacks is out, because the copy predates it
+ *   (a migration file is the case that matters most), unless every commit has
+ *   that file, which means the person deleted it.
+ * - Then the fewest differing lines, then the closest wrangler.toml, and on a
+ *   tie the oldest.
+ *
+ * `candidates` is newest first.
+ */
+export function pickStartingPoint(candidates: Candidate[]): Candidate | null {
   if (candidates.length === 0) return null;
-  const best = Math.min(...candidates.map((c) => c.distance));
-  const tied = candidates.filter((c) => c.distance === best);
-  return tied.find((c) => c.time <= copiedAt) ?? tied[tied.length - 1];
+  const everywhere = new Set(candidates[0].lacking.filter((f) => candidates.every((c) => c.lacking.includes(f))));
+  const plausible = candidates.filter((c) => c.lacking.every((f) => everywhere.has(f)));
+  const pool = plausible.length ? plausible : candidates;
+  let best = pool[0];
+  for (const c of pool.slice(1)) {
+    // Later in the list is older, so a tie moves on to it.
+    if (
+      c.distance < best.distance ||
+      (c.distance === best.distance && c.wranglerDistance <= best.wranglerDistance)
+    ) {
+      best = c;
+    }
+  }
+  return best;
+}
+
+export function isExactMatch(c: Candidate): boolean {
+  return c.distance === 0 && c.lacking.length === 0;
 }
 
 /**
@@ -227,8 +272,8 @@ export function decideMode(f: ModeFacts): { mode: Mode } | Stop {
       hint:
         'Update it by pushing to GitHub, and Workers Builds deploys it:\n' +
         '  npm run update -- --push\n' +
-        'To deploy from this computer instead:\n' +
-        '  npm run update -- --deploy',
+        'Deploying from this computer instead would leave GitHub behind, and the next build\n' +
+        'Cloudflare runs from GitHub would put the old version back.',
     };
   }
   if (f.wranglerLoggedIn === false) return notLoggedIn(ownOrigin);
@@ -279,6 +324,8 @@ export interface ConflictInput {
   goneUpstream: string[];
   mode: Mode;
   branch: string;
+  /** The person has an uncommitted database_id line, which a plain git merge refuses to work around. */
+  stashFirst: boolean;
 }
 
 /**
@@ -286,12 +333,12 @@ export interface ConflictInput {
  * has to say which of their edits clashed and give both ways out, because
  * conflict markers are not something a creator should meet unannounced.
  */
-export function conflictMessage({ files, goneUpstream, mode, branch }: ConflictInput): Stop {
+export function conflictMessage({ files, goneUpstream, mode, branch, stashFirst }: ConflictInput): Stop {
   const takeable = files.filter((f) => f !== 'wrangler.toml');
   const checkout = takeable.filter((f) => !goneUpstream.includes(f));
   const remove = takeable.filter((f) => goneUpstream.includes(f));
   const finish =
-    mode === 'push' ? `  git push origin ${shellQuote(branch)}` : '  npm install\n  npm run deploy';
+    mode === 'push' ? `  git push origin ${shellQuote(branch)}` : '  npm ci\n  npm run deploy';
   const again = mode === 'push' ? '  npm run update -- --push' : '  npm run update';
 
   const parts = [
@@ -312,15 +359,18 @@ export function conflictMessage({ files, goneUpstream, mode, branch }: ConflictI
     if (remove.length) parts.push(`  git rm ${remove.map(shellQuote).join(' ')}`);
     parts.push('  git commit -m "Use the new version of the files that clashed"', again);
   }
+  parts.push('', 'To keep your edits, merge by hand:');
+  // The set-aside database_id line is back in wrangler.toml now, and git
+  // will not merge over an uncommitted change to a file the update touches.
+  if (stashFirst) parts.push('  git stash');
   parts.push(
-    '',
-    'To keep your edits, merge by hand:',
     `  git merge upstream/${UPSTREAM_BRANCH}`,
     '  In each file above, keep the lines you want and delete the <<<<<<<, ======= and >>>>>>> lines.',
     '  git add <each file>',
     '  git commit --no-edit',
-    finish,
   );
+  if (stashFirst) parts.push('  git stash pop');
+  parts.push(finish);
   return {
     stop: 'The new version changes lines you have also changed.',
     hint: parts.join('\n'),
@@ -344,6 +394,45 @@ export function blockingFiles(gitOutput: string): string[] {
     else if (listing) listing = false;
   }
   return files;
+}
+
+export type InProgress = 'rebase' | 'bisect' | 'merge' | 'cherry-pick' | 'revert';
+
+/** Something git is in the middle of, which has to be finished or cancelled first. */
+export function inProgressMessage(kind: InProgress): Stop {
+  const ways: Record<InProgress, [string, string]> = {
+    rebase: ['A rebase is still in progress.', 'Finish it with git rebase --continue, or cancel it with git rebase --abort.'],
+    bisect: ['A git bisect is still in progress.', 'End it with git bisect reset.'],
+    merge: ['An earlier merge is still unfinished.', 'Finish it with git commit, or cancel it with git merge --abort.'],
+    'cherry-pick': ['A cherry-pick is still in progress.', 'Finish it with git cherry-pick --continue, or cancel it with git cherry-pick --abort.'],
+    revert: ['A revert is still in progress.', 'Finish it with git revert --continue, or cancel it with git revert --abort.'],
+  };
+  const [stop, how] = ways[kind];
+  return { stop, hint: `${how}\nThen run npm run update again.` };
+}
+
+/** The merge stopped without a clash, usually a commit hook or signing failing, and was backed out. */
+export function mergeStoppedMessage(gitOutput: string): Stop {
+  return {
+    stop: 'Git stopped before it finished the merge, so the update was backed out.',
+    hint:
+      'Nothing clashed. This usually means a git hook or commit signing failed. Git said:\n' +
+      `${gitOutput.trim().replace(/^/gm, '  ')}\n\n` +
+      'Your files are as they were. Fix what git says, then run npm run update again.',
+  };
+}
+
+/** `git merge --abort` itself failed, so nothing can be promised about the files. */
+export function abortFailedMessage(gitOutput: string): Stop {
+  return {
+    stop: 'The merge stopped, and git could not back it out cleanly.',
+    hint:
+      'Git said:\n' +
+      `${gitOutput.trim().replace(/^/gm, '  ')}\n\n` +
+      'Run these to put your copy back and see where it stands, then run npm run update again:\n' +
+      '  git merge --abort\n' +
+      '  git status',
+  };
 }
 
 export function blockedMessage(files: string[]): Stop {

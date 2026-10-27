@@ -31,7 +31,7 @@ What's different depends on how you got your copy.
 
 This is the setup from the [self-setup guide](/setup#3-deploy). Run `npm run update` in your copy and you're done.
 
-If you forked and want your fork on GitHub to match, run `git push` afterwards. Your deployment doesn't depend on it.
+If you forked, push afterwards so your fork on GitHub matches what's live; the command offers to. That matters most if Cloudflare also builds your fork with Workers Builds: its next build from GitHub would otherwise put the old version back.
 
 ## If you used the Deploy to Cloudflare button
 
@@ -59,6 +59,20 @@ Forget `--push` and the command notices the copy came from the button and stops 
 **Doing it by hand?** Add the remote once with `git remote add upstream https://github.com/CharanMN7/ig-comment-dm.git` and run `git fetch upstream`. Find the upstream commit Cloudflare copied, and record it once with `git merge -s ours --allow-unrelated-histories <that commit>`. From then on, `git merge upstream/master` and `git push` work like on any fork.
 </Note>
 
+## If your copy has no `npm run update` yet
+
+Copies made before the command existed don't have it. Fetch just the script from upstream once, then run it directly; the update itself brings in the `npm run update` shortcut for next time:
+
+```bash
+git remote add upstream https://github.com/CharanMN7/ig-comment-dm.git
+git fetch upstream
+git checkout upstream/master -- scripts/update.ts scripts/update-lib.ts
+git commit -m "Add the update script"
+node --experimental-strip-types scripts/update.ts
+```
+
+Add `--push` to the last line if Cloudflare deploys your copy from GitHub (the Deploy to Cloudflare button).
+
 ## If you downloaded a ZIP
 
 A ZIP has no git history, so `npm run update` stops and offers two ways forward.
@@ -85,8 +99,9 @@ Every stop leaves your copy as it was and says what to do next. The common ones:
 | You aren't logged in to Cloudflare | Run `npx wrangler login`. If Cloudflare deploys your copy from GitHub, use `--push` instead. |
 | The new version adds files that already exist in this folder | Move those files out of the folder, then run it again. |
 | Git doesn't know your name and email | Set them once with `git config --global user.name "Your Name"` and `git config --global user.email "you@example.com"`. |
+| Your copy is closest to an official version, but some files differ | It found no exact match for where your copy started, so it lists the official changes it will treat as already in your copy and asks, even with `--yes`. Answer no if your copy is missing one of them. |
 
-If it stops after merging, because installing or deploying failed, the update is already merged. Fix what the output says, then run `npm run deploy` (or `git push` with `--push`). Running `npm run update` again would only report that there's nothing new.
+If it stops after merging, because installing or deploying failed, the update is already merged. Fix what the output says, then run `npm run deploy`. With `--push`, running `npm run update -- --push` again notices GitHub is behind and offers to push.
 
 ## Database migrations
 

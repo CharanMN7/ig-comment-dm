@@ -1,21 +1,25 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
   OFFICIAL_REPO,
+  abortFailedMessage,
   blockingFiles,
   changedPaths,
   conflictMessage,
+  databaseIdLineIn,
   decideMode,
   describeHealth,
   dirtyMessage,
+  inProgressMessage,
+  isExactMatch,
   looksLikeCloudflareImport,
+  mergeStoppedMessage,
   newMigrations,
-  numstatTotal,
   onlyDatabaseIdChange,
   parseArgs,
   parseLog,
@@ -23,10 +27,11 @@ import {
   repoKey,
   restoreDatabaseId,
   sameRepo,
+  treeDifference,
   workerName,
   workerUrlFrom,
 } from './update-lib.ts';
-import type { ModeFacts } from './update-lib.ts';
+import type { Candidate, ModeFacts } from './update-lib.ts';
 
 describe('parseArgs', () => {
   it('reads every flag', () => {
@@ -101,6 +106,11 @@ describe('restoreDatabaseId', () => {
     );
   });
 
+  it('finds the line, or says there is none', () => {
+    assert.equal(databaseIdLineIn(toml), null);
+    assert.equal(databaseIdLineIn(toml.replace('binding', 'database_id = "abc"\nbinding')), 'database_id = "abc"');
+  });
+
   it('leaves a file alone that already has an id, or has nowhere to put one', () => {
     assert.equal(restoreDatabaseId(toml.replace('binding', 'database_id = "other"\nbinding'), 'database_id = "abc"'), null);
     assert.equal(restoreDatabaseId('name = "x"\n', 'database_id = "abc"'), null);
@@ -121,9 +131,12 @@ describe('reading git output', () => {
     assert.deepEqual(newMigrations(''), []);
   });
 
-  it('totals numstat lines, counting a binary file as one', () => {
-    assert.equal(numstatTotal('3\t1\tsrc/a.ts\n-\t-\tlogo.png\n0\t10\tREADME.md\n'), 15);
-    assert.equal(numstatTotal(''), 0);
+  it('totals differing lines, keeping wrangler.toml apart and listing files the copy lacks', () => {
+    const out =
+      '3\t1\tsrc/a.ts\n-\t-\tlogo.png\n0\t10\tREADME.md\n2\t0\twrangler.toml\n0\t1\tmigrations/002_note.sql\n' +
+      ' delete mode 100644 migrations/002_note.sql\n create mode 100644 src/mine.ts\n';
+    assert.deepEqual(treeDifference(out), { distance: 16, wranglerDistance: 2, lacking: ['migrations/002_note.sql'] });
+    assert.deepEqual(treeDifference(''), { distance: 0, wranglerDistance: 0, lacking: [] });
   });
 
   it('reads the files git refuses to overwrite', () => {
@@ -139,27 +152,46 @@ describe('reading git output', () => {
 });
 
 describe('pickStartingPoint', () => {
-  it('picks the closest official commit', () => {
-    const picked = pickStartingPoint(
-      [
-        { sha: 'c3', time: 300, distance: 40 },
-        { sha: 'c2', time: 200, distance: 0 },
-        { sha: 'c1', time: 100, distance: 12 },
-      ],
-      250,
-    );
-    assert.equal(picked?.sha, 'c2');
+  const c = (sha: string, distance: number, wranglerDistance = 0, lacking: string[] = []): Candidate => ({
+    sha,
+    distance,
+    wranglerDistance,
+    lacking,
   });
 
-  it('breaks a tie with the newest commit that existed when the copy was made', () => {
-    const tied = [
-      { sha: 'c3', time: 300, distance: 0 },
-      { sha: 'c2', time: 200, distance: 0 },
-      { sha: 'c1', time: 100, distance: 0 },
-    ];
-    assert.equal(pickStartingPoint(tied, 250)?.sha, 'c2');
-    assert.equal(pickStartingPoint(tied, 50)?.sha, 'c1');
-    assert.equal(pickStartingPoint([], 50), null);
+  it('picks the closest official commit', () => {
+    assert.equal(pickStartingPoint([c('c3', 40), c('c2', 0), c('c1', 12)])?.sha, 'c2');
+    assert.equal(pickStartingPoint([]), null);
+  });
+
+  it('breaks a tie toward the oldest, since guessing too new drops changes silently', () => {
+    assert.equal(pickStartingPoint([c('c3', 0), c('c2', 0), c('c1', 0)])?.sha, 'c1');
+  });
+
+  it('uses wrangler.toml to tell apart commits that differ only there', () => {
+    // c2 added a cron trigger to wrangler.toml; a copy of c1 does not have it.
+    assert.equal(pickStartingPoint([c('c3', 4, 3), c('c2', 0, 3), c('c1', 0, 0)])?.sha, 'c1');
+    // A Deploy button copy of c2: Cloudflare's database_id line is one more line.
+    assert.equal(pickStartingPoint([c('c2', 0, 1), c('c1', 0, 4)])?.sha, 'c2');
+  });
+
+  it('rules out a commit with a migration the copy lacks, even when it is closer', () => {
+    // The copy has a fix copied by hand from c3, but not c2's migration.
+    const picked = pickStartingPoint([
+      c('c4', 4, 0, ['migrations/002_note.sql']),
+      c('c3', 2, 0, ['migrations/002_note.sql']),
+      c('c2', 23, 0, ['migrations/002_note.sql']),
+      c('c1', 21),
+    ]);
+    assert.equal(picked?.sha, 'c1');
+    assert.equal(isExactMatch(picked as Candidate), false);
+  });
+
+  it('ignores a file every commit has, which means the person deleted it', () => {
+    const picked = pickStartingPoint([c('c2', 5, 0, ['docs/x.md']), c('c1', 9, 0, ['docs/x.md'])]);
+    assert.equal(picked?.sha, 'c2');
+    assert.equal(isExactMatch(picked as Candidate), false);
+    assert.equal(isExactMatch(c('c1', 0)), true);
   });
 });
 
@@ -206,7 +238,8 @@ describe('decideMode', () => {
     const decision = decideMode(facts({ ...fork, cloudflareImport: true }));
     assert.ok('stop' in decision);
     assert.match(decision.hint, /npm run update -- --push/);
-    assert.match(decision.hint, /npm run update -- --deploy/);
+    assert.doesNotMatch(decision.hint, /--deploy/);
+    assert.match(decision.hint, /put the old version back/);
     assert.deepEqual(decideMode(facts({ ...fork, cloudflareImport: true, deploy: true })), { mode: 'deploy' });
   });
 
@@ -236,32 +269,55 @@ describe('conflictMessage', () => {
       goneUpstream: [],
       mode: 'deploy',
       branch: 'master',
+      stashFirst: false,
     });
     assert.match(stop, /changes lines you have also changed/);
     assert.match(hint, /  src\/index.ts\n  README.md/);
     assert.match(hint, /Your edits to them are the cause/);
     assert.match(hint, /git checkout upstream\/master -- src\/index.ts README.md/);
     assert.match(hint, /git merge upstream\/master/);
-    assert.match(hint, /npm run deploy$/);
+    assert.match(hint, /npm ci\n  npm run deploy$/);
+    assert.doesNotMatch(hint, /git stash/);
   });
 
   it('removes files the new version deleted instead of checking them out', () => {
-    const { hint } = conflictMessage({ files: ['a.ts', 'old.ts'], goneUpstream: ['old.ts'], mode: 'deploy', branch: 'master' });
+    const { hint } = conflictMessage({ files: ['a.ts', 'old.ts'], goneUpstream: ['old.ts'], mode: 'deploy', branch: 'master', stashFirst: false });
     assert.match(hint, /git checkout upstream\/master -- a.ts\n/);
     assert.match(hint, /git rm old.ts/);
   });
 
   it('never offers to replace wrangler.toml wholesale, and finishes a push copy with a push', () => {
-    const { hint } = conflictMessage({ files: ['wrangler.toml'], goneUpstream: [], mode: 'push', branch: 'main' });
+    const { hint } = conflictMessage({ files: ['wrangler.toml'], goneUpstream: [], mode: 'push', branch: 'main', stashFirst: false });
     assert.match(hint, /keep your own name and database_id lines/);
     assert.doesNotMatch(hint, /git checkout upstream/);
     assert.match(hint, /git push origin main$/);
-    const pushCopy = conflictMessage({ files: ['src/a.ts'], goneUpstream: [], mode: 'push', branch: 'main' });
+    const pushCopy = conflictMessage({ files: ['src/a.ts'], goneUpstream: [], mode: 'push', branch: 'my branch', stashFirst: false });
     assert.match(pushCopy.hint, /clashed"\n  npm run update -- --push\n/);
+    assert.match(pushCopy.hint, /git push origin 'my branch'$/);
+  });
+
+  it('sets an uncommitted database_id aside around a merge by hand', () => {
+    const { hint } = conflictMessage({ files: ['src/a.ts'], goneUpstream: [], mode: 'deploy', branch: 'master', stashFirst: true });
+    assert.match(hint, /  git stash\n  git merge upstream\/master\n[\s\S]*git commit --no-edit\n  git stash pop\n  npm ci\n  npm run deploy$/);
   });
 });
 
 describe('messages and readings', () => {
+  it('says how to finish or cancel what git is in the middle of, not to switch branches', () => {
+    assert.match(inProgressMessage('rebase').hint, /git rebase --abort/);
+    assert.match(inProgressMessage('bisect').hint, /git bisect reset/);
+    assert.doesNotMatch(inProgressMessage('rebase').hint, /checkout/);
+  });
+
+  it('does not blame the person for a merge a hook stopped, or promise anything when abort fails', () => {
+    const stopped = mergeStoppedMessage('error: gpg failed to sign the data\n');
+    assert.match(stopped.hint, /Nothing clashed/);
+    assert.match(stopped.hint, /gpg failed/);
+    const failed = abortFailedMessage('fatal: could not reset index\n');
+    assert.doesNotMatch(failed.hint, /exactly as they were/);
+    assert.match(failed.hint, /git merge --abort\n  git status/);
+  });
+
   it('quotes a path with spaces in the command to throw edits away', () => {
     assert.match(dirtyMessage(['my notes.md', 'src/a.ts']).hint, /git checkout -- 'my notes.md' src\/a.ts/);
   });
@@ -309,6 +365,10 @@ migrations_dir = "migrations"
 
 const INDEX_V1 = 'export const greeting = "hello";\n\nexport const a = 1;\nexport const b = 2;\nexport const c = 3;\n';
 
+const DB_NAME = 'database_name = "ig-comment-dm"\n';
+const withDatabaseId = (toml: string, id: string): string => toml.replace(DB_NAME, `${DB_NAME}database_id = "${id}"\n`);
+const BACKUP = join('.git', 'ig-comment-dm-update-wrangler.toml');
+
 describe('npm run update, end to end', () => {
   let dir = '';
   let env: Record<string, string> = {};
@@ -321,15 +381,20 @@ describe('npm run update, end to end', () => {
     return res.stdout.trim();
   };
 
-  const update = (cwd: string, ...args: string[]): { code: number; out: string } => {
+  const updateWith = (
+    opts: { env?: Record<string, string>; input?: string },
+    cwd: string,
+    ...args: string[]
+  ): { code: number; out: string } => {
     const res = spawnSync(process.execPath, ['--experimental-strip-types', join(cwd, 'scripts/update.ts'), ...args], {
       cwd,
-      env,
+      env: { ...env, ...opts.env },
       encoding: 'utf8',
-      input: '',
+      input: opts.input ?? '',
     });
     return { code: res.status ?? 1, out: `${res.stdout}${res.stderr}` };
   };
+  const update = (cwd: string, ...args: string[]) => updateWith({}, cwd, ...args);
 
   const write = (path: string, text: string): void => {
     mkdirSync(dirname(path), { recursive: true });
@@ -337,6 +402,25 @@ describe('npm run update, end to end', () => {
   };
 
   const head = (cwd: string): string => sh(cwd, ['rev-parse', 'HEAD']);
+
+  // What the button leaves in someone's GitHub: the first version's files in a
+  // single commit by Cloudflare's bot, with history of its own and the new
+  // database id written into wrangler.toml. Returns a clone of it.
+  const buttonCopy = (): { local: string; github: string } => {
+    const made = join(dir, `button-${n}`);
+    mkdirSync(made);
+    sh(made, ['init', '-q', '-b', 'main']);
+    sh(made, ['fetch', '-q', join(dir, 'v1.git'), 'master']);
+    sh(made, ['read-tree', '--reset', '-u', 'FETCH_HEAD']);
+    write(join(made, 'wrangler.toml'), withDatabaseId(WRANGLER_V1, 'c0ffee00'));
+    sh(made, ['add', '.']);
+    sh(made, ['commit', '-q', '--author', 'cloudflare[bot] <bot@cloudflare.com>', '-m', 'source repo import']);
+    const github = join(dir, `button-${n}.git`);
+    sh(dir, ['clone', '-q', '--bare', made, github]);
+    const local = join(dir, `button-clone-${n}`);
+    sh(dir, ['clone', '-q', github, local]);
+    return { local, github };
+  };
 
   before(() => {
     dir = mkdtempSync(join(tmpdir(), 'ig-update-'));
@@ -493,24 +577,7 @@ describe('npm run update, end to end', () => {
   });
 
   it('updates a Deploy to Cloudflare copy with --push, after working out which version it started from', () => {
-    // What the button leaves in someone's GitHub: the first version's files in
-    // a single commit by Cloudflare's bot, with history of its own and the new
-    // database id written into wrangler.toml.
-    const made = join(dir, `button-${n}`);
-    mkdirSync(made);
-    sh(made, ['init', '-q', '-b', 'main']);
-    sh(made, ['fetch', '-q', join(dir, 'v1.git'), 'master']);
-    sh(made, ['read-tree', '--reset', '-u', 'FETCH_HEAD']);
-    write(
-      join(made, 'wrangler.toml'),
-      WRANGLER_V1.replace('database_name = "ig-comment-dm"\n', 'database_name = "ig-comment-dm"\ndatabase_id = "c0ffee00"\n'),
-    );
-    sh(made, ['add', '.']);
-    sh(made, ['-c', 'user.name=x', 'commit', '-q', '--author', 'cloudflare[bot] <bot@cloudflare.com>', '-m', 'source repo import']);
-    const github = join(dir, `button-${n}.git`);
-    sh(dir, ['clone', '-q', '--bare', made, github]);
-    const local = join(dir, `button-clone-${n}`);
-    sh(dir, ['clone', '-q', github, local]);
+    const { local, github } = buttonCopy();
     const imported = head(local);
 
     const guessed = update(local, '--yes');
@@ -540,6 +607,153 @@ describe('npm run update, end to end', () => {
     const again = update(local, '--yes', '--push');
     assert.equal(again.code, 0, again.out);
     assert.match(again.out, /already has everything/);
+  });
+
+  it('puts back a database_id line that an interrupted update had set aside', () => {
+    write(join(copy, BACKUP), withDatabaseId(WRANGLER_V1, 'feedf00d'));
+    const { code, out } = update(copy, '--yes');
+    assert.equal(code, 0, out);
+    assert.match(out, /Put back the database_id line an interrupted update had set aside/);
+    assert.equal(head(copy), v2);
+    assert.match(readFileSync(join(copy, 'wrangler.toml'), 'utf8'), /database_name = "ig-comment-dm"\ndatabase_id = "feedf00d"\n/);
+    assert.equal(existsSync(join(copy, BACKUP)), false);
+  });
+
+  it('keeps the database_id line safe when the update deletes wrangler.toml', () => {
+    const moved = join(dir, `moved-${n}`);
+    sh(dir, ['clone', '-q', join(dir, 'v1.git'), moved]);
+    sh(moved, ['rm', '-q', 'wrangler.toml']);
+    write(join(moved, 'wrangler.jsonc'), '{ "name": "ig-comment-dm" }\n');
+    sh(moved, ['add', '.']);
+    sh(moved, ['commit', '-q', '-m', 'Move to wrangler.jsonc.']);
+    sh(dir, ['clone', '-q', '--bare', moved, `moved-${n}.git`]);
+    write(join(copy, 'wrangler.toml'), withDatabaseId(WRANGLER_V1, 'c0ffee00'));
+
+    const { code, out } = updateWith({ env: { UPDATE_UPSTREAM_URL: join(dir, `moved-${n}.git`) } }, copy, '--yes');
+    assert.equal(code, 0, out);
+    assert.match(out, /has no wrangler\.toml/);
+    assert.match(out, /database_id = "c0ffee00"/);
+    assert.equal(existsSync(join(copy, 'wrangler.toml')), false);
+    assert.match(readFileSync(join(copy, BACKUP), 'utf8'), /database_id = "c0ffee00"/);
+  });
+
+  it('offers to push again after a push that failed, instead of saying there is nothing to do', () => {
+    const { local, github } = buttonCopy();
+    const before = sh(github, ['rev-parse', 'main']);
+    const hook = join(github, 'hooks', 'pre-receive');
+    write(hook, '#!/bin/sh\necho "rejected for the test" >&2\nexit 1\n');
+    chmodSync(hook, 0o755);
+
+    const failed = update(local, '--yes', '--push');
+    assert.equal(failed.code, 1, failed.out);
+    assert.match(failed.out, /pushing it to GitHub failed/);
+    assert.match(failed.out, /npm run update -- --push again, which offers to push/);
+    sh(local, ['merge-base', '--is-ancestor', v2, 'HEAD']);
+    assert.equal(sh(github, ['rev-parse', 'main']), before);
+    rmSync(hook);
+
+    const dry = update(local, '--dry-run', '--push');
+    assert.equal(dry.code, 0, dry.out);
+    assert.match(dry.out, /GitHub does not have it yet/);
+    assert.equal(sh(github, ['rev-parse', 'main']), before);
+
+    const again = update(local, '--yes', '--push');
+    assert.equal(again.code, 0, again.out);
+    assert.match(again.out, /GitHub does not have it yet/);
+    assert.match(again.out, /Pushed main/);
+    assert.equal(sh(github, ['rev-parse', 'main']), head(local));
+  });
+
+  describe('a copy with no history in common, such as a ZIP committed later', () => {
+    const FIX_V1 = 'export const x = 1;\n';
+    const FIX_V2 = Array.from({ length: 20 }, (_, i) => `export const f${i + 1} = 1;\n`).join('');
+    const index = (a: number, note: boolean): string =>
+      `export const a = ${a};\nexport const b = 2;\n${note ? 'export const note = "note";\n' : ''}`;
+    let graft = '';
+    const tags: Record<string, string> = {};
+
+    // An official history where the dangerous guesses are available: a change
+    // made only in wrangler.toml, and a migration that comes before a fix
+    // someone might copy across by hand.
+    before(() => {
+      graft = join(dir, 'graft-work');
+      mkdirSync(join(graft, 'scripts'), { recursive: true });
+      sh(graft, ['init', '-q', '-b', 'master']);
+      for (const name of ['update.ts', 'update-lib.ts']) copyFileSync(join(SCRIPTS, name), join(graft, 'scripts', name));
+      write(join(graft, 'package.json'), '{ "name": "fixture", "private": true, "type": "module" }\n');
+      write(join(graft, 'wrangler.toml'), WRANGLER_V1);
+      write(join(graft, 'migrations/001_init.sql'), 'CREATE TABLE IF NOT EXISTS rules (id INTEGER PRIMARY KEY);\n');
+      write(join(graft, 'src/index.ts'), index(1, false));
+      write(join(graft, 'src/fix.ts'), FIX_V1);
+      const commit = (tag: string, message: string): void => {
+        sh(graft, ['add', '.']);
+        sh(graft, ['commit', '-q', '-m', message]);
+        sh(graft, ['tag', tag]);
+        tags[tag] = head(graft);
+      };
+      commit('g1', 'First version.');
+      write(join(graft, 'wrangler.toml'), `${WRANGLER_V1}\n[triggers]\ncrons = ["*/5 * * * *"]\n`);
+      commit('g2', 'Add the 5-minute poll cron.');
+      write(join(graft, 'migrations/002_note.sql'), 'ALTER TABLE rules ADD COLUMN note TEXT;\n');
+      write(join(graft, 'src/index.ts'), index(1, true));
+      commit('g3', 'Add a note column.');
+      write(join(graft, 'src/fix.ts'), FIX_V2);
+      commit('g4', 'Fix the bug in fix.ts.');
+      write(join(graft, 'src/index.ts'), index(2, true));
+      commit('g5', 'Later change.');
+      sh(dir, ['clone', '-q', '--bare', graft, 'graft.git']);
+    });
+
+    const opts = (input = ''): { env: Record<string, string>; input: string } => ({
+      env: { UPDATE_UPSTREAM_URL: join(dir, 'graft.git') },
+      input,
+    });
+
+    // The files of one official version, committed fresh with `git init`.
+    const zipCopy = (tag: string, edit?: (path: string) => void): string => {
+      const zip = join(dir, `zip-${tag}-${n}`);
+      mkdirSync(zip);
+      sh(zip, ['init', '-q', '-b', 'master']);
+      sh(zip, ['fetch', '-q', graft, `refs/tags/${tag}`]);
+      sh(zip, ['read-tree', '--reset', '-u', 'FETCH_HEAD']);
+      edit?.(zip);
+      sh(zip, ['add', '.']);
+      sh(zip, ['commit', '-q', '-m', 'My copy']);
+      return zip;
+    };
+
+    it('picks the oldest exact match, so a change made only in wrangler.toml still arrives', () => {
+      const zip = zipCopy('g1');
+      const { code, out } = updateWith(opts(), zip, '--yes');
+      assert.equal(code, 0, out);
+      assert.match(out, new RegExp(`started from official version ${tags.g1.slice(0, 7)}`));
+      assert.match(out, /4 new changes since your copy/);
+      assert.match(out, /Add the 5-minute poll cron\./);
+      assert.match(readFileSync(join(zip, 'wrangler.toml'), 'utf8'), /\[triggers\]\ncrons = /);
+      assert.equal(readFileSync(join(zip, 'src/index.ts'), 'utf8'), index(2, true));
+    });
+
+    it('asks before trusting an inexact match, and never treats a missing migration as applied', () => {
+      // Someone copied the fix from g4 by hand into a download of g2.
+      const zip = zipCopy('g2', (path) => write(join(path, 'src/fix.ts'), FIX_V2));
+      const mine = head(zip);
+
+      const declined = updateWith(opts(), zip, '--yes');
+      assert.equal(declined.code, 0, declined.out);
+      assert.match(declined.out, new RegExp(`closest to official version ${tags.g2.slice(0, 7)}`));
+      assert.match(declined.out, /    src\/fix\.ts\n/);
+      assert.match(declined.out, /count as already in your copy:\n\s+\w+ Add the 5-minute poll cron\.\n\s+\w+ First version\./);
+      assert.match(declined.out, /This update changes your database: 1 new migration\n\s+migrations\/002_note\.sql/);
+      assert.match(declined.out, /Asking even with --yes/);
+      assert.match(declined.out, /Nothing changed/);
+      assert.equal(head(zip), mine);
+
+      const accepted = updateWith(opts('y\n'), zip, '--yes');
+      assert.equal(accepted.code, 0, accepted.out);
+      assert.equal(existsSync(join(zip, 'migrations/002_note.sql')), true);
+      assert.equal(readFileSync(join(zip, 'src/fix.ts'), 'utf8'), FIX_V2);
+      assert.equal(readFileSync(join(zip, 'src/index.ts'), 'utf8'), index(2, true));
+    });
   });
 
   it('explains the options in a folder that is not a git repository', () => {
