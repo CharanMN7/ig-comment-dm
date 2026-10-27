@@ -97,10 +97,10 @@ npx wrangler login
 npm run setup
 ```
 
-Tell them what to expect before they start. Wrangler may ask to create the D1 database on
-the first deploy: say yes. The script asks for the three Meta values from step 2, pasted
-straight from Meta's page. At the end it prints the values to paste into Meta and the admin
-URL, once. A password manager or private note should be open for those.
+Tell them what to expect before they start. The first deploy creates the D1 database from
+the name in `wrangler.toml`, without asking. The script asks for the three Meta values from
+step 2, pasted straight from Meta's page. At the end it prints the values to paste into Meta
+and the admin URL, once. A password manager or private note should be open for those.
 
 Ask them for the **Worker URL** only (`https://ig-comment-dm.<name>.workers.dev`). It's
 public. If the script stops, ask what the last lines said, without secrets, and check them
@@ -109,9 +109,6 @@ and the guide's "Deploying by hand" section.
 
 Then the human opens the admin URL in their own browser and creates a password on the first
 visit. There's no reset email. Don't open the admin URL yourself, and don't read it from a tab.
-
-If they forked the repo: Wrangler has now written a `database_id` into `wrangler.toml`. Keep
-it locally and never commit it.
 
 ## 5. Point Meta at the Worker (guide Part 4)
 

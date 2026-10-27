@@ -98,5 +98,6 @@ There's no linter, so these are kept by hand:
 ## Never commit
 
 `.dev.vars`, any `.env` file, a token, a screenshot of an admin URL, or a real
-`database_id`. Wrangler writes the database ID into `wrangler.toml` after a first real
-deploy; leave that line out of every commit. Add files by path, never with `git add -A`.
+`database_id`. `wrangler.toml` has none on purpose: Wrangler finds the database by its
+name and doesn't write the ID back. If one gets added locally, leave that line out of every
+commit. Add files by path, never with `git add -A`.
