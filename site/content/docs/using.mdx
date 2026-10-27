@@ -18,16 +18,19 @@ Connecting needs you to be logged in to the admin panel; the Connect page refuse
 
 **Rules → New rule.**
 
+The form asks for the essentials first: a name, the keywords, and the message. Everything else has a sensible default.
+
 | Field | What to put |
 |---|---|
-| **Name** | For you only, e.g. `Free guide`. |
+| **Rule name** | For you only, e.g. `Free guide`. |
 | **Keywords** | One per line, **at least 3 characters** each, counted after emoji and punctuation are dropped. `AI` would fire on "again" and "email", so the form rejects it. Chinese and Japanese need 2, so `指南` works. |
-| **How to look for them** | **Whole words only** (the default): `guide` matches "Guide please!" but not "guides". **Anywhere in the comment**: also catches `#launch2026` and "guides", but `art` would match "start". |
-| **Exclusions** | Optional, one per line. A comment containing any of them is skipped by this rule even when a keyword matches: `how much`, `already have it`, `not interested`. |
-| **The DM** | Up to 1,000 characters. Put everything they need in this one message. `{username}` puts in their Instagram name. |
-| **Public reply** | Optional. Posted under their comment, and only once the DM has gone through. `{username}` works here too. Open **Add variations** to write it a few ways, and each comment gets one at random. |
+| **Reply to every comment on this post** | Instead of keywords, for giveaways and waitlists. Everyone who comments on that one post gets the DM, and the keyword fields disappear. It needs a specific post: on all posts it would message everyone who ever comments, so it's refused. |
+| **Exclusions and matching** | Folded away, since most rules don't need it. It opens by itself on a rule that uses either setting. |
+| ↳ **How to look for keywords** | **Whole words only** (the default): `guide` matches "Guide please!" but not "guides". **Anywhere in the comment**: also catches `#launch2026` and "guides", but `art` would match "start". |
+| ↳ **Exclusions** | Optional, one per line. A comment containing any of them is skipped by this rule even when a keyword matches: `how much`, `already have it`, `not interested`. |
 | **Which posts** | **All posts and reels** (which includes reels), or one post picked from the dropdown. |
-| **Reply to every comment on this post** | For giveaways and waitlists. Everyone who comments on that one post gets the DM, no keyword needed, and the keyword fields disappear. It needs a specific post: on all posts it would message everyone who ever comments, so it's refused. |
+| **Private message** | The DM. Up to 1,000 characters. Put everything they need in this one message. `{username}` puts in their Instagram name. |
+| **Public reply** | Optional. Posted under their comment, and only once the DM has gone through. `{username}` works here too. Open **Add variations** to write it a few ways, and each comment gets one at random. |
 
 <Tip>
 **Put everything in that one message.** Instagram allows exactly one private reply per comment, ever. You don't get a follow-up unless they reply to you first.
