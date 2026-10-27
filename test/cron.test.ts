@@ -400,7 +400,7 @@ describe('the daily token refresh', () => {
     expect(await accountRow()).toMatchObject({ active: 0, token_expires_at: NOW + FAKE_EXPIRES_IN, last_refreshed_at: NOW });
   });
 
-  it('marks sends the Worker never finished as failed, without sending them again', async () => {
+  it('marks sends the Worker never finished as possibly delivered, without sending them again', async () => {
     await seedAccount();
     await seedRule();
     const claim = (comment_id: string, dm_status: string, sent_at: number) =>
@@ -416,8 +416,8 @@ describe('the daily token refresh', () => {
     expect((await sentRows()).map((r) => [r.comment_id, r.dm_status, r.error, r.sent_at])).toEqual([
       ['c-in-flight', 'pending', null, NOW - 60],
       ['c-sent', 'ok', null, NOW - 2 * DAY],
-      ['c-stuck', 'failed', stopped, NOW - 2 * DAY],
-      ['c-stuck-recently', 'failed', stopped, NOW - 16 * 60],
+      ['c-stuck', 'unsure', stopped, NOW - 2 * DAY],
+      ['c-stuck-recently', 'unsure', stopped, NOW - 16 * 60],
     ]);
     expect(meta.callsTo('POST', '/:id/messages')).toEqual([]);
     expect(meta.callsTo('POST', '/:id/replies')).toEqual([]);

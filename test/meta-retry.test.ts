@@ -67,17 +67,17 @@ describe('a DM or public reply gets one attempt', () => {
     meta.on('POST', '/:id/messages', { status: 500, json: { error: { message: 'An unknown error occurred', code: 1 } } });
     const row = await deliverMatchingComment();
     expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
-    expect(row).toMatchObject({ dm_status: 'failed' });
+    expect(row).toMatchObject({ dm_status: 'unsure' });
     expect(row?.error).toMatch(
       /^DM: Instagram answered with a server error \(500\), so it may have been delivered\. It wasn't sent again, so it can't arrive twice\. \(.*An unknown error occurred.*\)$/,
     );
   });
 
-  it('records a 429 as Instagram turning the DM down, without sending again', async () => {
+  it('queues a DM Instagram turned down with a 429 to try later, never in the same breath', async () => {
     meta.on('POST', '/:id/messages', { status: 429, json: { error: { message: 'Application request limit reached', code: 4 } } });
     const row = await deliverMatchingComment();
     expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
-    expect(row).toMatchObject({ dm_status: 'failed' });
+    expect(row).toMatchObject({ dm_status: 'retry', attempts: 1, next_attempt_at: NOW + 60 });
     expect(row?.error).toMatch(/^DM: \{.*Application request limit reached/);
   });
 
@@ -95,7 +95,7 @@ describe('a DM or public reply gets one attempt', () => {
     meta.on('POST', '/:id/messages', { networkError: true });
     const row = await deliverMatchingComment();
     expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
-    expect(row).toMatchObject({ dm_status: 'failed' });
+    expect(row).toMatchObject({ dm_status: 'unsure' });
     expect(row?.error).toMatch(/^DM: the connection to Instagram failed, so it may have been delivered\. .+ \(.+\)$/);
   });
 
@@ -103,7 +103,7 @@ describe('a DM or public reply gets one attempt', () => {
     meta.on('POST', '/:id/messages', { cutOff: true });
     const row = await deliverMatchingComment();
     expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
-    expect(row).toMatchObject({ dm_status: 'failed' });
+    expect(row).toMatchObject({ dm_status: 'unsure' });
     expect(row?.error).toMatch(/^DM: Instagram's answer was cut off before it could be read, so it may have been delivered\./);
   });
 
@@ -140,7 +140,7 @@ describe('a DM or public reply gets one attempt', () => {
       const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => AbortSignal.abort(timedOut()));
       const row = await deliverMatchingComment();
       expect(timeout.mock.calls).toEqual([[10_000]]);
-      expect(row).toMatchObject({ dm_status: 'failed' });
+      expect(row).toMatchObject({ dm_status: 'unsure' });
       expect(row?.error).toBe(
         "DM: Instagram didn't answer within 10 seconds, so it may have been delivered. It wasn't sent again, so it can't arrive twice. (The operation was aborted due to timeout)",
       );
@@ -283,7 +283,7 @@ describe('the time a webhook delivery is allowed', () => {
     expect(attempts.map((a) => a.ms)).toEqual([10_000, 10_000, 5_000]);
     for (const id of ['batch-1', 'batch-2', 'batch-3']) {
       const row = await sentRow(id);
-      expect(row).toMatchObject({ dm_status: 'failed' });
+      expect(row).toMatchObject({ dm_status: 'unsure' });
       expect(row!.sent_at * 1000).toBeLessThanOrEqual(deadline);
     }
     expect((await sentRow('batch-3'))?.error).toMatch(/^DM: Instagram didn't answer within 5 seconds, so it may have been delivered\./);

@@ -195,5 +195,7 @@ export function statusWords(dm: string): string {
   if (dm === 'skipped') return 'Skipped';
   if (dm === 'pending') return 'In progress';
   if (dm === 'queued') return 'Queued';
+  if (dm === 'retry') return 'Retrying';
+  if (dm === 'unsure') return 'May have been delivered';
   return dm;
 }

@@ -27,6 +27,7 @@ import {
   META_TIMEOUT_MS,
   attemptTimeoutMs,
   authorizeUrl,
+  classifyRefusal,
   oauthRedirectUri,
 } from '../src/meta.ts';
 import { STALE_PENDING_SECONDS } from '../src/cron.ts';
@@ -40,7 +41,7 @@ import {
   planOtherRules,
 } from '../src/other-replies.ts';
 import { WEBHOOK_SEND_BUDGET_MS, parseWebhookPayload } from '../src/process.ts';
-import { DRAIN_BUDGET_MS, drainRatePerMinute, minuteOf } from '../src/queue.ts';
+import { DRAIN_BUDGET_MS, MAX_ATTEMPTS, RETRY_BACKOFF_SECONDS, drainRatePerMinute, minuteOf } from '../src/queue.ts';
 import { POLL_BUDGET_MS } from '../src/reconcile.ts';
 import { adminStep, isLocalTarget } from './selftest-lib.ts';
 import {
@@ -1190,6 +1191,39 @@ describe('stale pending sends', () => {
   it('waits far longer than the slowest possible send before calling a pending row abandoned', () => {
     const slowestSendMs = 2 * META_SEND_MAX_MS;
     assert.ok(STALE_PENDING_SECONDS * 1000 >= 10 * slowestSendMs, `${STALE_PENDING_SECONDS}s vs ${slowestSendMs}ms`);
+  });
+});
+
+describe('classifyRefusal', () => {
+  const body = (code: number, subcode?: number) => JSON.stringify({ error: { message: 'x', code, ...(subcode ? { error_subcode: subcode } : {}) } });
+
+  it('waits out rate limits, by status or by code, the business-use-case ones included', () => {
+    assert.equal(classifyRefusal(429, '{}'), 'rate');
+    for (const code of [4, 17, 32, 613, 80001, 80002, 80006]) assert.equal(classifyRefusal(400, body(code)), 'rate', String(code));
+  });
+
+  it('tries Instagram’s temporary errors again, and holds a dead token for reconnecting', () => {
+    assert.equal(classifyRefusal(400, body(2)), 'transient');
+    assert.equal(classifyRefusal(400, body(2, 2018344)), 'transient');
+    assert.equal(classifyRefusal(400, JSON.stringify({ error: { code: 1, is_transient: true } })), 'transient');
+    assert.equal(classifyRefusal(400, JSON.stringify({ error: { code: 100, is_transient: false } })), 'final');
+    assert.equal(classifyRefusal(400, body(190)), 'token');
+  });
+
+  it('never tries again when the refusal proves the comment can’t get a reply, whatever else it says', () => {
+    assert.equal(classifyRefusal(400, body(100, 2534025)), 'final');
+    assert.equal(classifyRefusal(429, body(4, 2534025)), 'final');
+    assert.equal(classifyRefusal(400, JSON.stringify({ error: { code: 10, error_subcode: 2534022, is_transient: true } })), 'final');
+    assert.equal(classifyRefusal(400, body(10, 2534022)), 'final');
+    assert.equal(classifyRefusal(400, body(551)), 'final');
+    assert.equal(classifyRefusal(403, body(200, 1545041)), 'final');
+    assert.equal(classifyRefusal(400, body(100)), 'final');
+    assert.equal(classifyRefusal(400, 'not json'), 'final');
+  });
+
+  it('spaces retries 1, 5 and 20 minutes apart, with one backoff for each try before the last', () => {
+    assert.deepEqual(RETRY_BACKOFF_SECONDS, [60, 300, 1200]);
+    assert.equal(RETRY_BACKOFF_SECONDS.length, MAX_ATTEMPTS - 1);
   });
 });
 

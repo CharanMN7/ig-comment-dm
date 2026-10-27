@@ -5,6 +5,7 @@ import {
   CRON_STALE_SECONDS,
   DM_TEXT_MAX,
   PUBLIC_REPLY_MAX,
+  SENDS_PER_MINUTE,
   decryptAesGcm,
   encryptAesGcm,
   hashPassword,
@@ -29,12 +30,15 @@ import {
   getSent,
   healthSnapshot,
   insertRule,
+  type QueueOverview,
+  queueOverview,
   latestSignedWebhookStatuses,
   listAccounts,
   listRules,
   purgeAccount,
   readTotalsSnapshot,
   recentSent,
+  retryUnsureSend,
   recentWebhookEvents,
   sendTotals,
   sendTotalsByAccount,
@@ -66,6 +70,7 @@ import {
 } from '../placeholders.ts';
 import { EXTRA_PUBLIC_REPLY_CAP, otherRuleSkipReason, planOtherRules } from '../other-replies.ts';
 import { chooseRule } from '../process.ts';
+import { EXPIRED_ERROR, MAX_ATTEMPTS, drainRatePerMinute } from '../queue.ts';
 import { parsePublicReplies, serializePublicReplies } from '../replies.ts';
 import { CRON_FIRST_RUN_SECONDS, jobState } from './health.ts';
 import {
@@ -79,7 +84,7 @@ import {
 } from '../session.ts';
 import { LINK_MARKER, TEMPLATES, findTemplate, placeholderLinkIn, type RuleTemplate } from '../templates.ts';
 import { clearFailures, describeLock, lockRemaining, readThrottle, reserveAttempt } from '../throttle.ts';
-import type { Env, ExtraReply, MatchMode, Rule, SessionData } from '../types.ts';
+import type { Account, Env, ExtraReply, MatchMode, Rule, Sent, SessionData } from '../types.ts';
 
 type Vars = {
   adminBase: string;
@@ -189,6 +194,8 @@ const DONE = new Map<string, (base: string) => HtmlEscapedString | Promise<HtmlE
   ['account-paused', () => html`Account paused. None of its rules reply until you resume it.`],
   ['account-resumed', () => html`Account resumed. Its rules reply to new comments again.`],
   ['checked', () => html`Connections checked. Anything that needs you is listed at the top.`],
+  ['send-requeued', () => html`Queued to send again. It goes out within a minute or two.`],
+  ['send-unchanged', () => html`That send had already moved on, so nothing changed.`],
 ]);
 
 function redirectDone(c: AdminContext, path: string, done: string) {
@@ -489,6 +496,86 @@ function extraReplyLine(e: ExtraReply & { rule_label: string | null }, now: numb
   return html`<div class="muted">${rule} ${e.error ?? 'public reply not posted'}.</div>`;
 }
 
+/** The Detail cell of one row in Last 20 sends. */
+function sendDetail(s: Sent, base: string, csrf: string) {
+  const detail = s.error ? html`<div class="muted detail">${s.error}</div>` : html``;
+  // A queued row carries an error only when a dead token sent it back, and the error says so.
+  if (s.dm_status === 'queued') return s.error ? detail : html`<div class="muted">Waiting its turn under Instagram’s hourly limit.</div>`;
+  if (s.dm_status === 'retry') {
+    const next = s.next_attempt_at != null ? html` at ${fmtWhen(s.next_attempt_at)}` : html``;
+    return html`<div class="muted">Instagram turned it down for now. Try ${String(s.attempts + 1)} of ${String(MAX_ATTEMPTS)}${next}.</div>${detail}`;
+  }
+  if (s.dm_status === 'unsure') {
+    // Sending again could reach them twice, so it's the operator's call, made
+    // after looking, never the Worker's.
+    return html`<span class="err">Instagram didn’t confirm it.</span>${detail}
+      <form method="post" action="${base}/sends/${encodeURIComponent(s.comment_id)}/retry" class="row">
+        ${csrfField(csrf)}
+        <button class="secondary" type="submit">Send again</button>
+        <span class="muted">Only if you’ve checked it didn’t arrive.</span>
+      </form>`;
+  }
+  if (s.dm_status === 'failed' && s.error) return html`<span class="err">Send failed.</span>${detail}`;
+  return s.error ? html`<span class="muted detail">${s.error}</span>` : html``;
+}
+
+/**
+ * What's waiting to go out, per account, and how much of Instagram's hourly
+ * limit the last hour used. Shown only while something waits, Instagram has
+ * paused an account, or DMs went out in the last hour.
+ */
+function sendingCard(queue: QueueOverview[], accounts: Account[], now: number) {
+  const rows = queue.filter((q) => q.queued + q.retrying > 0 || q.paused_until > now || q.calls_last_hour > 0);
+  if (rows.length === 0) return html``;
+  // One Worker run a minute sends for every account, so its rate per account
+  // falls as more of them have DMs waiting.
+  const perMinute = Math.max(1, drainRatePerMinute(rows.filter((q) => q.queued + q.retrying > 0).length));
+  return html`
+    <h2>Sending</h2>
+    <div class="table-wrap"><table>
+      <thead>
+        <tr>
+          <th>Account</th>
+          <th>Waiting</th>
+          <th>Last hour</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map((q) => {
+          const name = accounts.find((a) => a.ig_user_id === q.ig_user_id)?.username ?? q.ig_user_id;
+          const waiting = q.queued + q.retrying;
+          const minutes = Math.ceil(waiting / perMinute) + (q.paused_until > now ? Math.ceil((q.paused_until - now) / 60) : 0);
+          return html`<tr>
+            <td>@${name}</td>
+            <td>
+              ${waiting === 0
+                ? 'Nothing waiting.'
+                : html`${fmtCount(q.queued)} queued, ${fmtCount(q.retrying)} to try again.
+                    ${q.oldest_comment_at != null ? html`Oldest comment ${ageWords(now - q.oldest_comment_at)} old.` : html``}
+                    About ${fmtCount(minutes)} ${plural(minutes, 'minute', 'minutes')} to send.`}
+            </td>
+            <td>${fmtCount(q.calls_last_hour)} ${plural(q.calls_last_hour, 'DM', 'DMs')}</td>
+          </tr>`;
+        })}
+      </tbody>
+    </table></div>
+    <p class="muted">
+      Instagram allows about 750 DMs an hour per account. This sends at most ${String(SENDS_PER_MINUTE)} a minute per
+      account, which keeps every hour under that, and the rest wait their turn, oldest comment first. Accounts with DMs
+      waiting share the minute’s sends, about ${String(perMinute)} each right now, so the times above are rough. A
+      comment still waiting an hour before Instagram’s 7-day limit is skipped as expired.
+    </p>
+  `;
+}
+
+function ageWords(seconds: number): string {
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  if (minutes < 120) return `${minutes} ${plural(minutes, 'minute', 'minutes')}`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} hours`;
+  return `${Math.round(hours / 24)} days`;
+}
+
 /** Until the first DM goes out, Home leads with the three steps that get there. */
 function gettingStarted(base: string, accounts: { username: string }[], ruleCount: number, anySent: boolean) {
   const done = html`<b>Done:</b>`;
@@ -527,6 +614,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   const accounts = await listAccounts(c.env.DB);
   c.executionCtx.waitUntil(ensureCommentSubscriptions(c.env));
   const sends = await recentSent(c.env.DB, 20);
+  const queue = await queueOverview(c.env.DB, now);
   const extras = new Map<string, Awaited<ReturnType<typeof extraRepliesFor>>>();
   for (const e of await extraRepliesFor(c.env.DB, sends.map((s) => s.comment_id))) {
     extras.set(e.comment_id, [...(extras.get(e.comment_id) ?? []), e]);
@@ -559,6 +647,16 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
       <div class="banner">
         Instagram needs reconnecting${accounts.length === 1 ? '' : ` for ${names}`}.
         <a href="/connect?reconnect=1">Click here — takes 20 seconds.</a>
+      </div>
+    `);
+  }
+  for (const q of queue) {
+    const a = accounts.find((x) => x.ig_user_id === q.ig_user_id);
+    if (!a || q.paused_until <= now) continue;
+    banners.push(html`
+      <div class="note">
+        Instagram asked @${a.username} to slow down, so its DMs wait until ${fmtWhen(q.paused_until)}, then carry
+        on by themselves.
       </div>
     `);
   }
@@ -664,6 +762,8 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
               </table></div>
             `}
 
+        ${sendingCard(queue, accounts, now)}
+
         <h2>Last 20 sends</h2>
         ${sends.length === 0
           ? html`<p class="muted">
@@ -689,14 +789,9 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                     (s) => html`<tr>
                       <td>${fmtWhen(s.sent_at)}</td>
                       <td>${s.rule_label ?? '—'}</td>
-                      <td>${statusWords(s.dm_status)}</td>
+                      <td>${s.dm_status === 'skipped' && s.error === EXPIRED_ERROR ? 'Expired' : statusWords(s.dm_status)}</td>
                       <td>
-                        ${s.dm_status === 'failed' && s.error
-                          ? html`<span class="err">Send failed.</span>
-                              <div class="muted detail">${s.error}</div>`
-                          : s.error
-                            ? html`<span class="muted detail">${s.error}</span>`
-                            : html``}
+                        ${sendDetail(s, base, session.csrf)}
                         ${s.reply_status === 'skipped'
                           ? html`<div class="muted">Public reply not posted, because Instagram didn’t confirm the DM.</div>`
                           : html``}
@@ -763,6 +858,11 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
       `,
     }),
   );
+});
+
+adminRoutes.post('/sends/:id/retry', async (c) => {
+  const retried = await retryUnsureSend(c.env.DB, c.req.param('id'), nowSeconds());
+  return redirectDone(c, '/', retried ? 'send-requeued' : 'send-unchanged');
 });
 
 adminRoutes.post('/run-cron', async (c) => {
@@ -1609,6 +1709,7 @@ adminRoutes.get('/accounts', async (c) => {
   const base = c.get('adminBase');
   const session = c.get('session');
   const now = nowSeconds();
+  const waiting = new Map((await queueOverview(c.env.DB, now)).map((q) => [q.ig_user_id, q.queued + q.retrying]));
   const callback = oauthRedirectUri(c.req.url, c.env.PUBLIC_BASE_URL);
   return c.html(
     layout({
@@ -1659,7 +1760,13 @@ ${callback}/</pre>
                           ? html`<form method="post" action="${base}/accounts/${a.ig_user_id}/deactivate">
                               ${csrfField(session.csrf)}
                               <button class="secondary" type="submit">Pause</button>
-                            </form>`
+                            </form>
+                            ${waiting.get(a.ig_user_id)
+                              ? html`<div class="muted">
+                                  Pausing skips its ${fmtCount(waiting.get(a.ig_user_id) ?? 0)} waiting
+                                  ${plural(waiting.get(a.ig_user_id) ?? 0, 'DM', 'DMs')}: they aren’t sent after you resume.
+                                </div>`
+                              : html``}`
                           : html`<form method="post" action="${base}/accounts/${a.ig_user_id}/activate">
                               ${csrfField(session.csrf)}
                               <button class="secondary" type="submit">Resume</button>

@@ -71,6 +71,8 @@ function traced(stmt: D1PreparedStatement, call: DbCall): D1PreparedStatement {
     return result;
   };
   return {
+    inner: stmt,
+    call,
     bind: (...values: unknown[]) => {
       call.binds = values;
       return traced(stmt.bind(...values), call);
@@ -97,7 +99,12 @@ export function countingDb(): { db: D1Database; statements: string[]; calls: DbC
       calls.push(call);
       return traced(env.DB.prepare(sql), call);
     },
-    batch: (s: D1PreparedStatement[]) => env.DB.batch(s),
+    // Each batched statement's rows read go to its own call, as if run alone.
+    batch: async (s: Array<{ inner: D1PreparedStatement; call: DbCall }>) => {
+      const results = await env.DB.batch(s.map((x) => x.inner));
+      results.forEach((r, i) => (s[i]!.call.rowsRead += r.meta.rows_read));
+      return results;
+    },
     exec: (sql: string) => env.DB.exec(sql),
   } as unknown as D1Database;
   return { db, statements, calls };
