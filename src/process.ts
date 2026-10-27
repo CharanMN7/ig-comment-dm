@@ -27,6 +27,8 @@ import type { Env } from './types.ts';
  */
 export const WEBHOOK_SEND_BUDGET_MS = 25_000;
 
+export const ACCOUNT_PAUSED_REASON = 'account paused';
+
 export const NO_TIME_FOR_PUBLIC_REPLY_ERROR =
   'public reply: no time was left to post it, because Instagram was slow to answer';
 
@@ -200,8 +202,8 @@ export async function processComment(
   deadline: number,
 ): Promise<boolean> {
   const account = await getAccount(env.DB, entryId);
-  if (!account || account.active !== 1) {
-    console.error('no active account for webhook entry', entryId);
+  if (!account) {
+    console.error('no account for webhook entry', entryId);
     return false;
   }
 
@@ -231,6 +233,20 @@ export async function processComment(
         sent_at: now,
       });
     }
+  }
+
+  // Paused means these comments get no reply, not a late one. Left unclaimed,
+  // the poll would answer every one of them, up to its 72-hour reach, as soon
+  // as the account is resumed.
+  if (account.active !== 1) {
+    return tryClaimComment(env.DB, {
+      comment_id: commentId,
+      ig_user_id: account.ig_user_id,
+      commenter_id: commenterId,
+      dm_status: 'skipped',
+      error: ACCOUNT_PAUSED_REASON,
+      sent_at: now,
+    });
   }
 
   // A claimed comment is never tried again, so claim only one there is time

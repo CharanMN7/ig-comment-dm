@@ -236,6 +236,23 @@ describe('the 5-minute comment poll', () => {
     expect(meta.calls).toEqual([]);
   });
 
+  it('does not answer, once the account is resumed, comments that arrived while it was paused', async () => {
+    await seedAccount({ active: false });
+    await seedRule({ keywords: ['guide'] });
+    await postWebhook(commentPayload({ commentId: 'c-while-paused', text: 'guide' }));
+
+    await env.DB.prepare('UPDATE accounts SET active = 1 WHERE ig_user_id = ?').bind(IG_USER).run();
+    meta.on('GET', '/me/media', { json: { data: [{ id: 'm1' }] } });
+    meta.on('GET', '/:id/comments', commentsByMedia({ m1: [comment('c-while-paused', 'guide'), comment('c-after', 'guide')] }));
+    await runScheduled(POLL);
+
+    expect(dmTargets()).toEqual(['c-after']);
+    expect((await sentRows()).map((r) => [r.comment_id, r.dm_status, r.error])).toEqual([
+      ['c-after', 'ok', null],
+      ['c-while-paused', 'skipped', 'account paused'],
+    ]);
+  });
+
   it('carries on past a post whose comments cannot be listed', async () => {
     await seedAccount();
     await seedRule();
