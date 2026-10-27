@@ -1043,9 +1043,10 @@ function ruleForm(opts: {
           everyone who comments on anything, and Instagram may restrict the account.
         </p>
         <p class="muted when-all">
-          Older posts: every 5 minutes a check also reads the post’s 25 newest comments from the last 3 days,
-          and any it hasn’t handled before get the message too, up to 10 messages per check. Comments it
-          already skipped stay skipped.
+          Older posts: a check also reads the post’s 25 newest comments from the last 3 days, and any it
+          hasn’t handled before get the message too, up to 10 messages per check. Comments it already
+          skipped stay skipped. It reads 3 posts every 5 minutes and takes turns when your rules cover more,
+          so with 4 to 6 posts this one is read every 10 minutes, with 7 to 9 every 15.
         </p>
         <details class="matching" ${fineTuned ? 'open' : ''}>
           <summary>Exclusions and matching (optional)</summary>

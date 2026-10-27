@@ -33,11 +33,11 @@ The webhook is the fast path. Instagram also quietly drops webhooks for collapse
 
 | | The webhook | The poll |
 |---|---|---|
-| Speed | About two seconds | Up to five minutes |
+| Speed | About two seconds | Up to five minutes, or longer when rules cover more than 3 posts ([how it takes turns](/using#the-five-minute-check)) |
 | How it starts | Meta POSTs to `/webhook` | The Worker asks Instagram for recent comments |
 | Needs the Meta app to be Live | Yes | No |
 | Sees comments hidden by Hidden Words | No | No |
-| Covers old posts | Yes | Only the 3 most recent posts, last 72 hours |
+| Covers old posts | Yes | Posts a rule is limited to, plus the 3 newest for rules on all posts. Last 72 hours only |
 
 Both paths share the same rule matching and the same duplicate protection, so a comment is never answered twice. If DMs arrive but take five minutes, the webhook isn't being delivered: see [Troubleshooting](/troubleshooting#the-two-delivery-paths).
 
