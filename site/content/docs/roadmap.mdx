@@ -6,16 +6,33 @@ The roadmap lives in GitHub issues, so it's never out of date the way a page wou
 
 ## By area
 
-| Area | What's in it |
+| Area | What's open |
 |---|---|
-| [Automation](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+automation%22) | Triggers, keywords, DM content and delivery: button templates, follow gates, `{username}` placeholders, negative keywords |
-| [Matching](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+matching%22) | Keyword matching and text normalisation |
-| [Analytics](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+analytics%22) | Charts, per-rule performance, follower history |
+| [Automation](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+automation%22) | Triggers, DM content and delivery: button templates, follow gates, follow-up DMs, tracked links, per-account rate limits, CSV import |
+| [Analytics](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+analytics%22) | Charts, per-rule performance, top keywords, follower history, post insights, a shareable report page |
 | [Instagram API](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+instagram-api%22) | More of Meta's Graph API: the `messages` webhook, a DM inbox, typed Meta errors |
-| [Operations](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+ops%22) | Migrations, health checks, exports, monitoring |
-| [Admin panel](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+ux%22) | Onboarding and presentation: dark mode |
+| [Operations](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+ops%22) | Exporting and re-importing rules and logs, an operational event log |
+| [Admin panel](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+ux%22) | Dark mode |
 
 Each issue also carries an effort label: [`effort: small`](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22effort%3A+small%22) is roughly an evening, `effort: medium` is a few sessions, and `effort: large` needs a design decision before anyone builds it.
+
+## Already shipped
+
+These have shipped:
+
+- `{username}` in the DM and public reply ([#30](https://github.com/CharanMN7/ig-comment-dm/issues/30)). `{link}` waits for tracked links ([#23](https://github.com/CharanMN7/ig-comment-dm/issues/23)).
+- Exclusions, so a rule skips comments like "how much" ([#22](https://github.com/CharanMN7/ig-comment-dm/issues/22)).
+- A per-rule choice between whole-word and anywhere-in-the-comment matching ([#21](https://github.com/CharanMN7/ig-comment-dm/issues/21)).
+- Rules that reply to every comment on one post, for giveaways and waitlists ([#32](https://github.com/CharanMN7/ig-comment-dm/issues/32)).
+- Public reply variations, one picked at random per comment ([#31](https://github.com/CharanMN7/ig-comment-dm/issues/31)).
+- Keywords in any script ([#19](https://github.com/CharanMN7/ig-comment-dm/issues/19)), with accents on Latin letters folded away ([#20](https://github.com/CharanMN7/ig-comment-dm/issues/20), [#67](https://github.com/CharanMN7/ig-comment-dm/issues/67)).
+- Rule templates ([#38](https://github.com/CharanMN7/ig-comment-dm/issues/38)).
+- Home totals for today, 7 days, 30 days and all time ([#39](https://github.com/CharanMN7/ig-comment-dm/issues/39)).
+- An admin panel you can install on a phone ([#51](https://github.com/CharanMN7/ig-comment-dm/issues/51)).
+- `/health` for uptime monitors ([#46](https://github.com/CharanMN7/ig-comment-dm/issues/46)).
+- Database migrations tracked by Wrangler, so an update can change existing tables ([#45](https://github.com/CharanMN7/ig-comment-dm/issues/45)).
+
+[Using it](/using) explains each one, and [Updating your copy](/updating#database-migrations) covers migrations.
 
 ## Picking one up
 

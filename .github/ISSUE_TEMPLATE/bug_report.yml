@@ -74,7 +74,7 @@ body:
   - type: checkboxes
     id: prechecks
     attributes:
-      label: Things the README says to check first
+      label: Things the docs say to check first
       description: These account for most reports. Tick what you have confirmed.
       options:
         - label: The Meta app is **Live**, not in Development

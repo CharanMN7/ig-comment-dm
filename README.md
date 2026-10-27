@@ -1,453 +1,117 @@
-<div align="center">
+# Comment to DM
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:833AB4,50:FD1D1D,100:FCB045&height=190&section=header&text=Comment%20to%20DM&fontSize=58&fontColor=ffffff&fontAlignY=34&desc=Instagram%20comment%20automation%20you%20actually%20own&descAlignY=54&descSize=17&animation=fadeIn" alt="Comment to DM" width="100%" />
+Self-hosted Instagram comment-to-DM automation. One Cloudflare Worker and one D1 database on your own account, on the free plan.
 
-<p>
-  <a href="#quick-start"><img src="https://img.shields.io/badge/deploy_in-6_minutes-FD1D1D?style=for-the-badge&labelColor=1a1a1a" alt="Deploy in 6 minutes" /></a>
-  <a href="#roadmap"><img src="https://img.shields.io/badge/roadmap-30%2B_planned-833AB4?style=for-the-badge&labelColor=1a1a1a" alt="Roadmap" /></a>
-  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-claim_an_issue_first-FCB045?style=for-the-badge&labelColor=1a1a1a" alt="PRs: claim an issue first" /></a>
-</p>
+[![CI](https://img.shields.io/github/actions/workflow/status/CharanMN7/ig-comment-dm/ci.yml?branch=master&label=CI)](https://github.com/CharanMN7/ig-comment-dm/actions/workflows/ci.yml)
+[![MIT License](https://img.shields.io/github/license/CharanMN7/ig-comment-dm)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/CharanMN7/ig-comment-dm)](https://github.com/CharanMN7/ig-comment-dm/stargazers)
 
-<p>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/CharanMN7/ig-comment-dm?style=flat-square&color=blue" alt="MIT License" /></a>
-  <a href="https://github.com/CharanMN7/ig-comment-dm/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/CharanMN7/ig-comment-dm/ci.yml?branch=master&style=flat-square&label=CI" alt="CI" /></a>
-  <a href="https://github.com/CharanMN7/ig-comment-dm/stargazers"><img src="https://img.shields.io/github/stars/CharanMN7/ig-comment-dm?style=flat-square&color=FCB045" alt="Stars" /></a>
-  <a href="https://github.com/CharanMN7/ig-comment-dm/issues"><img src="https://img.shields.io/github/issues/CharanMN7/ig-comment-dm?style=flat-square" alt="Issues" /></a>
-  <img src="https://img.shields.io/badge/Cloudflare-Workers-F38020?style=flat-square&logo=cloudflare&logoColor=white" alt="Cloudflare Workers" />
-  <img src="https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" />
-  <img src="https://img.shields.io/badge/runtime_deps-1-brightgreen?style=flat-square" alt="One runtime dependency" />
-  <img src="https://img.shields.io/badge/cost-%240%2Fmonth-brightgreen?style=flat-square" alt="Free tier" />
-</p>
+**[Docs](https://charanmn7.github.io/ig-comment-dm/docs/) · [Quick start](#quick-start) · [Contributing](CONTRIBUTING.md)**
 
-<img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=21&duration=3200&pause=900&color=FD1D1D&center=true&vCenter=true&width=620&lines=Someone+comments+%22guide%22+on+your+reel.;They+get+a+DM.+In+about+two+seconds.;No+monthly+fee.+No+one+else%27s+server." alt="Someone comments. They get a DM." />
+## What it does
 
-<br />
+Your reel says "comment GUIDE for the link". Someone comments `guide`, and about two seconds later your link is in their DMs, sent from your account, with an optional public reply under the comment. You set it up as keyword rules in an admin panel on your Worker.
 
-**[Quick start](#quick-start) · [How it works](#how-it-works) · [User guide](#user-guide) · [Roadmap](#roadmap) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)**
+- Rules cover one post or all of them, and match whole words or anywhere in the comment, for hashtags like `#launch2026`.
+- Exclusions per rule, so "how much is the guide?" doesn't use up that comment's one DM.
+- Reply to every comment on one post, no keyword needed, for giveaways and waitlists.
+- `{username}` in the DM or public reply, and several public replies picked at random so the thread doesn't look automated.
+- Any script works. Case, emoji, punctuation and Latin accents are ignored: `preco` matches `PREÇO`.
+- Eight templates (free guide, price list, giveaway entry and five more) fill in a rule's keywords, DM and public replies. A template won't save until your own link replaces its placeholder.
+- Several Instagram accounts per deployment, and an admin panel you can install on your phone.
 
-</div>
+## How it's done today
 
----
+Hosted tools charge $15 to $99 a month. They hold an access token to your Instagram account on their servers next to every other customer's, your followers' messages pass through them, and the automation lasts as long as the company does. The alternative is replying by hand, which stops working the day a reel takes off.
 
-Someone comments **"guide"** on your reel. They get a DM with your link, automatically, about two seconds later.
+## What's different
 
-That is the entire product. Tools that do this start around **$15/month** and want your Instagram login on their servers. This is the same thing, running on **your** Cloudflare account, on the free tier, for **$0** — and you can read all 4,400 lines of it in an afternoon.
+The same automation runs in your Cloudflare account instead, on Meta's official Instagram API through Instagram Login. There's no scraping and no browser automation, and the Worker never sees your password.
 
-<div align="center">
-
-<a href="https://deploy.workers.cloudflare.com/?url=https://github.com/CharanMN7/ig-comment-dm"><img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare Workers" height="34" /></a>
-&nbsp;&nbsp;
-<a href="#quick-start"><img src="https://img.shields.io/badge/or_use_the_CLI-npm_run_setup-1a1a1a?style=for-the-badge&logo=npm" alt="npm run setup" height="34" /></a>
-
-</div>
-
----
-
-## Why this exists
-
-<table>
-<tr>
-<th width="34%">&nbsp;</th>
-<th width="33%">Hosted tools</th>
-<th width="33%">Comment to DM</th>
-</tr>
-<tr>
-<td><b>Cost</b></td>
-<td>$15–99 / month, forever</td>
-<td><b>$0.</b> Cloudflare's free tier covers 100,000 requests a day.</td>
-</tr>
-<tr>
-<td><b>Your Instagram token</b></td>
-<td>On their servers, alongside everyone else's</td>
-<td><b>In your Cloudflare account</b>, encrypted with AES-256-GCM using a key only you hold</td>
-</tr>
-<tr>
-<td><b>Your audience's DMs</b></td>
-<td>Pass through a third party</td>
-<td>Go straight from your Worker to Meta</td>
-</tr>
-<tr>
-<td><b>If they shut down</b></td>
-<td>You lose the automation</td>
-<td>Nothing changes. It is your Worker.</td>
-</tr>
-<tr>
-<td><b>Rate limits</b></td>
-<td>Whatever plan you bought</td>
-<td>Meta's actual limits</td>
-</tr>
-<tr>
-<td><b>Reading the code</b></td>
-<td>No</td>
-<td>4,400 lines. One dependency. No build step.</td>
-</tr>
-</table>
-
-It uses Meta's official Graph API through Instagram Login. No scraping, no browser automation, and it never sees your Instagram password.
-
----
-
-## How it works
-
-```mermaid
-flowchart LR
-    A["💬 Someone comments<br/>&quot;guide&quot;"] --> B{{"Meta webhook<br/><i>HMAC signed</i>"}}
-    B --> C["⚡ Your Cloudflare Worker"]
-    C --> D{"Is it you?"}
-    D -->|yes| X["🚫 ignored"]
-    D -->|no| E{"Already handled?"}
-    E -->|yes| X
-    E -->|no| F{"Matches a<br/>keyword rule?"}
-    F -->|no| Y["📝 logged as skipped"]
-    F -->|yes| G["📨 One private DM"]
-    G --> H["💭 Optional public reply"]
-
-    P["⏱ Every 5 minutes"] -.->|"catches what the<br/>webhook missed"| C
-    N["🌙 Nightly 03:00 UTC"] -.->|"refreshes the<br/>60-day token"| C
-
-    style A fill:#FD1D1D,stroke:#833AB4,color:#fff
-    style C fill:#F38020,stroke:#833AB4,color:#fff
-    style G fill:#22aa66,stroke:#0a5,color:#fff
-    style X fill:#eee,stroke:#999,color:#333
-    style Y fill:#eee,stroke:#999,color:#333
+```
+someone comments "guide"
+          │
+          ▼
+Meta webhook (signed) ───▶ your Worker ◀─── poll every 5 minutes
+                                │
+                 claim the comment in D1, match your rules
+                                │
+                                ▼
+          one private DM, then an optional public reply
 ```
 
-**Two independent delivery paths.** The webhook is the fast one — a DM lands in about two seconds. The five-minute poll is the safety net, because Instagram quietly drops webhooks for collapsed and low-signal comments. A comment that the webhook missed still gets its DM, just a few minutes later.
+There are two ways in because Instagram silently drops webhooks for collapsed and low-signal comments. Every five minutes the Worker reads the last 72 hours of comments on up to 3 posts per account and answers up to 10 per run that the webhook missed. Both paths claim the comment with `INSERT … ON CONFLICT DO NOTHING` before sending, so a duplicate delivery can't produce a second DM.
 
-Everything lives in one Worker and one SQLite database:
+The whole thing is about 5,000 lines of TypeScript, with one runtime dependency (`hono`) and no client-side JavaScript. Instagram tokens are encrypted with AES-256-GCM under a key that exists only in your Cloudflare account.
 
-| | |
+## Who it's for
+
+Creators and small businesses who run "comment X for the link" posts and would rather not pay $180 to $1,188 a year, or give a third party a token to their account. Setup is five terminal commands and a screen-by-screen guide through Meta's dashboard.
+
+## What can go wrong
+
+- **Professional accounts only.** Instagram's API doesn't work with personal accounts. Switching to Creator or Business takes a minute in the app.
+- **Your Meta app has to be Live.** In Development mode Meta sends no real comment webhooks, so only the five-minute poll works. Publishing needs no App Review while only your own accounts connect as Instagram Testers. Letting strangers connect theirs would need App Review; this is built for one person and their own accounts.
+- **One private reply per comment, ever, within 7 days.** No follow-up unless they reply to you. Older comments are skipped.
+- **About 750 private replies per hour per account**, Meta's cap. Nothing queues sends past it yet ([#35](https://github.com/CharanMN7/ig-comment-dm/issues/35)), so on a viral reel the overflow fails, is logged and isn't retried.
+- **Meta changes things.** It renames dashboard screens, retires OAuth hosts and changes which secret signs webhooks. The code pins Graph API v23.0, which Meta will eventually retire.
+- **Blind spots.** Comments hidden by Instagram's Hidden Words filter never reach the API. DMs to non-followers land in Message requests. Posts outside the poll's 3 rely on the webhook alone.
+- **60-day tokens.** A nightly job refreshes them. If it stops, `/health` turns 503 before they expire; a lapsed account needs a 20-second reconnect.
+
+## What it costs
+
+$0. Meta doesn't charge for the API, and it fits Cloudflare's free plan:
+
+| Free-plan limit | What uses it |
 |---|---|
-| **Runtime** | Cloudflare Workers — no servers, no containers, no cold-start cost |
-| **Database** | Cloudflare D1 (SQLite) — five tables |
-| **Framework** | [Hono](https://hono.dev), server-rendered HTML |
-| **Dependencies** | One. Web Crypto does the hashing, HMAC, and AES. |
-| **Client-side JS** | None at all |
-| **Build step** | None |
-
----
+| 100,000 Worker requests a day | One per webhook, plus admin pages and `/health` checks |
+| 10 ms CPU per request | Why passwords use PBKDF2 at 12,000 iterations, not 600,000 |
+| 5 cron triggers per account | This uses 2: the 5-minute poll and the 03:00 UTC token refresh |
+| D1: 100,000 rows written a day | A few per comment |
+| D1: 5 million rows read a day | Home's all-time totals scan the send log on every load: 100 loads a day at 50,000 comments |
+| D1: 500 MB per database | The send log grows a row per comment; webhook logs are pruned after 7 days |
 
 ## Quick start
 
-You need [Node.js 20+](https://nodejs.org), a free [Cloudflare account](https://dash.cloudflare.com/sign-up), and an Instagram **professional** account (Creator or Business — switch in the app under Settings → Account type and tools).
+About 15 minutes, mostly in Meta's dashboard. You need Node.js 22.13+, free [Cloudflare](https://dash.cloudflare.com/sign-up) and [Meta for Developers](https://developers.facebook.com/) accounts, and an Instagram Creator or Business account.
 
-```bash
-git clone https://github.com/CharanMN7/ig-comment-dm.git
-cd ig-comment-dm
-npm install
-npx wrangler login
+1. Create a Meta app and copy its three values ([Part 1](https://charanmn7.github.io/ig-comment-dm/docs/setup/#1-create-the-meta-app) of the setup guide).
+2. Deploy:
 
-npm run setup
-```
+   ```bash
+   git clone https://github.com/CharanMN7/ig-comment-dm.git
+   cd ig-comment-dm
+   npm install
+   npx wrangler login
+   npm run setup
+   ```
 
-`npm run setup` creates the database, generates every secret at the right size, deploys, and finishes by printing the exact strings to paste into Meta's dashboard:
+   `setup` creates the database and tables, asks for the three Meta values, generates the other secrets, deploys, and prints your admin URL plus the exact strings to paste into Meta. It's safe to re-run.
+3. Finish in Meta and connect your account ([Parts 2 and 4–6](https://charanmn7.github.io/ig-comment-dm/docs/setup/#2-invite-each-instagram-account-as-a-tester)).
 
-```
-[1/6] Checking your Cloudflare login
-[2/6] Creating the database and deploying
-[3/6] Creating the database tables
-[4/6] Your three values from the Meta dashboard
-[5/6] Generating the rest
-[6/6] Deploying again so the secrets take effect
+Or open the cloned repo in Claude Code and say "set this up". A bundled skill runs the terminal side and, with Claude in Chrome, clicks through Meta while you keep the logins and secrets. See the [agent setup guide](https://charanmn7.github.io/ig-comment-dm/docs/agent-setup/).
 
-Done. Your copy is live.
-```
+Updating is a pull and a redeploy; your secrets and data stay in Cloudflare. See [Updating your copy](https://charanmn7.github.io/ig-comment-dm/docs/updating/).
 
-It is safe to re-run, and it will not rotate secrets you already have.
+## How you know it's working
 
-> [!IMPORTANT]
-> Before that, you need a Meta app — about 15 minutes of clicking, and the part that trips everyone up. **[docs/setup.md](docs/setup.md)** walks through every screen, including the four traps that cost people an evening each.
+- **Test page:** paste a sample comment to see which rule fires. Nothing is sent.
+- **Home:** recent webhooks from Meta (including ones rejected for a wrong signature), the last 20 sends with Meta's exact errors, and totals for today, 7 days, 30 days and all time. Red banners flag an account that needs reconnecting, a stalled nightly job or a misconfigured secret.
+- **`/health`:** `200` while the database answers and both scheduled jobs run, `503` when one stalls. No login, no usernames or IDs. Give it to an uptime monitor.
+- **`npm run doctor`:** checks the live deployment's secrets, tables, accounts, rules, rejected webhooks and cron jobs, and names the fix.
+- **`npx wrangler tail`:** live logs, with tokens and keys never written.
+- **CI:** every pull request runs typecheck, unit tests, and integration tests that boot the real Worker in workerd on a fresh D1 with all migrations applied and every Meta call faked.
 
-Stuck? Run **`npm run doctor`**. It checks your live deployment and tells you what is missing in plain words.
-
-<details>
-<summary><b>Why clone instead of a template repo?</b></summary>
-
-<br />
-
-Because a fresh clone needs **zero file edits** to deploy — Wrangler provisions the D1 database from the config, so there is no placeholder to fill in. Nothing about the code differs between deployments; the only per-user values are Cloudflare secrets, which never touch the repository.
-
-A GitHub template would sever the upstream link. Meta renames dashboard screens, retires OAuth hosts, and changes signing behaviour often enough that `git pull` needs to keep working:
-
-```bash
-git remote add upstream https://github.com/CharanMN7/ig-comment-dm.git
-git pull upstream master
-npm install
-npm run deploy
-```
-
-`npm run deploy` applies any new database migrations, then deploys. If Wrangler lists migrations and asks to continue, say yes. Use it rather than `npx wrangler deploy`, which would put new code live without the tables and columns it needs.
-
-Your secrets live in Cloudflare, so updating never touches them.
-
-</details>
-
----
-
-## User guide
-
-### Connect an account
-
-Open your admin URL (printed by `npm run setup` — bookmark it) and create a password on the first visit. Then **Accounts → Connect a new account**.
-
-You can connect several Instagram accounts to one deployment. Each one needs to be an [Instagram Tester](https://charanmn7.github.io/ig-comment-dm/docs/setup/#2-invite-each-instagram-account-as-a-tester) on your Meta app.
-
-### Write a rule
-
-**Rules → New rule**, or pick a template on the Rules page: free guide, product link, price list, booking page, waitlist, event RSVP, menu or giveaway entry. A template fills in the keywords, the DM and three public replies for you to edit. Nothing saves while its `PASTE-YOUR-LINK-HERE` marker, or a sample address like `example.com`, is still in the text.
-
-| Field | What to put |
-|---|---|
-| **Name** | For you only. `Free guide`. |
-| **Keywords** | One per line. **At least 3 characters**, counted after emoji and punctuation are dropped — `AI` would fire on "again" and "email". Chinese and Japanese need 2, so `指南` works. |
-| **How to look for them** | **Whole words only** (the default): `guide` matches "Guide please!" but not "guides". **Anywhere in the comment**: also catches `#launch2026` and "guides", but `art` would match "start". |
-| **Exclusions** | Optional, one per line. A comment containing any of them is skipped by this rule even when a keyword matches: `how much`, `already have it`, `not interested`. |
-| **The DM** | Under 1,000 characters. Put everything they need here. `{username}` puts in their Instagram name. |
-| **Public reply** | Optional. Shows under the comment, only once the DM has gone through. `{username}` works here too. Add variations and each comment gets one at random. |
-| **Which posts** | All posts and reels, or pick one from the dropdown. |
-| **Reply to every comment on this post** | For giveaways and waitlists. Everyone who comments on that one post gets the DM, no keyword needed, and the keyword fields disappear. It needs a specific post: on all posts it would message everyone who ever comments, so it is refused. |
-
-Matching ignores case, emoji, punctuation, and accents on Latin letters, on both the keyword and the comment. A whole-words rule needs the keyword to stand on its own; switch a rule to **Anywhere in the comment** for hashtag and brand campaigns.
-
-When more than one rule could answer a comment, the first of these wins: a keyword rule for that post, then a keyword rule for all posts, then a rule that replies to every comment on that post. So a specific keyword on a giveaway reel still gets its own DM. Within each group the oldest rule wins.
-
-Exclusions are found the same way as the rule's keywords, and they belong to that rule alone. When a comment trips one, matching carries on to the next rule, so another rule without that exclusion can still reply. If no rule replies because of an exclusion, Home lists the comment as `Skipped: matched exclusion “how much”`, and the five-minute check leaves it alone from then on.
-
-> [!TIP]
-> **Put everything in that one message.** Instagram allows exactly one private reply per comment, ever. You do not get a follow-up unless they reply to you first.
-
-### Test it without messaging anyone
-
-**Test →** paste a sample comment. It shows which rule would fire. Nothing is sent.
-
-Then comment from a **different** Instagram account — a friend's phone works. Your own comments on your own posts are ignored deliberately.
-
-### Read the Home page
-
-| Panel | What it tells you |
-|---|---|
-| **Totals** | DMs sent, skipped and failed, and people reached, for today, the last 7 and 30 days, and all time. Days are UTC. With more than one account, each also gets its own. |
-| **Did Instagram reach us?** | Whether Meta is POSTing at all. Empty means the problem is on Meta's side, not yours. `Wrong secret` means `FACEBOOK_APP_SECRET` is missing. |
-| **Last 20 sends** | Every DM, skip, and failure, with the reason. |
-| **Red banners** | An account needs reconnecting, the nightly job has stalled, or a secret is misconfigured. |
-
-### Put it on your phone
-
-Open the admin URL on your phone and choose **Install app** in Chrome's menu on Android, or **Share → Add to Home Screen** in Safari on iPhone. It opens full screen, like an app. On an iPhone you log in once more inside it. [What installing shares with Google](SECURITY.md#installing-the-panel-on-a-phone).
-
-### Get told when it stops working
-
-The red banners only help if someone opens the panel. Point any uptime monitor at:
-
-```
-https://ig-comment-dm.YOURNAME.workers.dev/health
-```
-
-It answers `200` while the database responds and both scheduled jobs are running, and `503` when either has stalled, so you hear about a dead nightly refresh before tokens start expiring. It needs no login and shows no usernames, ids or secrets: only account counts and the time each job last ran. [What a 503 means](https://charanmn7.github.io/ig-comment-dm/docs/troubleshooting/#health-answers-503).
-
----
-
-## Things that will surprise you
-
-Instagram's rules, not ours. Each of these is enforced by Meta and cost someone an evening to discover.
-
-| | |
-|---|---|
-| 📨 | **One private message per comment, ever.** A second attempt is blocked here, and Meta would reject it anyway. |
-| 🙈 | **Your own comments are ignored.** Meta notifies you about them; acting would DM yourself and burn the one reply. |
-| 📅 | **Comments older than 7 days** cannot receive a private reply. They are logged as skipped. |
-| 🔑 | **Tokens expire after 60 days.** A nightly job refreshes them. Miss it and the account needs a 20-second reconnect. |
-| 🚧 | **A Development-mode app delivers nothing.** Meta only sends the dashboard Test button until you click Publish. This is the number one reason a correct setup does nothing. |
-| 🤐 | **Hidden Words eats comments before we see them.** If Instagram's filter hides a comment, it never reaches the API at all. Turn the filter off while testing. |
-| ⏳ | **Missed comments arrive late, not never.** The five-minute poll catches them. |
-
----
-
-## Roadmap
-
-### Shipped
-
-<details open>
-<summary><b>Core pipeline</b></summary>
-
-- [x] Comment → one official Instagram private reply, end to end
-- [x] Optional public reply under the comment
-- [x] `{username}` placeholder in the DM and public reply
-- [x] Public reply variations, one picked at random per comment
-- [x] Keyword rules with case, emoji, and punctuation normalisation, matched on word boundaries
-- [x] Per-rule choice of whole-word or anywhere-in-the-comment matching, for hashtag campaigns
-- [x] Per-rule exclusions, so "how much is the guide?" does not burn the one private reply
-- [x] Reply-to-every-comment rules for giveaways and waitlists, limited to one post
-- [x] Post-scoped rules take priority over account-wide rules
-- [x] Reel and post picker, so nobody has to hunt for a Graph media id
-- [x] Self-comment guard — never DMs the account owner
-- [x] Exactly-once delivery, claimed atomically in the database before sending
-- [x] 7-day comment age guard, matching Meta's private-reply window
-- [x] Dry-run rule tester that sends nothing to real people
-- [x] Home totals for today, 7 days, 30 days and all time, with people reached and a per-account breakdown
-- [x] Eight rule templates, so the first rule starts from written copy instead of a blank form
-
-</details>
-
-<details open>
-<summary><b>Reliability</b></summary>
-
-- [x] HMAC-verified webhooks, accepting either the Instagram or the Facebook app secret
-- [x] Five-minute reconciliation poll for comments the webhook never delivered
-- [x] Nightly token refresh with a 10-day lookahead and a reconnect warning
-- [x] Automatic `subscribed_apps` registration after Connect
-- [x] Retry with jittered backoff on Meta 429s and 5xxs
-- [x] Large Instagram ids preserved exactly, instead of being mangled by JSON number parsing
-- [x] Inbound webhook log, including rejected signatures, so silence is diagnosable
-
-</details>
-
-<details open>
-<summary><b>Security and operations</b></summary>
-
-- [x] Instagram tokens encrypted at rest with AES-256-GCM
-- [x] Two-factor admin: a 128-bit secret path plus a password
-- [x] Signed, `HttpOnly`, `SameSite=Strict` sessions with CSRF tokens on every form
-- [x] `Referrer-Policy: no-referrer` so the secret admin URL never leaks to a third party
-- [x] Login rate limiting with a doubling lockout
-- [x] Constant-time comparison of the admin path secret
-- [x] Startup validation of all eight secrets, surfaced in the admin panel
-- [x] `npm run setup` — clone to deployed in one command
-- [x] `npm run doctor` — diagnoses a live deployment
-- [x] Tracked database migrations, applied by `npm run deploy` before the new code goes live
-- [x] `/health` endpoint for uptime monitors, with no login and nothing identifying in it
-- [x] Admin panel installable on a phone's home screen, and usable at 375px wide
-- [x] Multi-account support on a single deployment
-- [x] Hosted privacy, terms, and data-deletion pages for Meta review
-
-</details>
-
-### Planned
-
-Everything below is [an open issue](https://github.com/CharanMN7/ig-comment-dm/issues). Comment on one to claim it — [`good first issue`](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue) items are self-contained and have the approach sketched out.
-
-<details open>
-<summary><b>🎯 Automation</b></summary>
-
-| Issue | Feature | Why it matters |
-|:--|---|---|
-| [#23](https://github.com/CharanMN7/ig-comment-dm/issues/23) | **Tracked links with click analytics** | Know whether the DM actually worked, not just that it sent |
-| [#24](https://github.com/CharanMN7/ig-comment-dm/issues/24) | **Button templates in DMs** | A tappable CTA converts far better than a bare URL |
-| [#25](https://github.com/CharanMN7/ig-comment-dm/issues/25) | **Opening DM + reveal on tap** | Works around Meta's one-reply-per-comment limit legitimately |
-| [#26](https://github.com/CharanMN7/ig-comment-dm/issues/26) | **Follow gate** | Deliver the link only after they follow |
-| [#27](https://github.com/CharanMN7/ig-comment-dm/issues/27) | **Follow-up DM after a delay** | A second touch inside the 24-hour window |
-| [#29](https://github.com/CharanMN7/ig-comment-dm/issues/29) | **Reply to DMs and story replies** | The same keyword rules, triggered by inbound messages |
-| [#33](https://github.com/CharanMN7/ig-comment-dm/issues/33) | **Bind a rule to the next reel you post** | Set the automation up before the content exists |
-| [#34](https://github.com/CharanMN7/ig-comment-dm/issues/34) | **Ad-comment to organic-post mapping** | Boosted posts report a different media id and silently miss |
-| [#35](https://github.com/CharanMN7/ig-comment-dm/issues/35) | **Per-account rate limiting** | Stay under Meta's 750 private replies per hour |
-| [#36](https://github.com/CharanMN7/ig-comment-dm/issues/36) | **Send every matching rule's public reply** | Today the second matching rule is silently dropped |
-| [#37](https://github.com/CharanMN7/ig-comment-dm/issues/37) | **Bulk rule import from CSV** | Set up thirty posts without thirty forms |
-
-</details>
-
-<details open>
-<summary><b>🔤 Matching</b></summary>
-
-| Issue | Feature | Why it matters |
-|:--|---|---|
-| [#19](https://github.com/CharanMN7/ig-comment-dm/issues/19) | **Non-Latin script matching** | Word-boundary matching silently drops Cyrillic, Arabic, and CJK today |
-| [#20](https://github.com/CharanMN7/ig-comment-dm/issues/20) | **Latin diacritic folding** | `PREÇO` should match a `preco` keyword |
-
-</details>
-
-<details open>
-<summary><b>📊 Analytics</b></summary>
-
-| Issue | Feature | Why it matters |
-|:--|---|---|
-| [#40](https://github.com/CharanMN7/ig-comment-dm/issues/40) | **Sends-over-time chart** | Inline SVG, no JavaScript |
-| [#41](https://github.com/CharanMN7/ig-comment-dm/issues/41) | **Per-rule performance** | Which keyword is actually earning its place |
-| [#42](https://github.com/CharanMN7/ig-comment-dm/issues/42) | **Top matched keywords** | What your audience really types |
-| [#52](https://github.com/CharanMN7/ig-comment-dm/issues/52) | **Follower history** | Instagram only keeps 30 days; daily snapshots keep more |
-| [#53](https://github.com/CharanMN7/ig-comment-dm/issues/53) | **Post insights** | Views, reach, saves, and shares next to the sends |
-| [#43](https://github.com/CharanMN7/ig-comment-dm/issues/43) | **Shareable report page** | A read-only link for a client, no login |
-| [#44](https://github.com/CharanMN7/ig-comment-dm/issues/44) | **Filterable, paginated send log** | Twenty rows stops being enough quickly |
-
-</details>
-
-<details open>
-<summary><b>🔌 Instagram coverage</b></summary>
-
-| Issue | Feature | Why it matters |
-|:--|---|---|
-| [#28](https://github.com/CharanMN7/ig-comment-dm/issues/28) | **`messages` webhook field** | Prerequisite for DM triggers and the inbox |
-| [#54](https://github.com/CharanMN7/ig-comment-dm/issues/54) | **DM inbox** | Read replies without leaving the panel |
-| [#48](https://github.com/CharanMN7/ig-comment-dm/issues/48) | **Typed Meta errors** | "Token expired" beats "Graph API error 190" |
-
-</details>
-
-<details open>
-<summary><b>🛠 Operations</b></summary>
-
-| Issue | Feature | Why it matters |
-|:--|---|---|
-| [#47](https://github.com/CharanMN7/ig-comment-dm/issues/47) | **Operational event log** | Cron failures are invisible until something breaks |
-| [#49](https://github.com/CharanMN7/ig-comment-dm/issues/49) | **Export rules and logs** | Your data, portable |
-| [#50](https://github.com/CharanMN7/ig-comment-dm/issues/50) | **Dark mode** | The panel is white at 1am |
-
-</details>
-
-> [!TIP]
-> **New here?** These three are self-contained, need no Meta app to test, and have the approach written out in the issue:
-> [#19 non-Latin keyword matching](https://github.com/CharanMN7/ig-comment-dm/issues/19) ·
-> [#50 dark mode](https://github.com/CharanMN7/ig-comment-dm/issues/50) ·
-> [#48 human-readable Meta errors](https://github.com/CharanMN7/ig-comment-dm/issues/48)
-
-<div align="center">
-
-**[→ All open issues](https://github.com/CharanMN7/ig-comment-dm/issues)** · **[→ Good first issues](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue)** · **[→ Discussions](https://github.com/CharanMN7/ig-comment-dm/discussions)**
-
-</div>
-
----
-
-## Documentation
-
-| | |
-|---|---|
-| **[docs/setup.md](docs/setup.md)** | Every Meta dashboard screen, and the traps in each |
-| **[docs/troubleshooting.md](docs/troubleshooting.md)** | Symptom-first. Start here when nothing happens. |
-| **[docs/architecture.md](docs/architecture.md)** | Routes, pipeline, cron, crypto |
-| **[CONTRIBUTING.md](CONTRIBUTING.md)** | Setup, house style, what belongs here |
-| **[SECURITY.md](SECURITY.md)** | Threat model, secret inventory, rotation, private reporting |
-
----
+Stuck? [Troubleshooting](https://charanmn7.github.io/ig-comment-dm/docs/troubleshooting/) starts from the symptom.
 
 ## Contributing
 
-Issues and pull requests are welcome. Claim an issue and wait to be assigned before you open a PR; unassigned PRs are closed automatically ([why](CONTRIBUTING.md#working-on-an-issue)). [`good first issue`](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue) items are self-contained and describe the approach.
+Comment on an issue to claim it, wait until you're assigned, then open a PR with `Closes #<issue>`.
+PRs from anyone not assigned are closed automatically, and you can have two open at once.
+Details are in [CONTRIBUTING.md](CONTRIBUTING.md), the [contributor guide](https://charanmn7.github.io/ig-comment-dm/docs/contributing/) and, for coding agents, [AGENTS.md](AGENTS.md). Planned work is on the [roadmap](https://charanmn7.github.io/ig-comment-dm/docs/roadmap/), and [good first issues](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue) are the place to start.
 
-```bash
-npm install
-npm test          # unit + integration tests, fully local, no network
-npm run typecheck
-npm run dev       # http://localhost:8787
-```
+Security problems go through [SECURITY.md](SECURITY.md), not public issues.
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) first — particularly the constraint that keeps this project usable: **one runtime dependency, no build step, no client-side JavaScript.**
+## License
 
-Found a security problem? **Do not open an issue.** See [SECURITY.md](SECURITY.md).
-
----
-
-<div align="center">
-
-### Star history
-
-<a href="https://star-history.com/#CharanMN7/ig-comment-dm&Date"><img src="https://api.star-history.com/svg?repos=CharanMN7/ig-comment-dm&type=Date" alt="Star history chart" width="600" /></a>
-
-<br /><br />
-
-**[MIT licensed](LICENSE)** · Built on [Cloudflare Workers](https://workers.cloudflare.com) and [Hono](https://hono.dev)
-
-<sub>Not affiliated with, endorsed by, or sponsored by Meta or Instagram.<br />
-Instagram is a trademark of Meta Platforms, Inc.</sub>
-
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:FCB045,50:FD1D1D,100:833AB4&height=110&section=footer" alt="" width="100%" />
-
-</div>
+[MIT](LICENSE). Not affiliated with, endorsed by, or sponsored by Meta or Instagram. Instagram is a trademark of Meta Platforms, Inc.
