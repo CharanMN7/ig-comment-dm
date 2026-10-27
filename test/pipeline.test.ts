@@ -133,6 +133,41 @@ describe('the {username} placeholder', () => {
   });
 });
 
+describe('public reply variations', () => {
+  it('posts one of the variations per comment, with {username} filled in', async () => {
+    await seedAccount();
+    await seedRule({ publicReply: JSON.stringify(['Sent, {username}!', 'Check your DMs 📩', 'On its way']) });
+    const payload = commentPayload({ commentId: 'v-0', username: 'sarah' });
+    for (let i = 1; i < 30; i++) {
+      payload.entry[0]!.changes.push({ field: 'comments', value: commentValue({ commentId: `v-${i}`, username: 'sarah' }) });
+    }
+
+    await postWebhook(payload);
+
+    const posted = replyCalls().map((c) => (c.body as { message: string }).message);
+    expect(posted).toHaveLength(30);
+    expect(new Set(replyCalls().map((c) => c.path)).size).toBe(30);
+    for (const message of posted) expect(['Sent, sarah!', 'Check your DMs 📩', 'On its way']).toContain(message);
+    // Thirty identical picks from three would be a one-in-10^14 fluke, not chance.
+    expect(new Set(posted).size).toBeGreaterThan(1);
+  });
+
+  it('sends a legacy multi-line public reply whole, as one reply', async () => {
+    await seedAccount();
+    await seedRule({ publicReply: 'Sent you a DM!\nCheck your message requests too.' });
+    await postWebhook(commentPayload());
+    expect(replyCalls()).toEqual([expect.objectContaining({ body: { message: 'Sent you a DM!\nCheck your message requests too.' } })]);
+  });
+
+  it('sends a saved reply that only looks like a list as one reply, never silently dropping it', async () => {
+    await seedAccount();
+    await seedRule({ publicReply: '[see bio] for the link' });
+    await postWebhook(commentPayload());
+    expect(replyCalls()).toEqual([expect.objectContaining({ body: { message: '[see bio] for the link' } })]);
+    expect(await sentRow('17900000000000001')).toMatchObject({ reply_status: 'ok' });
+  });
+});
+
 describe('comments that must not trigger a DM', () => {
   it('records a non-matching comment as skipped and calls Meta for nothing', async () => {
     await seedAccount();

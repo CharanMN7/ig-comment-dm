@@ -25,7 +25,7 @@ p { margin: 0.5rem 0; }
 .banner a { color: #411; font-weight: 650; }
 .ok { background: #e7f6ea; border: 1px solid #2a6; color: #143; padding: 0.7rem 0.85rem; margin: 0 0 1rem; }
 .err { color: #a11; }
-p.message { white-space: pre-wrap; }
+.message { white-space: pre-wrap; }
 table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e4e4e0; }
 .table-wrap { overflow-x: auto; }
 .detail { overflow-wrap: anywhere; }
@@ -52,6 +52,9 @@ label.choice .muted { display: block; }
 .rule-form:has(#match_all:checked) .when-all { display: block; }
 .rule-form:has(#match_all:checked) .when-keywords { display: none; }
 .rule-form:has(#match_all:checked):has(#media_id option[value=""]:checked) .needs-post { display: block; }
+textarea.short { min-height: 3.5rem; }
+details { margin-top: 0.85rem; }
+summary { cursor: pointer; font-weight: 650; padding: 0.7rem 0; min-height: 44px; }
 .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-top: 0.75rem; }
 button, .btn {
   background: #111; color: #fff; border: 0; padding: 0.42rem 0.8rem; font: inherit; cursor: pointer;
