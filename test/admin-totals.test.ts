@@ -422,6 +422,16 @@ describe('query plans', () => {
     }
   });
 
+  it('reads the other matching rules for the last 20 sends by key, never a scan', async () => {
+    await seedTwoWithSnapshot();
+    const { db, calls } = countingDb();
+    await home(db);
+    const [extras] = calls.filter((c) => c.sql.includes('FROM sent_extra_replies'));
+    const steps = await plan(extras!);
+    expect(steps.filter((s) => /^SCAN e\b/.test(s)), steps.join(' | ')).toEqual([]);
+    expect(steps).toContainEqual(expect.stringMatching(/^SEARCH e USING INDEX sqlite_autoindex_sent_extra_replies_1 \(comment_id=\?\)$/));
+  });
+
   it('keeps the daily job’s sweep and snapshot to the rows since the last one', async () => {
     await seedTwoWithSnapshot();
     const { db, calls } = countingDb();

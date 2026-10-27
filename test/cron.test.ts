@@ -10,13 +10,14 @@ import {
   IG_USER,
   NOW,
   accountRow,
+  extraReplyRows,
   seedAccount,
   seedRule,
   sentRows,
   storedToken,
   systemValue,
 } from './support/seed.ts';
-import { adminPath, commentValue, postWebhook, runScheduled, signedInAdmin } from './support/worker.ts';
+import { adminPath, commentPayload, commentValue, postWebhook, runScheduled, signedInAdmin } from './support/worker.ts';
 
 const POLL = '*/5 * * * *';
 const DAILY = '0 3 * * *';
@@ -182,6 +183,20 @@ describe('the 5-minute comment poll', () => {
       ['c-ad-hooked', 'ok'],
       ['c-ad-missed', 'ok'],
     ]);
+  });
+
+  it("posts every matching rule's public reply once when the webhook and the poll take the same comment at once", async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'], publicReply: 'Reply 1' });
+    const other = await seedRule({ keywords: ['guide'], publicReply: 'Reply 2', replyWithoutDm: true });
+    meta.on('GET', '/me/media', { json: { data: [{ id: 'm1' }] } });
+    meta.on('GET', '/:id/comments', commentsByMedia({ m1: [comment('c-both', 'guide')] }));
+
+    await Promise.all([postWebhook(commentPayload({ commentId: 'c-both', text: 'guide', mediaId: 'm1' })), runScheduled(POLL)]);
+
+    expect(dmTargets()).toEqual(['c-both']);
+    expect(meta.callsTo('POST', '/:id/replies').map((c) => c.body)).toEqual([{ message: 'Reply 1' }, { message: 'Reply 2' }]);
+    expect(await extraReplyRows()).toMatchObject([{ comment_id: 'c-both', rule_id: other, status: 'ok' }]);
   });
 
   it('puts the username from the comment listing into the DM and public reply', async () => {

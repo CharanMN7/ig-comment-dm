@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { decryptAesGcm, encryptAesGcm } from '../../src/crypto.ts';
 import { insertRule, setAccountActive, toggleRule, tryClaimComment, upsertAccount } from '../../src/db.ts';
-import type { Account, MatchMode, Rule, Sent } from '../../src/types.ts';
+import type { Account, ExtraReply, MatchMode, Rule, Sent } from '../../src/types.ts';
 
 export const FROZEN_NOW_MS = Date.UTC(2026, 9, 1, 12, 0, 0);
 export const NOW = Math.floor(FROZEN_NOW_MS / 1000);
@@ -48,6 +48,7 @@ export async function seedRule(
     matchMode?: MatchMode;
     excludeKeywords?: string[];
     matchAll?: boolean;
+    replyWithoutDm?: boolean;
     mediaId?: string | null;
     dmText?: string;
     publicReply?: string | null;
@@ -61,6 +62,7 @@ export async function seedRule(
     match_mode: opts.matchMode ?? 'word',
     exclude_keywords: JSON.stringify(opts.excludeKeywords ?? []),
     match_all: opts.matchAll ? 1 : 0,
+    reply_without_dm: opts.replyWithoutDm ? 1 : 0,
     media_id: opts.mediaId ?? null,
     dm_text: opts.dmText ?? 'Here is your guide: https://example.com/guide',
     public_reply_text: opts.publicReply ?? null,
@@ -99,6 +101,12 @@ export async function sentRows(): Promise<Sent[]> {
 
 export async function sentRow(commentId: string): Promise<Sent | null> {
   return env.DB.prepare('SELECT * FROM sent WHERE comment_id = ?').bind(commentId).first<Sent>();
+}
+
+/** The other matching rules' rows, in the order they were written, which is matching order. */
+export async function extraReplyRows(): Promise<ExtraReply[]> {
+  const { results } = await env.DB.prepare('SELECT * FROM sent_extra_replies ORDER BY rowid').all<ExtraReply>();
+  return results;
 }
 
 export async function ruleRows(): Promise<Rule[]> {
