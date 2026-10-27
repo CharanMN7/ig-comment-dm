@@ -34,6 +34,10 @@ Also:
 - **One change per PR.** A bug fix and a refactor are two PRs.
 - **At most two open PRs per person.** Check with `gh pr list --author "@me"` before opening
   another.
+- **Fill in the PR template's AI-use field truthfully.** Your human has to understand every
+  line, run the change and the tests locally, and write their own replies to review. PRs
+  that look mass-generated or hide AI use are closed without review.
+- **`good first issue` is for first-time contributors**, one per person.
 
 ## What this project is
 

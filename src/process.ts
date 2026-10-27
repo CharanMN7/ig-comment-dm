@@ -11,7 +11,7 @@ import {
 } from './db.ts';
 import { isSelfComment } from './guard.ts';
 import { type MatchVerdict, exclusionSkipReason, matchComment } from './match.ts';
-import { type MetaCallResult, hasTimeForCall, sendPrivateReply, sendPublicReply } from './meta.ts';
+import { type SendResult, hasTimeForCall, sendPrivateReply, sendPublicReply } from './meta.ts';
 import { fillPlaceholders } from './placeholders.ts';
 import { parsePublicReplies, pickReply } from './replies.ts';
 import type { Env } from './types.ts';
@@ -19,21 +19,33 @@ import type { Env } from './types.ts';
 /**
  * The webhook answers Meta first and handles the comments in waitUntil, which
  * Cloudflare stops 30 s after the response. A send cut off there leaves its row
- * `pending` until the daily job fails it, and one Meta call can take about
- * 32 s with its retries. So every Meta call for one delivery has to end inside
- * this, which leaves the last few seconds for writing the outcome.
+ * `pending` until the daily job fails it. A DM and its public reply take up to
+ * 10 s each, so every Meta call for one delivery has to end inside this, which
+ * leaves the last few seconds for writing the outcome.
  */
 export const WEBHOOK_SEND_BUDGET_MS = 25_000;
 
 export const NO_TIME_FOR_PUBLIC_REPLY_ERROR =
   'public reply: no time was left to post it, because Instagram was slow to answer';
 
+/** What the send log says about a DM or public reply that Instagram didn't confirm. */
+export function sendError(what: 'DM' | 'public reply', result: SendResult): string {
+  if (!('cause' in result)) return `${what}: ${result.body}`;
+  const { cause, body } = result;
+  if (result.outcome === 'not_started') return `${what}: ${cause}, so it wasn't sent`;
+  const detail = body ? ` (${body})` : '';
+  return what === 'DM'
+    ? `DM: ${cause}, so it may have been delivered. It wasn't sent again, so it can't arrive twice.${detail}`
+    : `public reply: ${cause}, so it may have been posted. It wasn't posted again, so it can't appear twice.${detail}`;
+}
+
 type CommentValue = {
   id?: string | number;
   comment_id?: string | number;
   text?: string;
   from?: { id?: string | number; username?: string };
-  media?: { id?: string | number };
+  /** `original_media_id` is set only on a comment left on an ad: the post the ad was made from. */
+  media?: { id?: string | number; original_media_id?: string | number };
   media_id?: string | number;
 };
 
@@ -125,21 +137,9 @@ export async function chooseRule(
   igUserId: string,
   text: string,
   mediaId: string | undefined,
+  originalMediaId?: string,
 ): Promise<MatchVerdict> {
-  return matchComment(await listActiveRules(db, igUserId), text, mediaId);
-}
-
-/**
- * A send that throws (every retry failed before Meta answered) must still end
- * as a failed result. Otherwise the final UPDATE never runs, the claimed row
- * stays `pending`, and dedupe treats the comment as handled for good.
- */
-async function sendOrFail(send: () => Promise<MetaCallResult>): Promise<MetaCallResult> {
-  try {
-    return await send();
-  } catch (err) {
-    return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
-  }
+  return matchComment(await listActiveRules(db, igUserId), text, mediaId, originalMediaId);
 }
 
 /**
@@ -175,6 +175,7 @@ export async function processComment(
   const now = nowSeconds();
   const text = value.text ?? '';
   const mediaId = asId(value.media?.id) ?? asId(value.media_id);
+  const originalMediaId = asId(value.media?.original_media_id);
 
   if (entryTime != null) {
     const ts = asUnixSeconds(entryTime);
@@ -207,7 +208,7 @@ export async function processComment(
   });
   if (!claimed) return false;
 
-  const { match, excluded } = await chooseRule(env.DB, account.ig_user_id, text, mediaId);
+  const { match, excluded } = await chooseRule(env.DB, account.ig_user_id, text, mediaId, originalMediaId);
   if (!match) {
     // When several rules were excluded, the first in matching order is the one
     // that would have fired, so that is the rule and the reason Home shows.
@@ -244,22 +245,23 @@ export async function processComment(
     return true;
   }
 
-  const dm = await sendOrFail(() => sendPrivateReply(account.ig_user_id, token, commentId, dmText, deadline));
+  const dm = await sendPrivateReply(account.ig_user_id, token, commentId, dmText, deadline);
+  const dmSent = dm.outcome === 'sent';
   let replyStatus: string | null = null;
   const errors: string[] = [];
 
-  if (!dm.ok) errors.push(`DM: ${dm.body}`);
+  if (!dmSent) errors.push(sendError('DM', dm));
 
   if (publicText) {
-    if (dm.ok && !hasTimeForCall(deadline)) {
+    if (dmSent && !hasTimeForCall(deadline)) {
       // Started anyway, the reply would be cut off with the Worker, leaving
       // the row `pending` with no record that the DM went out.
       replyStatus = 'failed';
       errors.push(NO_TIME_FOR_PUBLIC_REPLY_ERROR);
-    } else if (dm.ok) {
-      const reply = await sendOrFail(() => sendPublicReply(commentId, token, publicText, deadline));
-      replyStatus = reply.ok ? 'ok' : 'failed';
-      if (!reply.ok) errors.push(`public reply: ${reply.body}`);
+    } else if (dmSent) {
+      const reply = await sendPublicReply(commentId, token, publicText, deadline);
+      replyStatus = reply.outcome === 'sent' ? 'ok' : 'failed';
+      if (reply.outcome !== 'sent') errors.push(sendError('public reply', reply));
     } else {
       // Public replies are usually "Sent you a DM!". Posting one when no DM
       // arrived tells the commenter, and everyone reading the thread, something
@@ -270,7 +272,7 @@ export async function processComment(
 
   await updateSent(env.DB, commentId, {
     rule_id: rule.id,
-    dm_status: dm.ok ? 'ok' : 'failed',
+    dm_status: dmSent ? 'ok' : 'failed',
     reply_status: replyStatus,
     error: errors.length ? errors.join('\n') : null,
     sent_at: nowSeconds(),

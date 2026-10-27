@@ -12,11 +12,10 @@ const MAX_PROCESS_PER_SWEEP = 10;
 
 /**
  * The poll runs in the scheduled handler, not in waitUntil, so it has
- * Cloudflare's 15 minutes rather than 30 seconds, and its sends keep their full
- * retries. It still stops starting sends after this: a send cut off at 15
- * minutes would stay `pending`, and stopping here also ends a slow sweep
- * before the next one begins. Comments it doesn't reach stay unclaimed, so the
- * next sweep picks them up.
+ * Cloudflare's 15 minutes rather than 30 seconds. It still stops starting
+ * sends after this: a send cut off at 15 minutes would stay `pending`, and
+ * stopping here also ends a slow sweep before the next one begins. Comments it
+ * doesn't reach stay unclaimed, so the next sweep picks them up.
  */
 export const POLL_BUDGET_MS = 4 * 60 * 1000;
 
@@ -92,6 +91,9 @@ export async function reconcileComments(env: Env): Promise<void> {
         if (!match && excluded.length === 0) continue;
         if ((await countSentByComment(env.DB, comment.id)) > 0) continue;
         try {
+          // For a boosted post, Instagram lists the ad's comments here along
+          // with the post's own, so an ad comment is matched as the post's,
+          // the same as the webhook does with `original_media_id`.
           const claimed = await processComment(env, account.ig_user_id, ts, {
             id: comment.id,
             text: comment.text,

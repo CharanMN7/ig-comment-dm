@@ -204,7 +204,9 @@ Your password and all your data are unaffected. Only the URL changes.
 
 ### Too many wrong passwords
 
-Five attempts are free. The sixth waits a minute, and each attempt after that doubles the wait, up to an hour. Waiting it out is the intended fix.
+Five wrong passwords are free. The sixth starts a one-minute wait, and each wrong password after a wait ends doubles the next one, up to an hour. Attempts made during a wait are refused without being checked, and don't make it longer. Waiting it out is the intended fix.
+
+The wait covers the whole panel, not one browser or network, so a phone on mobile data is locked out too. If the wrong passwords weren't yours, someone else has your admin URL. [Set a new `ADMIN_URL_SECRET`](#the-admin-page-shows-404) to shut them out, then clear the wait as below.
 
 To clear it immediately:
 
@@ -256,7 +258,9 @@ npm run db:migrate
 
 The **Last 20 sends** row shows the exact error from Meta. When the DM fails, the public reply isn't posted either, because a reply like "Sent you a DM!" would be false; the row says so. A public reply can still fail on its own after a DM went through.
 
-"Could not reach Instagram after 3 tries" means Meta never answered, usually a brief network problem. That comment isn't retried automatically. A comment from a webhook has 25 seconds for its DM and public reply, so when Instagram is slow you may see fewer tries, followed by "and there was no time left to try again". If the DM got through but used up that time, the public reply is recorded as failed with "no time was left to post it".
+"So it may have been delivered" means Instagram got the request but its answer never arrived in a usable form: it didn't answer within 10 seconds, the connection dropped, or it answered with a server error. Instagram may have sent the DM anyway, so it isn't sent again: a second try could reach the same person twice. Ask the commenter, or check the conversation in the Instagram app, before sending anything by hand. A public reply in the same situation says "so it may have been posted", and isn't posted again either; look under the comment.
+
+A comment from a webhook has 25 seconds for its DM and public reply, so when Instagram is slow its timeout can be shorter than 10 seconds. If the DM got through but used up that time, the public reply is recorded as failed with "no time was left to post it".
 
 Common DM failures:
 

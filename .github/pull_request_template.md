@@ -1,5 +1,10 @@
-<!-- Pull requests are reviewed only when you are assigned to the issue this closes.
-     Unassigned PRs are closed automatically. See CONTRIBUTING.md. -->
+<!-- PRs are reviewed only when they link an issue that a maintainer assigned to you.
+     Anything else is closed automatically. Read CONTRIBUTING.md first. -->
+
+Closes #
+
+- [ ] I was assigned this issue by a maintainer
+- [ ] I've run my change and the tests locally (`npm test`, `npm run typecheck`)
 
 ## What this changes
 
@@ -7,25 +12,25 @@
 
 ## Why
 
-<!-- Especially important for anything touching Meta's API: what did you observe
-     that made this necessary? Meta's docs and Meta's behaviour disagree often. -->
+<!-- Especially for anything touching Meta's API: what did you observe that made
+     this necessary? Meta's docs and Meta's behaviour disagree often. -->
 
-Closes #
+## How I tested it
 
-- [ ] I am assigned to this issue
+<!-- What you ran, and for a live flow, what you commented and what arrived. -->
 
-## How it was verified
+## AI use
 
-- [ ] `npm test` passes
-- [ ] `npm run typecheck` passes
-- [ ] Tested against a live Worker (say which flow)
-- [ ] Not testable without a real Meta app — explained below
+<!-- Tick one, then say in a sentence or two what the tool did and what you checked. -->
 
-<!-- If you tested a live flow, say what you commented and what arrived. -->
+- [ ] None
+- [ ] Assisted: AI helped with parts; I wrote or rewrote the rest
+- [ ] Mostly generated: AI wrote most of it; I reviewed and understand every line
+
+Description:
 
 ## Checklist
 
 - [ ] No secrets, tokens, `database_id`, or admin URLs in the diff or in screenshots
-- [ ] Operator-facing docs updated if the setup steps changed
 - [ ] A test was added if this fixes a bug
-- [ ] Any new log line was checked for secrets
+- [ ] Operator-facing docs updated if the setup steps changed

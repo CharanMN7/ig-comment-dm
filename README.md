@@ -106,9 +106,9 @@ Stuck? [Troubleshooting](https://charanmn7.github.io/ig-comment-dm/docs/troubles
 
 ## Contributing
 
-Comment on an issue to claim it, wait until you're assigned, then open a PR with `Closes #<issue>`.
-PRs from anyone not assigned are closed automatically, and you can have two open at once.
-Details are in [CONTRIBUTING.md](CONTRIBUTING.md), the [contributor guide](https://charanmn7.github.io/ig-comment-dm/docs/contributing/) and, for coding agents, [AGENTS.md](AGENTS.md). Planned work is on the [roadmap](https://charanmn7.github.io/ig-comment-dm/docs/roadmap/), and [good first issues](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue) are the place to start.
+Read **[CONTRIBUTING.md](CONTRIBUTING.md)** before you start. In short: comment on an issue to claim it, wait until a maintainer assigns you, then open a PR with `Closes #<issue>`. PRs that skip this are closed automatically, and you can have two open at once.
+AI tools are fine if you say how you used them and understand every line you submit.
+For coding agents there's [AGENTS.md](AGENTS.md), and local setup is in the [contributor guide](https://charanmn7.github.io/ig-comment-dm/docs/contributing/). Planned work is on the [roadmap](https://charanmn7.github.io/ig-comment-dm/docs/roadmap/). [Good first issues](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue) are for first-time contributors, one each.
 
 Security problems go through [SECURITY.md](SECURITY.md), not public issues.
 

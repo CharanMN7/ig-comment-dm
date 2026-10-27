@@ -79,7 +79,7 @@ describe('the admin home page', () => {
     await postWebhook(commentPayload());
     const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
     expect(page).toContain('Send failed.');
-    expect(page).toContain('Public reply not posted, because no DM went out.');
+    expect(page).toContain('Public reply not posted, because Instagram didn’t confirm the DM.');
   });
 
   it('warns when the last webhook failed its signature check', async () => {
