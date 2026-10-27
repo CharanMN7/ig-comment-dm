@@ -2,13 +2,23 @@ import { COMMENT_MAX_AGE_SECONDS, decryptAesGcm, nowSeconds } from './crypto.ts'
 import { countSentByComment, listAccounts, listActiveRules, systemSet } from './db.ts';
 import { isSelfComment } from './guard.ts';
 import { matchComment } from './match.ts';
-import { listMediaComments, listRecentMedia } from './meta.ts';
+import { hasTimeForCall, listMediaComments, listRecentMedia } from './meta.ts';
 import { processComment } from './process.ts';
 import type { Env } from './types.ts';
 
 const LOOKBACK_SECONDS = 72 * 60 * 60;
 const MAX_MEDIA_PER_ACCOUNT = 3;
 const MAX_PROCESS_PER_SWEEP = 10;
+
+/**
+ * The poll runs in the scheduled handler, not in waitUntil, so it has
+ * Cloudflare's 15 minutes rather than 30 seconds, and its sends keep their full
+ * retries. It still stops starting sends after this: a send cut off at 15
+ * minutes would stay `pending`, and stopping here also ends a slow sweep
+ * before the next one begins. Comments it doesn't reach stay unclaimed, so the
+ * next sweep picks them up.
+ */
+export const POLL_BUDGET_MS = 4 * 60 * 1000;
 
 function commentUnix(timestamp: string | undefined): number | undefined {
   if (!timestamp) return undefined;
@@ -25,11 +35,13 @@ function commentUnix(timestamp: string | undefined): number | undefined {
 export async function reconcileComments(env: Env): Promise<void> {
   const now = nowSeconds();
   const since = now - LOOKBACK_SECONDS;
+  const deadline = Date.now() + POLL_BUDGET_MS;
   const accounts = await listAccounts(env.DB);
   let processed = 0;
+  const done = () => processed >= MAX_PROCESS_PER_SWEEP || !hasTimeForCall(deadline);
 
   for (const account of accounts) {
-    if (account.active !== 1 || processed >= MAX_PROCESS_PER_SWEEP) continue;
+    if (account.active !== 1 || done()) continue;
     const rules = await listActiveRules(env.DB, account.ig_user_id);
     if (rules.length === 0) continue;
 
@@ -60,7 +72,7 @@ export async function reconcileComments(env: Env): Promise<void> {
     }
 
     for (const mediaId of mediaIds.slice(0, MAX_MEDIA_PER_ACCOUNT)) {
-      if (processed >= MAX_PROCESS_PER_SWEEP) break;
+      if (done()) break;
       let comments;
       try {
         comments = await listMediaComments(token, mediaId);
@@ -70,7 +82,7 @@ export async function reconcileComments(env: Env): Promise<void> {
       }
 
       for (const comment of comments) {
-        if (processed >= MAX_PROCESS_PER_SWEEP) break;
+        if (done()) break;
         const ts = commentUnix(comment.timestamp);
         if (ts != null && (ts < since || now - ts > COMMENT_MAX_AGE_SECONDS)) continue;
         if (isSelfComment(comment.from?.id, account.ig_user_id)) continue;
@@ -85,7 +97,7 @@ export async function reconcileComments(env: Env): Promise<void> {
             text: comment.text,
             from: comment.from,
             media: { id: mediaId },
-          });
+          }, deadline);
           processed += 1;
         } catch (err) {
           console.error('poll process failed', comment.id, err instanceof Error ? err.message : err);

@@ -1,7 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { NO_TIME_FOR_PUBLIC_REPLY_ERROR, WEBHOOK_SEND_BUDGET_MS } from '../src/process.ts';
 import { FAKE_EXPIRES_IN, FAKE_ME, meta, type MetaReply } from './support/meta.ts';
 import { DAY, FROZEN_NOW_MS, NOW, accountRow, seedAccount, seedRule, sentRow, storedToken, systemValue } from './support/seed.ts';
-import { commentPayload, postWebhook, returnFromInstagram, runScheduled, signedInAdmin, startConnect } from './support/worker.ts';
+import {
+  commentPayload,
+  commentValue,
+  postWebhook,
+  returnFromInstagram,
+  runScheduled,
+  signedInAdmin,
+  startConnect,
+} from './support/worker.ts';
 
 // Backoff sleeps up to two real seconds per call, so setTimeout is faked here
 // too. vi.mock can't stub the sleep instead: the pool loads the Worker's
@@ -117,6 +126,87 @@ describe('Meta retry policy', () => {
     expect(meta.callsTo('POST', '/:id/replies')).toHaveLength(3);
     expect(row).toMatchObject({ dm_status: 'ok', reply_status: 'failed' });
     expect(row?.error).toMatch(/^public reply: could not reach Instagram after 3 tries/);
+  });
+});
+
+describe('the time a webhook delivery is allowed', () => {
+  // The webhook starts the clock as it hands the delivery to waitUntil, and only these tests move Date.
+  const deadline = FROZEN_NOW_MS + WEBHOOK_SEND_BUDGET_MS;
+  const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * Records each attempt's timeout and when it started. The attempts numbered
+   * in `hanging` (from 0) get no answer: the clock moves on by their whole
+   * timeout and the request is aborted, as AbortSignal.timeout would do on
+   * workerd's own clock, which fake timers can't reach.
+   */
+  function trackAttempts(hanging: number[]): Array<{ ms: number; at: number }> {
+    const attempts: Array<{ ms: number; at: number }> = [];
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      attempts.push({ ms, at: Date.now() });
+      if (!hanging.includes(attempts.length - 1)) return realTimeout(ms);
+      vi.setSystemTime(Date.now() + ms);
+      return AbortSignal.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+    });
+    return attempts;
+  }
+
+  it('cuts the last DM attempt to the time left, then records a public reply there is no time for as failed', async () => {
+    const attempts = trackAttempts([0, 1]);
+    // The third attempt gets through a second before the deadline.
+    meta.on('POST', '/:id/messages', () => {
+      vi.setSystemTime(deadline - 1_000);
+      return { json: { recipient_id: '1234567890', message_id: 'm1' } };
+    });
+    await seedAccount();
+    await seedRule({ publicReply: 'Sent you a DM!' });
+
+    await withBackoffSkipped(postWebhook(commentPayload()));
+
+    expect(attempts.map((a) => a.ms).slice(0, 2)).toEqual([10_000, 10_000]);
+    expect(attempts[2]!.ms).toBe(deadline - attempts[2]!.at);
+    expect(attempts[2]!.ms).toBeLessThan(10_000);
+    // Three attempts, all the DM's: the public reply never started one.
+    expect(attempts).toHaveLength(3);
+    expect(meta.callsTo('POST', '/:id/replies')).toEqual([]);
+    const row = await sentRow('17900000000000001');
+    expect(row).toMatchObject({ dm_status: 'ok', reply_status: 'failed', error: NO_TIME_FOR_PUBLIC_REPLY_ERROR });
+    expect(row!.sent_at * 1000).toBeLessThanOrEqual(deadline);
+  });
+
+  it('shares the time across a batched delivery: no retry that cannot finish, and no claim without time to send', async () => {
+    // Attempt 0 is the first comment's DM, which Meta answers after 9 s.
+    const attempts = trackAttempts([1, 2]);
+    meta.on('POST', '/:id/messages', () => {
+      vi.setSystemTime(Date.now() + 9_000);
+      return { json: { recipient_id: '1234567890', message_id: 'm1' } };
+    });
+    await seedAccount();
+    await seedRule();
+    const payload = commentPayload({ commentId: 'batch-1' });
+    payload.entry[0]!.changes.push(
+      { field: 'comments', value: commentValue({ commentId: 'batch-2' }) },
+      { field: 'comments', value: commentValue({ commentId: 'batch-3' }) },
+    );
+
+    await withBackoffSkipped(postWebhook(payload));
+
+    // The second comment's first attempt gets its full 10 s, its second only
+    // what is left, and a third would start after the deadline.
+    expect(attempts.map((a) => a.ms).slice(0, 2)).toEqual([10_000, 10_000]);
+    expect(attempts[2]!.ms).toBe(deadline - attempts[2]!.at);
+    expect(attempts).toHaveLength(3);
+    expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
+    expect(await sentRow('batch-1')).toMatchObject({ dm_status: 'ok' });
+    const failed = await sentRow('batch-2');
+    expect(failed).toMatchObject({ dm_status: 'failed' });
+    expect(failed?.error).toMatch(/^DM: could not reach Instagram after 2 tries, and there was no time left to try again \(.+\)$/);
+    expect(failed!.sent_at * 1000).toBeLessThanOrEqual(deadline);
+    // Left unclaimed rather than failed, so the 5-minute poll can still send it.
+    expect(await sentRow('batch-3')).toBeNull();
   });
 });
 

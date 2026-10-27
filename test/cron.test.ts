@@ -1,10 +1,12 @@
 import { env } from 'cloudflare:workers';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { insertWebhookEvent, tryClaimComment } from '../src/db.ts';
+import { POLL_BUDGET_MS } from '../src/reconcile.ts';
 import { FAKE_EXPIRES_IN, type MetaCall, meta } from './support/meta.ts';
 import {
   ACCESS_TOKEN,
   DAY,
+  FROZEN_NOW_MS,
   IG_USER,
   NOW,
   accountRow,
@@ -208,6 +210,32 @@ describe('the 5-minute comment poll', () => {
     meta.on('GET', '/:id/comments', commentsByMedia({ m1: Array.from({ length: 12 }, (_, i) => comment(`c${i}`, 'guide')) }));
     await runScheduled(POLL);
     expect(dmTargets()).toHaveLength(10);
+  });
+
+  it('stops starting sends once the sweep has used its time, and leaves the rest unclaimed for the next sweep', async () => {
+    await seedAccount();
+    await seedRule();
+    meta.on('GET', '/me/media', { json: { data: [{ id: 'm1' }] } });
+    meta.on('GET', '/:id/comments', commentsByMedia({ m1: [comment('c1', 'guide'), comment('c2', 'guide please'), comment('c3', 'guide?')] }));
+    // Stands in for a sweep slowed down by Instagram: the first DM leaves it a
+    // second short of its budget, too little to start another send.
+    meta.on('POST', '/:id/messages', () => {
+      vi.setSystemTime(FROZEN_NOW_MS + POLL_BUDGET_MS - 1_000);
+      return { json: { recipient_id: '1234567890', message_id: 'm1' } };
+    });
+
+    await runScheduled(POLL);
+
+    expect(dmTargets()).toEqual(['c1']);
+    expect(await sentRows()).toEqual([expect.objectContaining({ comment_id: 'c1', dm_status: 'ok' })]);
+    expect(await systemValue('last_poll_ok_at')).not.toBeNull();
+
+    meta.on('POST', '/:id/messages', { json: { recipient_id: '1234567890', message_id: 'm2' } });
+    meta.clearCalls();
+    vi.setSystemTime(FROZEN_NOW_MS + 5 * 60 * 1000);
+    await runScheduled(POLL);
+
+    expect(dmTargets()).toEqual(['c2', 'c3']);
   });
 
   it('does not refresh tokens or touch subscriptions', async () => {
