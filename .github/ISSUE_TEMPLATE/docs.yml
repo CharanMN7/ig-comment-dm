@@ -13,7 +13,7 @@ body:
     id: where
     attributes:
       label: Which page and section
-      placeholder: "README.md — section 3, Webhook (the comment notifications)"
+      placeholder: "Self-setup guide — 4. Point Meta at your Worker, Webhook"
     validations:
       required: true
 

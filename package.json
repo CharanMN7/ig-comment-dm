@@ -17,7 +17,8 @@
     "test:integration": "vitest run",
     "typecheck": "tsc --noEmit && tsc --noEmit -p test",
     "selftest": "node --experimental-strip-types scripts/selftest.ts",
-    "keys": "node --experimental-strip-types scripts/keys.ts"
+    "keys": "node --experimental-strip-types scripts/keys.ts",
+    "icons": "node --experimental-strip-types scripts/icons.ts"
   },
   "dependencies": {
     "hono": "^4.13.13"
@@ -42,6 +43,6 @@
   },
   "homepage": "https://github.com/CharanMN7/ig-comment-dm#readme",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   }
 }

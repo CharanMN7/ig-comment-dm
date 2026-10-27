@@ -21,7 +21,7 @@ Connecting needs you to be logged in to the admin panel; the Connect page refuse
 | Field | What to put |
 |---|---|
 | **Name** | For you only, e.g. `Free guide`. |
-| **Keywords** | One per line, **at least 3 characters** each, counted after emoji and punctuation are dropped. `AI` would fire on "again" and "email", so the form rejects it. |
+| **Keywords** | One per line, **at least 3 characters** each, counted after emoji and punctuation are dropped. `AI` would fire on "again" and "email", so the form rejects it. Chinese and Japanese need 2, so `指南` works. |
 | **How to look for them** | **Whole words only** (the default): `guide` matches "Guide please!" but not "guides". **Anywhere in the comment**: also catches `#launch2026` and "guides", but `art` would match "start". |
 | **Exclusions** | Optional, one per line. A comment containing any of them is skipped by this rule even when a keyword matches: `how much`, `already have it`, `not interested`. |
 | **The DM** | Up to 1,000 characters. Put everything they need in this one message. `{username}` puts in their Instagram name. |
@@ -39,13 +39,23 @@ The post dropdown lists your recent posts and reels after you connect. A post's 
   <div className="shot" data-shot="admin-12-new-rule.png">Screenshot coming</div>
 </Frame>
 
+### Start from a template
+
+The Rules page lists eight starting points: a free guide, a product link, a price list, a booking page, a waitlist, an event RSVP, a menu and a giveaway entry. Picking one opens the new-rule form with the keywords, the DM and three public replies already written. Nothing is saved until you press **Save rule**, and you can change every field first.
+
+Each template has `PASTE-YOUR-LINK-HERE` where your link goes. The form won't save while that's still in the DM or a reply, or while either points at a sample address such as `example.com` or `calendly.com/example`, so a follower is never sent a page that isn't yours.
+
+The free guide answers `guía` and `गाइड` as well as `guide`, for followers who comment in Spanish, Portuguese or Hindi. Delete the ones your audience won't type. The giveaway entry replies to every comment, so it needs its post picked under **Which posts**.
+
+The templates are plain text in `src/templates.ts`, so a better one is a pull request away.
+
 ### How keywords match
 
 - Matching ignores case, emoji and punctuation, on both the keyword and the comment: `guide` matches `Guide!` and `guide 🙏`.
 - Accents on Latin letters don't matter: `cafe` matches `café`, `preco` matches `PREÇO`, `dien` matches `điện` and `lodz` matches `łódź`. Marks in other scripts are part of the word, so type a non-Latin keyword with the same marks the comment uses.
 - With **Whole words only**, the keyword has to stand on its own: `guide` doesn't match `guides` or `#guide2026`. Switch the rule to **Anywhere in the comment** for hashtag and brand campaigns.
 - Keywords work in any script, including Cyrillic, Arabic, Chinese and Japanese. Chinese, Japanese, Thai and other scripts written without spaces have no word edges to check, so there a keyword also matches inside a longer word: `ガイド` matches `ガイドライン`.
-- The 3-character minimum counts characters in every script, so a two-character keyword like `指南` can't be saved. A keyword that's only emoji or punctuation (`🔥🔥🔥`) is refused too, because it could never match anything.
+- A keyword written entirely in Chinese or Japanese characters needs 2 characters rather than 3, so `指南` can be saved but `指` can't. Thai, Lao, Khmer and Myanmar still need 3, because their vowel and tone marks count as characters, so two are often a single syllable. A keyword that mixes in Latin letters or digits, like `a指`, needs 3. A keyword that's only emoji or punctuation (`🔥🔥🔥`) is refused too, because it could never match anything.
 
 Exclusions are found the same way as the rule's keywords, and they belong to that rule alone. When a comment trips one, matching carries on to the next rule, so another rule without that exclusion can still reply. If no rule replies because of an exclusion, Home lists the comment as `Skipped: matched exclusion “how much”`, and the five-minute check leaves it alone from then on.
 
@@ -95,6 +105,15 @@ https://ig-comment-dm.YOURNAME.workers.dev/health
 ```
 
 It answers `200` while the database responds and both scheduled jobs are running, and `503` when either has stalled, so you hear about a dead nightly refresh before tokens start expiring. It needs no login and shows no usernames, IDs or secrets: only account counts and the time each job last ran. [What a 503 means](/troubleshooting#health-answers-503).
+
+## Put it on your phone
+
+Open your admin URL on the phone, log in, then:
+
+- **Android, Chrome:** menu → **Install app** (or **Add to Home screen**).
+- **iPhone, Safari:** **Share** → **Add to Home Screen**.
+
+It opens full screen, like an app. An iPhone keeps a home-screen app's cookies apart from Safari's, so you log in once more inside it. Installing on Android shares your admin URL with Google; [Security](/security#installing-on-a-phone) explains why that's acceptable.
 
 ## Logs
 

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  DM_TEXT_MAX,
+  PUBLIC_REPLY_MAX,
   hmacSha256Hex,
   randomIndex,
   timingSafeEqualString,
@@ -46,6 +48,7 @@ import {
 } from '../src/placeholders.ts';
 import { parsePublicReplies, pickReply, serializePublicReplies } from '../src/replies.ts';
 import { MATCH_ALL_NEEDS_POST_MESSAGE, readRuleFields } from '../src/routes/admin.ts';
+import { LINK_MARKER, TEMPLATES, findTemplate, placeholderLinkIn, type RuleTemplate } from '../src/templates.ts';
 import type { Rule } from '../src/types.ts';
 
 function rule(partial: Partial<Rule> & Pick<Rule, 'id' | 'keywords' | 'label'>): Rule {
@@ -380,6 +383,39 @@ describe('keywordProblem', () => {
   it('counts digits as characters', () => {
     assert.equal(keywordProblem('2026'), null);
     assert.equal(keywordProblem('#42'), KEYWORD_TOO_SHORT_MESSAGE);
+  });
+
+  it('accepts two characters in Chinese and Japanese', () => {
+    for (const keyword of ['指南', '链接', 'メモ', 'いい', '指南!!', '#指南']) {
+      assert.equal(keywordProblem(keyword), null, keyword);
+    }
+    assert.equal(keywordProblem('指南', EXCLUSION_TOO_SHORT_MESSAGE), null);
+  });
+
+  it('still refuses a single Chinese or Japanese character', () => {
+    for (const keyword of ['指', 'メ', '指!!', '指🔥']) {
+      assert.equal(keywordProblem(keyword), KEYWORD_TOO_SHORT_MESSAGE, keyword);
+    }
+    assert.equal(keywordProblem('不', EXCLUSION_TOO_SHORT_MESSAGE), EXCLUSION_TOO_SHORT_MESSAGE);
+  });
+
+  it('holds Thai and the other scripts whose marks are code points to 3, since 2 is often one syllable', () => {
+    // ดี ("good") is ด plus a vowel mark, and would fire inside สวัสดี ("hello").
+    for (const keyword of ['ดี', 'ลด', 'ก', 'ໄປ']) {
+      assert.equal(keywordProblem(keyword), KEYWORD_TOO_SHORT_MESSAGE, keyword);
+    }
+    for (const keyword of ['ฟรี', 'คู่มือ']) {
+      assert.equal(keywordProblem(keyword), null, keyword);
+    }
+  });
+
+  it('holds a keyword that mixes in any other script to 3 characters', () => {
+    for (const keyword of ['a指', '指1', '指ก', 'ai']) {
+      assert.equal(keywordProblem(keyword), KEYWORD_TOO_SHORT_MESSAGE, keyword);
+    }
+    for (const keyword of ['ai指', '指南a']) {
+      assert.equal(keywordProblem(keyword), null, keyword);
+    }
   });
 });
 
@@ -798,6 +834,174 @@ describe('randomIndex', () => {
   it('refuses a count it cannot draw from', () => {
     assert.throws(() => randomIndex(0), RangeError);
     assert.throws(() => randomIndex(2.5), RangeError);
+  });
+});
+
+describe('rule templates', () => {
+  const LINK = 'https://ana.studio/free-guide';
+  const fill = (text: string, link: string) => text.replaceAll(LINK_MARKER, link);
+
+  /** What the new-rule form posts for a template, with the creator's link put in. */
+  function templateForm(t: RuleTemplate, link: string): Record<string, string> {
+    const [main = '', ...more] = t.publicReplies;
+    return {
+      ig_user_id: 'acct',
+      label: t.name,
+      keywords: t.keywords.join('\n'),
+      match_mode: 'word',
+      exclude_keywords: t.exclusions.join('\n'),
+      ...(t.matchAll ? { match_all: '1' } : {}),
+      media_id: t.matchAll ? 'REEL1' : '',
+      dm_text: fill(t.dm, link),
+      public_reply_text: fill(main, link),
+      ...Object.fromEntries(more.map((r, i) => [`public_reply_text_${String(i + 2)}`, fill(r, link)])),
+    };
+  }
+
+  function templateRule(t: RuleTemplate): Rule {
+    return rule({
+      id: 1,
+      label: t.name,
+      keywords: JSON.stringify(t.keywords),
+      exclude_keywords: JSON.stringify(t.exclusions),
+      match_all: t.matchAll ? 1 : 0,
+      media_id: t.matchAll ? 'REEL1' : null,
+    });
+  }
+
+  it('offers six to eight, each with its own id', () => {
+    assert.ok(TEMPLATES.length >= 6 && TEMPLATES.length <= 8, `${TEMPLATES.length} templates`);
+    assert.equal(new Set(TEMPLATES.map((t) => t.id)).size, TEMPLATES.length);
+    assert.equal(findTemplate('guide')?.name, 'Free guide');
+    assert.equal(findTemplate('nope'), undefined);
+    assert.equal(findTemplate(undefined), undefined);
+  });
+
+  for (const t of TEMPLATES) {
+    it(`${t.id}: passes the rule form's checks once the link is put in, and saves as written`, () => {
+      const read = readRuleFields(templateForm(t, LINK));
+      assert.ok('row' in read, 'error' in read ? read.error : '');
+      assert.deepEqual(
+        {
+          label: read.row.label,
+          keywords: read.row.keywords,
+          exclude_keywords: read.row.exclude_keywords,
+          match_all: read.row.match_all,
+          dm_text: read.row.dm_text,
+          replies: parsePublicReplies(read.row.public_reply_text),
+        },
+        {
+          label: t.name,
+          keywords: JSON.stringify(t.keywords),
+          exclude_keywords: JSON.stringify(t.exclusions),
+          match_all: t.matchAll ? 1 : 0,
+          dm_text: fill(t.dm, LINK),
+          replies: t.publicReplies.map((r) => fill(r, LINK)),
+        },
+      );
+    });
+
+    it(`${t.id}: can't be saved with the link marker still in it`, () => {
+      assert.ok(t.dm.includes(LINK_MARKER));
+      const read = readRuleFields(templateForm(t, LINK_MARKER));
+      assert.ok('error' in read);
+      assert.match(read.error, new RegExp(`still says ${LINK_MARKER}`));
+    });
+
+    it(`${t.id}: fits Instagram's limits with a 30-character name and a 200-character link`, () => {
+      const longLink = `https://${'x'.repeat(192)}`;
+      assert.ok(worstCaseLength(fill(t.dm, longLink)) <= DM_TEXT_MAX);
+      assert.ok(t.publicReplies.length >= 2 && t.publicReplies.length <= 5);
+      for (const reply of t.publicReplies) assert.ok(worstCaseLength(fill(reply, longLink)) <= PUBLIC_REPLY_MAX);
+    });
+  }
+
+  it('never share a keyword, so two rules from templates never compete for a comment', () => {
+    const owner = new Map<string, string>();
+    for (const t of TEMPLATES) {
+      for (const k of t.keywords) {
+        const key = normalizeCommentText(k);
+        assert.equal(owner.get(key), undefined, `“${k}” is in both ${owner.get(key) ?? ''} and ${t.id}`);
+        owner.set(key, t.id);
+      }
+    }
+  });
+
+  it('use no everyday words that would message people who never asked', () => {
+    const everyday = ['send', 'link', 'call', 'book', 'join', 'early', 'food', 'order', 'info', 'yes', 'want', 'need', 'please', 'me'];
+    for (const t of TEMPLATES) {
+      for (const k of t.keywords) assert.ok(!everyday.includes(normalizeCommentText(k)), `${t.id}: “${k}”`);
+    }
+  });
+
+  it('answer the free guide in English, Spanish and Hindi', () => {
+    const guide = templateRule(findTemplate('guide')!);
+    for (const comment of ['Guide please!', '¿Me pasas la guía? 🙏', 'Quero o guia', 'गाइड चाहिए', 'मुझे भी गाइड भेजो']) {
+      assert.ok(matchComment([guide], comment, 'REEL9').match, comment);
+    }
+    assert.equal(matchComment([guide], 'community guidelines', 'REEL9').match, null);
+  });
+
+  it('skip people who say they are already on the waitlist', () => {
+    const waitlist = templateRule(findTemplate('waitlist')!);
+    assert.equal(matchComment([waitlist], 'waitlist please', undefined).match?.rule.id, 1);
+    const verdict = matchComment([waitlist], 'Already on the waitlist!!', undefined);
+    assert.equal(verdict.match, null);
+    assert.equal(verdict.excluded[0]?.exclusion, 'already on the waitlist');
+  });
+
+  it('only the giveaway replies to every comment, and it needs its post', () => {
+    assert.deepEqual(TEMPLATES.filter((t) => t.matchAll).map((t) => t.id), ['giveaway']);
+    const giveaway = findTemplate('giveaway')!;
+    assert.deepEqual(readRuleFields({ ...templateForm(giveaway, LINK), media_id: '' }), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
+  });
+});
+
+describe('placeholderLinkIn', () => {
+  it('finds the template marker, however it is capitalised', () => {
+    assert.equal(placeholderLinkIn(`Here: ${LINK_MARKER}`), LINK_MARKER);
+    assert.equal(placeholderLinkIn('Here: paste-your-link-here'), LINK_MARKER);
+  });
+
+  it('finds sample addresses, with or without the scheme, as they were typed', () => {
+    const cases: Array<[string, string]> = [
+      ['Here it is: https://example.com/guide.', 'https://example.com/guide'],
+      ['example.org', 'example.org'],
+      ['Grab it at www.example.net/x!', 'www.example.net/x'],
+      ['Mail hello@example.co.uk', 'example.co.uk'],
+      ['Book: https://calendly.com/example/30min', 'https://calendly.com/example/30min'],
+      ['linktr.ee/your-name', 'linktr.ee/your-name'],
+      ['(https://YourWebsite.com/guide)', 'https://YourWebsite.com/guide'],
+      ['http://shop.test/item', 'http://shop.test/item'],
+    ];
+    for (const [text, found] of cases) assert.equal(placeholderLinkIn(text), found, text);
+  });
+
+  it('leaves real links and ordinary text alone', () => {
+    for (const text of [
+      'Here it is: https://ana.studio/guide',
+      'calendly.com/ana-coaching/intro',
+      'https://www.instagram.com/p/abc/',
+      'Doors open at 7.30, e.g. bring a mat.',
+      'More examples on my page: https://examples.shop/x',
+      'Your guide is on the way',
+    ]) {
+      assert.equal(placeholderLinkIn(text), null, text);
+    }
+  });
+
+  it('stops a rule being saved with one, in the message or any reply, and names it', () => {
+    const form = { ig_user_id: 'acct', label: 'Guide', keywords: 'guide', dm_text: 'Here: https://ana.studio/g', public_reply_text: 'Sent!' };
+    assert.deepEqual(readRuleFields({ ...form, dm_text: 'Here: https://example.com/guide' }), {
+      error: 'The private message links to “https://example.com/guide”, a sample address that isn’t yours. Replace it with your own link before saving.',
+    });
+    assert.deepEqual(readRuleFields({ ...form, public_reply_text: `Also at ${LINK_MARKER}` }), {
+      error: `The public reply still says ${LINK_MARKER}. Replace it with your own link, or delete it, before saving.`,
+    });
+    const third = readRuleFields({ ...form, public_reply_text_2: 'Sent', public_reply_text_3: 'see yourshop.com' });
+    assert.ok('error' in third);
+    assert.match(third.error, /^Reply 3 links to “yourshop\.com”/);
+    assert.ok('row' in readRuleFields(form));
   });
 });
 

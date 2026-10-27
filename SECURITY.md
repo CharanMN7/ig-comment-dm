@@ -49,6 +49,20 @@ Connecting an Instagram account needs the same logged-in session. The OAuth
 `state` is signed, expires after 10 minutes, and only completes in the browser
 that started it, which holds a matching short-lived cookie.
 
+### Installing the panel on a phone
+
+A phone fetches the web app manifest and its icons without cookies, so four paths
+under the admin URL answer without the password: `manifest.webmanifest`,
+`icon.svg`, `icon-192.png` and `icon-512.png`. They still need the secret path
+(anything else under it still needs the password), are sent `no-store`, and hold
+only the app's name, colours and icon.
+
+Installing on Android sends the manifest, and with it your admin URL (the
+manifest's `start_url`), to Google's WebAPK service, which builds the app Android
+installs. Google then has the URL. The password still protects the panel, so this
+is the same exposure as any leaked admin URL (see below). If you would rather
+Google never sees it, use a bookmark instead of installing.
+
 ### What is encrypted
 
 Instagram access tokens are encrypted at rest with **AES-256-GCM** using

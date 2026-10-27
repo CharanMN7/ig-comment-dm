@@ -1,14 +1,19 @@
 import { html, raw } from 'hono/html';
 import type { HtmlEscapedString } from 'hono/utils/html';
 
+// The header and page colours below, for the phone's status bar and the splash
+// screen an installed panel opens on.
+export const THEME_COLOR = '#ffffff';
+export const BACKGROUND_COLOR = '#f6f6f4';
+
 const CSS = `
 :root { color: #111; background: #f6f6f4; font: 15px/1.45 system-ui, sans-serif; }
 * { box-sizing: border-box; }
 body { margin: 0; }
 main { max-width: 44rem; margin: 0 auto; padding: 1.25rem 1rem 4rem; }
 header.top { border-bottom: 1px solid #ddd; background: #fff; }
-header.top nav { max-width: 44rem; margin: 0 auto; padding: 0.65rem 1rem; display: flex; gap: 0.9rem; align-items: center; flex-wrap: wrap; }
-header.top nav a { color: #111; text-decoration: none; }
+header.top nav { max-width: 44rem; margin: 0 auto; padding: 0.65rem 1rem; display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+header.top nav a { color: #111; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; padding: 0 0.5rem; }
 header.top nav a:hover { text-decoration: underline; }
 header.top .brand { font-weight: 650; margin-right: 0.5rem; }
 header.top form { margin-left: auto; }
@@ -23,12 +28,15 @@ p { margin: 0.5rem 0; }
 .err { color: #a11; }
 .message { white-space: pre-wrap; }
 table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e4e4e0; }
+.table-wrap { overflow-x: auto; }
+.detail { overflow-wrap: anywhere; }
 th, td { text-align: left; padding: 0.4rem 0.55rem; border-bottom: 1px solid #eee; vertical-align: top; font-size: 0.9rem; }
 th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; color: #555; background: #fafafa; }
 label { display: block; font-weight: 650; margin: 0.85rem 0 0.25rem; }
 input[type=text], input[type=password], textarea, select {
   width: 100%; padding: 0.4rem 0.5rem; font: inherit; border: 1px solid #ccc; background: #fff;
 }
+input[type=text], input[type=password], select { min-height: 44px; }
 textarea { min-height: 6rem; }
 fieldset { min-width: 0; margin: 1.25rem 0 0; padding: 0.3rem 0.85rem 0.9rem; border: 1px solid #e4e4e0; background: #fff; }
 legend { font-weight: 650; padding: 0 0.3rem; }
@@ -51,7 +59,7 @@ summary { cursor: pointer; font-weight: 650; padding: 0.7rem 0; min-height: 44px
 .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-top: 0.75rem; }
 button, .btn {
   background: #111; color: #fff; border: 0; padding: 0.42rem 0.8rem; font: inherit; cursor: pointer;
-  text-decoration: none; display: inline-block;
+  text-decoration: none; display: inline-flex; align-items: center; min-height: 44px;
 }
 button.secondary, a.btn.secondary { background: #fff; color: #111; border: 1px solid #bbb; }
 button.danger, a.btn.danger { background: #a11; }
@@ -61,8 +69,14 @@ button.danger, a.btn.danger { background: #a11; }
 .kpi b { display: block; font-size: 1.35rem; }
 .kpi div { margin-top: 0.3rem; }
 .note { background: #fff; border: 1px solid #ccc; padding: 0.7rem 0.85rem; margin: 0 0 1rem; }
+.templates { list-style: none; margin: 0; padding: 0; background: #fff; border: 1px solid #e4e4e0; }
+.templates li + li { border-top: 1px solid #eee; }
+.templates a { display: block; min-height: 44px; padding: 0.55rem 0.75rem; color: #111; text-decoration: none; }
+.templates a:hover b, .templates a:focus b { text-decoration: underline; }
+.templates .muted { display: block; }
 pre.raw { background: #111; color: #eee; padding: 0.6rem 0.7rem; overflow: auto; font-size: 0.78rem; }
 .actions form { display: inline; }
+.actions .btn, .actions button { margin: 0.15rem 0; }
 code { font-size: 0.88em; }
 `;
 
@@ -73,9 +87,23 @@ export function csrfField(token: string) {
 export function layout(opts: {
   title: string;
   base?: string;
+  /** The admin base for pages without the nav (login, setup), so they can be installed too. */
+  app?: string;
   csrf?: string;
   body: HtmlEscapedString | Promise<HtmlEscapedString>;
 }) {
+  // Only admin pages may link the manifest: its URL contains the admin secret,
+  // so a public page linking it would publish the panel's address.
+  const app = opts.app ?? opts.base;
+  const install = app
+    ? html`
+        <link rel="manifest" href="${app}/manifest.webmanifest" />
+        <link rel="icon" href="${app}/icon.svg" type="image/svg+xml" />
+        <link rel="apple-touch-icon" href="${app}/icon-192.png" />
+        <meta name="apple-mobile-web-app-title" content="Comment to DM" />
+        <meta name="theme-color" content="${THEME_COLOR}" />
+      `
+    : html``;
   const nav = opts.base
     ? html`
         <header class="top">
@@ -99,6 +127,7 @@ export function layout(opts: {
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>${opts.title}</title>
+        ${install}
         <style>
           ${raw(CSS)}
         </style>

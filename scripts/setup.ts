@@ -173,7 +173,8 @@ async function main(): Promise<void> {
     rl.close();
     die(
       'The deploy succeeded but no Worker URL could be read from the output.',
-      'Copy the https://…workers.dev URL printed above and finish with the manual steps in README.md.',
+      'Copy the https://…workers.dev URL printed above, then carry on from "Create the tables" in\n' +
+        'https://charanmn7.github.io/ig-comment-dm/docs/setup/#deploying-by-hand',
     );
   }
   ok(`Deployed to ${BOLD}${url}${RESET}`);

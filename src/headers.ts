@@ -9,14 +9,18 @@ import type { MiddlewareHandler } from 'hono';
  * not a theoretical one.
  *
  * The CSP is unusually tight because it can be. This Worker ships zero
- * client-side JavaScript, loads no images, and fetches no fonts, so everything
- * except inline CSS can be denied outright. `style-src 'unsafe-inline'` is the
- * single concession — the stylesheet is inlined in `html.ts` to keep the app to
- * one request.
+ * client-side JavaScript and fetches no fonts, so nearly everything can be
+ * denied outright. `style-src 'unsafe-inline'` is there because the stylesheet
+ * is inlined in `html.ts` to keep the app to one request. `manifest-src` and
+ * `img-src` allow only this Worker, for installing the admin panel on a phone:
+ * Chrome checks the manifest against the first and its icons against the
+ * second, and without them drops both without saying so.
  */
 const POLICY = [
   "default-src 'none'",
   "style-src 'unsafe-inline'",
+  "manifest-src 'self'",
+  "img-src 'self'",
   "form-action 'self'",
   "frame-ancestors 'none'",
   "base-uri 'none'",
