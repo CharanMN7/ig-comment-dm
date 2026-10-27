@@ -45,6 +45,8 @@ export type Rule = {
   exclude_keywords: string;
   /** 1: every comment on `media_id` matches and `keywords` are ignored. Never set without a `media_id`. */
   match_all: number;
+  /** 1: the public reply also goes out when another rule sends the DM. 0 for every rule saved earlier. */
+  reply_without_dm: number;
   media_id: string | null;
   dm_text: string;
   public_reply_text: string | null;
@@ -59,6 +61,15 @@ export type Sent = {
   commenter_id: string | null;
   dm_status: string;
   reply_status: string | null;
+  error: string | null;
+  sent_at: number;
+};
+
+/** A rule that matched a comment besides the one that sent its DM, and what became of its public reply. */
+export type ExtraReply = {
+  comment_id: string;
+  rule_id: number;
+  status: string;
   error: string | null;
   sent_at: number;
 };

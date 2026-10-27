@@ -27,9 +27,11 @@ import type { Env } from './types.ts';
 
 /**
  * A send makes at most two Meta calls (DM, then public reply), one attempt
- * each, so it ends within 2 x META_SEND_MAX_MS, 20 s. A row still `pending`
- * long after that was claimed by a Worker stopped mid-send: waitUntil's 30 s
- * cap, a deploy, a crash. scripts/test-unit.ts keeps this above 10x that bound.
+ * each, before its row is written, so it ends within 2 x META_SEND_MAX_MS,
+ * 20 s. Other matching rules' public replies come after that, under rows of
+ * their own. A row still `pending` long after that was claimed by a Worker
+ * stopped mid-send: waitUntil's 30 s cap, a deploy, a crash.
+ * scripts/test-unit.ts keeps this above 10x that bound.
  */
 export const STALE_PENDING_SECONDS = 15 * 60;
 

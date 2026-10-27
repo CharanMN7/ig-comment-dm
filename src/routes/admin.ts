@@ -12,7 +12,7 @@ import {
   timingSafeEqualString,
   verifyPassword,
 } from '../crypto.ts';
-import { EMPTY_SNAPSHOT, ensureCommentSubscriptions, runCron, snapshotTotals } from '../cron.ts';
+import { EMPTY_SNAPSHOT, STALE_PENDING_SECONDS, ensureCommentSubscriptions, runCron, snapshotTotals } from '../cron.ts';
 import {
   HEALTH_FIRST_SEEN_KEY,
   NO_SENDS,
@@ -23,6 +23,7 @@ import {
   countSentByComment,
   countSentUpTo,
   deleteRule,
+  extraRepliesFor,
   getAccount,
   getRule,
   getSent,
@@ -62,13 +63,13 @@ import {
   fillPlaceholders,
   worstCaseLength,
 } from '../placeholders.ts';
-import { chooseRule } from '../process.ts';
+import { EXTRA_PUBLIC_REPLY_CAP, chooseRule, otherRuleSkipReason, planOtherRules } from '../process.ts';
 import { parsePublicReplies, serializePublicReplies } from '../replies.ts';
 import { CRON_FIRST_RUN_SECONDS, jobState } from './health.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
 import { LINK_MARKER, TEMPLATES, findTemplate, placeholderLinkIn, type RuleTemplate } from '../templates.ts';
 import { clearFailures, describeLock, lockRemaining, readThrottle, reserveAttempt } from '../throttle.ts';
-import type { Env, MatchMode, Rule, SessionData } from '../types.ts';
+import type { Env, ExtraReply, MatchMode, Rule, SessionData } from '../types.ts';
 
 type Vars = {
   adminBase: string;
@@ -454,6 +455,22 @@ function totalsTiles(totals: SendTotals[]) {
   `;
 }
 
+function extraReplyLine(e: ExtraReply & { rule_label: string | null }, now: number) {
+  const rule = html`Also matched <b>${e.rule_label ?? 'a deleted rule'}</b>:`;
+  if (e.status === 'ok') return html`<div class="muted">${rule} public reply posted.</div>`;
+  if (e.status === 'failed') {
+    return html`<div class="muted">${rule} <span class="err">public reply failed.</span></div>
+      <div class="muted detail">${e.error ?? ''}</div>`;
+  }
+  if (e.status === 'pending') {
+    // Never retried, like a stuck DM, so after the same wait it is reported the same way.
+    return now - e.sent_at > STALE_PENDING_SECONDS
+      ? html`<div class="muted">${rule} the Worker stopped before its public reply finished, so it was not tried again.</div>`
+      : html`<div class="muted">${rule} public reply still sending.</div>`;
+  }
+  return html`<div class="muted">${rule} ${e.error ?? 'public reply not posted'}.</div>`;
+}
+
 /** Until the first DM goes out, Home leads with the three steps that get there. */
 function gettingStarted(base: string, accounts: { username: string }[], ruleCount: number, anySent: boolean) {
   const done = html`<b>Done:</b>`;
@@ -492,6 +509,10 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   const accounts = await listAccounts(c.env.DB);
   c.executionCtx.waitUntil(ensureCommentSubscriptions(c.env));
   const sends = await recentSent(c.env.DB, 20);
+  const extras = new Map<string, Awaited<ReturnType<typeof extraRepliesFor>>>();
+  for (const e of await extraRepliesFor(c.env.DB, sends.map((s) => s.comment_id))) {
+    extras.set(e.comment_id, [...(extras.get(e.comment_id) ?? []), e]);
+  }
   let events: Awaited<ReturnType<typeof recentWebhookEvents>> = [];
   let latestSigned: string[] = [];
   try {
@@ -661,6 +682,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                         ${s.reply_status === 'skipped'
                           ? html`<div class="muted">Public reply not posted, because Instagram didn’t confirm the DM.</div>`
                           : html``}
+                        ${(extras.get(s.comment_id) ?? []).map((e) => extraReplyLine(e, now))}
                       </td>
                     </tr>`,
                   )}
@@ -785,6 +807,7 @@ type RuleFormValues = {
   match_mode: string;
   exclude_keywords: string;
   match_all: boolean;
+  reply_without_dm: boolean;
   media_id: string;
   dm_text: string;
   /** The main reply first, then the variations, in the fields they came from. */
@@ -799,6 +822,7 @@ function formValuesFromRule(rule: Rule): RuleFormValues {
     match_mode: rule.match_mode,
     exclude_keywords: parseKeywords(rule.exclude_keywords).join('\n'),
     match_all: rule.match_all === 1,
+    reply_without_dm: rule.reply_without_dm === 1,
     media_id: rule.media_id ?? '',
     dm_text: rule.dm_text,
     public_replies: parsePublicReplies(rule.public_reply_text),
@@ -814,6 +838,7 @@ function formValuesFromPost(f: Record<string, string>): RuleFormValues {
     match_mode: f.match_mode ?? 'word',
     exclude_keywords: f.exclude_keywords ?? '',
     match_all: f.match_all === '1',
+    reply_without_dm: f.reply_without_dm === '1',
     media_id: f.media_id ?? '',
     dm_text: f.dm_text ?? '',
     public_replies: replyFields(f),
@@ -828,6 +853,8 @@ function formValuesFromTemplate(t: RuleTemplate, igUserId: string): RuleFormValu
     match_mode: 'word',
     exclude_keywords: t.exclusions.join('\n'),
     match_all: t.matchAll,
+    // Every template's replies mention the DM, which another rule's DM would make false.
+    reply_without_dm: false,
     media_id: '',
     dm_text: t.dm,
     public_replies: [...t.publicReplies],
@@ -857,7 +884,7 @@ function ruleForm(opts: {
   const contains = v.match_mode === 'contains';
   // Folded away on a new rule, but a rule already using one of these opens
   // with it showing, so nobody edits a rule without seeing how it matches.
-  const fineTuned = contains || v.exclude_keywords.trim() !== '';
+  const fineTuned = contains || v.exclude_keywords.trim() !== '' || v.reply_without_dm;
   return html`
     ${opts.error ? html`<p class="err" role="alert">${opts.error}</p>` : html``}
     <form class="rule-form" method="post" action="${opts.action}">
@@ -924,6 +951,13 @@ function ruleForm(opts: {
             can still reply.
           </p>
           <p class="muted when-all">On a rule that replies to every comment, exclusions are found as whole words.</p>
+          <label class="choice">
+            <input type="checkbox" id="reply_without_dm" name="reply_without_dm" value="1" ${v.reply_without_dm ? 'checked' : ''} />
+            <span>
+              <b>Also post this public reply when another rule sends the DM</b>
+              <span class="muted">Only tick this if the reply doesn’t mention a DM.</span>
+            </span>
+          </label>
         </details>
       </fieldset>
 
@@ -1174,6 +1208,7 @@ export function readRuleFields(form: Record<string, string>) {
   const media = (form.media_id ?? '').trim();
   const replies = replyFields(form).map((r) => r.replace(/\r\n/g, '\n').trim());
   const matchAll = form.match_all === '1';
+  const replyWithoutDm = form.reply_without_dm === '1';
   if (!label) return { error: 'Give this rule a name.' };
   if (!ig) return { error: 'Pick an Instagram account.' };
   if (matchAll && !media) return { error: MATCH_ALL_NEEDS_POST_MESSAGE };
@@ -1223,6 +1258,7 @@ export function readRuleFields(form: Record<string, string>) {
       match_mode: matchMode,
       exclude_keywords: JSON.stringify(exclusions),
       match_all: matchAll ? 1 : 0,
+      reply_without_dm: replyWithoutDm ? 1 : 0,
       media_id: media || null,
       dm_text: dm,
       public_reply_text: serializePublicReplies(replies),
@@ -1410,14 +1446,14 @@ adminRoutes.post('/test', async (c) => {
   const ig = form.ig_user_id ?? '';
   const text = form.text ?? '';
   const media = form.media_id?.trim() || undefined;
-  const { match, excluded } = await chooseRule(c.env.DB, ig, text, media);
+  const { match, also, excluded } = await chooseRule(c.env.DB, ig, text, media);
   const base = c.get('adminBase');
   // Shown either way: when a test does not match, the cleaned-up text is
   // usually the explanation (the hashtag symbol is gone, the accent folded).
   const readAs = html`<tr><th>Comment, as matched</th><td>${normalizeCommentText(text) || '(nothing left)'}</td></tr>`;
   const exclusions = excluded.length
     ? html`
-        <h2>${match ? 'Passed over first' : 'Skipped because of an exclusion'}</h2>
+        <h2>${match ? 'Passed over because of an exclusion' : 'Skipped because of an exclusion'}</h2>
         <div class="table-wrap"><table>
           <thead><tr><th>Rule</th><th>Keyword found</th><th>Exclusion found</th></tr></thead>
           <tbody>
@@ -1428,12 +1464,47 @@ adminRoutes.post('/test', async (c) => {
           </tbody>
         </table></div>
         ${match
-          ? html`<p class="muted">An exclusion only stops its own rule, so the next matching rule replies instead.</p>`
+          ? html`<p class="muted">An exclusion only stops its own rule, so the other matching rules still reply.</p>`
           : html``}
       `
     : html``;
   const replies = parsePublicReplies(match?.rule.public_reply_text);
-  const usesName = match ? countUsernameTokens([match.rule.dm_text, ...replies].join('\n')) > 0 : false;
+  const others = planOtherRules(also);
+  const usesName = match
+    ? countUsernameTokens([match.rule.dm_text, ...replies, ...others.flatMap((o) => (o.posts ? o.replies : []))].join('\n')) > 0
+    : false;
+  const sample = (reply: string) => fillPlaceholders(reply, SAMPLE_USERNAME);
+  const otherRules = others.length
+    ? html`
+        <h2>Other matching rules</h2>
+        <p class="muted">
+          One comment gets one DM, from the rule above: Instagram allows one private reply per comment. Their
+          DMs are not sent. A rule set to <b>Also post this public reply when another rule sends the DM</b>
+          still posts its public reply, once the DM has gone through, up to ${String(EXTRA_PUBLIC_REPLY_CAP)}
+          of them per comment.
+        </p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Rule</th><th>Keyword found</th><th>Public reply</th></tr></thead>
+          <tbody>
+            ${others.map((o) => {
+              const skip = otherRuleSkipReason(o);
+              return html`<tr>
+                <td>${o.rule.label}</td>
+                <td>${o.keyword ?? EVERY_COMMENT_WORDS}</td>
+                <td>
+                  ${skip !== null
+                    ? html`<span class="muted">Not posted: ${skip}.</span>`
+                    : o.replies.length === 1
+                      ? html`<span class="message">${sample(o.replies[0] ?? '')}</span>`
+                      : html`One of these ${String(o.replies.length)}, at random:
+                          <ol>${o.replies.map((r) => html`<li class="message">${sample(r)}</li>`)}</ol>`}
+                </td>
+              </tr>`;
+            })}
+          </tbody>
+        </table></div>
+      `
+    : html``;
   return c.html(
     layout({
       title: 'Test',
@@ -1474,6 +1545,7 @@ adminRoutes.post('/test', async (c) => {
                       <ol>
                         ${replies.map((r) => html`<li class="message">${fillPlaceholders(r, SAMPLE_USERNAME)}</li>`)}
                       </ol>`}
+              ${otherRules}
               ${exclusions}
             `
           : excluded.length

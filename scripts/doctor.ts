@@ -126,13 +126,13 @@ function checkDatabase(): void {
     );
     return;
   }
-  const expected = ['accounts', 'rules', 'sent', 'system', 'webhook_events'];
+  const expected = ['accounts', 'rules', 'sent', 'sent_extra_replies', 'system', 'webhook_events'];
   const missing = expected.filter((t) => !out.includes(`"${t}"`));
   if (missing.length) {
     record('fail', `Database tables missing: ${missing.join(', ')}`, undefined, 'npm run db:migrate');
     return;
   }
-  record('ok', 'All five database tables exist');
+  record('ok', 'All six database tables exist');
 
   const accounts = d1Query('SELECT COUNT(*) AS n FROM accounts WHERE active = 1');
   if (accounts && /"n":\s*0\b/.test(accounts)) {
