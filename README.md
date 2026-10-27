@@ -102,6 +102,7 @@ To update, run `npm run update`: it pulls the latest version, applies any databa
 
 - **Test page:** paste a sample comment to see which rule fires. Nothing is sent.
 - **Home:** recent webhooks from Meta (including ones rejected for a wrong signature), what's queued or retrying, the last 20 sends with Meta's exact errors, and totals for today, 7 days, 30 days and all time. Red banners flag an account that needs reconnecting, a stalled nightly job or a misconfigured secret.
+- **Logs:** every send, paginated and filterable by status, account, rule and date, with **Send again** on any DM marked "may have been delivered".
 - **`/health`:** `200` while the database answers and both scheduled jobs run, `503` when one stalls. No login, no usernames or IDs. Give it to an uptime monitor.
 - **`npm run doctor`:** checks the live deployment's secrets, tables, accounts, rules, rejected webhooks and cron jobs, and names the fix.
 - **`npx wrangler tail`:** live logs, with tokens and keys never written.

@@ -19,6 +19,7 @@ On a reel that takes off, DMs past Instagram's hourly limit now wait their turn 
 - The send queue. Each account makes at most 12 DM calls a minute, which keeps every hour under Instagram's limit of about 750, and a comment past that waits as **Queued**. A job every minute sends the queue oldest comment first, with the rule's text as it is then: turning a rule off or deleting it skips its queued DMs. A comment still waiting an hour before Instagram's 7-day limit is skipped as **Expired**. A backlog of 5,000 on one account takes about 7 hours. ([#139])
 - Retries. A DM that Instagram turns down because the account is sending too fast, or because of a temporary error on its side, shows as **Retrying** and is tried again after 1, 5 and 20 minutes. The fourth refusal is final. A rate limit also holds the account's other DMs for 15 minutes. A DM refused because the token stopped working stays queued without using up a try, and goes out once you reconnect. ([#141])
 - **Send again**, on a DM marked **May have been delivered**, for when you've checked that it didn't arrive. ([#141])
+- A **Logs** page: every send, newest first, paginated and filterable by status, account, rule and date range, with **Send again** on DMs that may have been delivered. Thanks to [@ranita872](https://github.com/ranita872). ([#64])
 - A **Sending** table on Home while DMs wait: queued and retrying counts for each account, the oldest comment's age, roughly how long the rest will take, and how many DMs went out in the last hour. The Accounts page says how many waiting DMs pausing an account will skip. ([#141])
 
 ### Changed
@@ -31,6 +32,7 @@ On a reel that takes off, DMs past Instagram's hourly limit now wait their turn 
 
 - The poll read only the first 3 posts your rules covered. A rule on a fourth post relied on the webhook alone, and with three rules on single posts, rules on all posts weren't polled at all. It now takes turns through every one, 3 posts per account each time: with 4 to 6 posts, each is read every 10 minutes, and with 7 to 9, every 15. ([#140])
 
+[#64]: https://github.com/CharanMN7/ig-comment-dm/pull/64
 [#139]: https://github.com/CharanMN7/ig-comment-dm/pull/139
 [#140]: https://github.com/CharanMN7/ig-comment-dm/pull/140
 [#141]: https://github.com/CharanMN7/ig-comment-dm/pull/141
