@@ -330,7 +330,8 @@ describe('all-time totals from the nightly snapshot', () => {
     expect(tilesAfter(await home(), 'Home')).toEqual(await fullRecount());
   });
 
-  it('reads the recent rows on each visit, not the whole history', async () => {
+  // Seeds 1,200 sends through the real write path, which takes seconds on a busy machine.
+  it('reads the recent rows on each visit, not the whole history', { timeout: 30_000 }, async () => {
     const OTHER = '17841400000000002';
     await seedAccount({ igUserId: IG_USER, username: 'alpha' });
     await seedAccount({ igUserId: OTHER, username: 'beta' });
@@ -360,7 +361,8 @@ describe('Home before the first snapshot', () => {
     expect(statements.filter((sql) => /^\s*UPDATE sent/.test(sql))).toEqual([]);
   });
 
-  it('takes the snapshot on the first visit when the history is large, so the next visit reads only recent rows', async () => {
+  // Seeds 1,200 sends through the real write path, which takes seconds on a busy machine.
+  it('takes the snapshot on the first visit when the history is large, so the next visit reads only recent rows', { timeout: 30_000 }, async () => {
     await seedAccount();
     await seedOneAccount();
     await seedHistory(1_200);

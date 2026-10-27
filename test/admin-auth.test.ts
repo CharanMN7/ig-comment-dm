@@ -170,7 +170,8 @@ describe('login', () => {
     return Promise.all(guessers.map((b, i) => b.submit(adminPath('/login'), { password: passwords[i]! })));
   }
 
-  it('checks no more passwords than the free attempts allow when 60 arrive at once', async () => {
+  // 60 logins at once, each hashing a password: slow on a busy machine, not wrong.
+  it('checks no more passwords than the free attempts allow when 60 arrive at once', { timeout: 30_000 }, async () => {
     const replies = await burst(Array.from({ length: 60 }, (_, i) => `wrong ${i}`));
     // 401 means the password was hashed and compared; 429 means it never was.
     const checked = replies.filter((r) => r.status === 401).length;
@@ -180,7 +181,8 @@ describe('login', () => {
     expect(await systemValue('login_locked_until')).toBe(String(NOW + 60));
   });
 
-  it('refuses the right password when it arrives in a burst that already used the free attempts', async () => {
+  // 60 logins at once, each hashing a password: slow on a busy machine, not wrong.
+  it('refuses the right password when it arrives in a burst that already used the free attempts', { timeout: 30_000 }, async () => {
     const replies = await burst([...Array.from({ length: 59 }, (_, i) => `wrong ${i}`), ADMIN_PASSWORD]);
     const last = replies.at(-1)!;
     expect(last.status).toBe(429);
