@@ -724,6 +724,40 @@ h2 {
   font-weight: 600;
 }
 
+/* ── Send states: the labels Home shows, one per line ─────────────────── */
+
+.states {
+  margin: 1.25rem 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.states > div {
+  display: grid;
+  gap: 0.125rem 1.5rem;
+  padding-block: 0.875rem;
+  border-bottom: 1px solid var(--line);
+}
+
+@media (min-width: 560px) {
+  .states > div {
+    grid-template-columns: 12rem minmax(0, 1fr);
+  }
+}
+
+.states dt {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.states dd {
+  margin: 0;
+}
+
+.states b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
 /* ── FAQ ────────────────────────────────────────────────────────────────── */
 
 .faq details {

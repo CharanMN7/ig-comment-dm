@@ -1,5 +1,6 @@
 ---
 import '../styles/site.css';
+import { version } from '../../../package.json';
 
 const base = import.meta.env.BASE_URL;
 const docs = (path = '') => `${base}docs/${path}`;
@@ -35,8 +36,12 @@ const limits = [
     body: 'A DM to someone who doesn’t follow you lands in their Message requests folder, not their inbox.',
   },
   {
-    title: 'Meta caps private replies at 750 an hour.',
-    body: 'Past it, sends fail and the log says why.',
+    title: 'About 750 private replies an hour per account.',
+    body: 'Meta’s cap. The Worker stays under it at 12 a minute and queues the rest, so on a reel that takes off some DMs arrive minutes or hours late.',
+  },
+  {
+    title: 'About 6,000 to 7,500 DMs a day on the free database.',
+    body: 'Cloudflare’s free D1 plan allows 100,000 rows written a day, and each DM writes 13 to 16. Past that, D1 refuses everything until midnight UTC.',
   },
 ];
 
@@ -47,7 +52,7 @@ const faq = [
   },
   {
     q: 'What does it cost?',
-    a: `Nothing, on Cloudflare’s free plan, which covers 100,000 Worker requests a day. Meta doesn’t charge for the API.`,
+    a: `Nothing. Meta doesn’t charge for the API, and Cloudflare’s free plan covers up to about 6,000 to 7,500 DMs a day.`,
   },
   {
     q: 'Is this allowed?',
@@ -59,7 +64,7 @@ const faq = [
   },
   {
     q: 'What if Meta never sends the webhook?',
-    a: `Every five minutes the Worker also checks the three most recent posts on each account (the last 72 hours) and answers anything it missed, so the DM arrives late instead of never. Each comment is claimed in the database before anything is sent, so nobody gets two.`,
+    a: `Every five minutes the Worker also reads the last 72 hours of comments itself, on the posts your rules cover (your three newest, for a rule on all posts), three posts per account at a time. A comment the webhook missed gets its DM late instead of never. Each comment is claimed in the database before anything is sent, so nobody gets two.`,
   },
   {
     q: 'Can I run it for several accounts?',
@@ -67,7 +72,11 @@ const faq = [
   },
   {
     q: 'How do I update it?',
-    a: `Run <code>npm run update</code>. It pulls the latest code, shows what changed, applies any database migrations and deploys. Your secrets live in Cloudflare and your data in D1, so an update doesn’t touch either. <a href="${docs('updating/')}">Updating your copy</a> has the details.`,
+    a: `Run <code>npm run update</code>. It pulls the latest code, shows what changed, applies any database migrations and deploys. Your secrets live in Cloudflare and your data in D1, so an update doesn’t touch either. <a href="${docs('updating/')}">Updating your copy</a> has the details, and the <a href="${docs('changelog/')}">changelog</a> lists each version with anything to do before upgrading.`,
+  },
+  {
+    q: 'Can I contribute?',
+    a: `Yes, starting from an issue. Comment to claim one and wait for a maintainer to assign you: a pull request that doesn’t close an issue assigned to its author is closed automatically. AI tools are fine if you say how you used them and understand every line. <a href="${docs('contributing/')}">Contributing</a> has local setup and the house style.`,
   },
 ];
 ---
@@ -129,7 +138,8 @@ const faq = [
             <a class="btn quiet" href={docs()}>How it works</a>
           </div>
           <p class="fine">
-            Open source under MIT. Setup is one command, plus about 15 minutes in Meta’s developer dashboard.
+            Open source under MIT, at version {version} (<a href={docs('changelog/')}>changelog</a>). Setup is one command,
+            plus about 15 minutes in Meta’s developer dashboard.
           </p>
         </div>
 
@@ -190,6 +200,64 @@ const faq = [
         </div>
       </section>
 
+      <section class="row" aria-labelledby="h-busy">
+        <h2 id="h-busy">When a reel takes off</h2>
+        <div class="body">
+          <p>
+            Instagram lets an account send about 750 private replies an hour and refuses the rest. So the Worker sends at most
+            12 DMs a minute per account, which keeps every hour under the limit, and queues the others. A job every minute
+            works through the queue, oldest comment first: 5,000 comments on one reel clear in about 7 hours.
+          </p>
+          <dl class="states">
+            <div>
+              <dt>Queued</dt>
+              <dd>Waiting its turn under the hourly limit.</dd>
+            </div>
+            <div>
+              <dt>Retrying</dt>
+              <dd>
+                Instagram said “not now”: the account was sending too fast, or Instagram had a temporary error. Tried again
+                after 1, 5 and 20 minutes.
+              </dd>
+            </div>
+            <div>
+              <dt>May have been delivered</dt>
+              <dd>
+                Instagram’s answer never came back. The Worker won’t send it again by itself, because a second try could reach
+                the same person twice. <b>Send again</b> is there once you’ve checked.
+              </dd>
+            </div>
+            <div>
+              <dt>Expired</dt>
+              <dd>Still waiting an hour before Instagram’s 7-day cutoff for private replies, so it was skipped.</dd>
+            </div>
+          </dl>
+          <p>
+            Those are the labels on Home, next to every send. Each comment is claimed in the database before its DM goes out,
+            so a webhook Meta delivers twice, or a comment that both the webhook and the poll find, still gets one DM.
+          </p>
+        </div>
+      </section>
+
+      <section class="row" aria-labelledby="h-security">
+        <h2 id="h-security">Security</h2>
+        <div class="body">
+          <p>
+            The admin panel lives at a URL with a 128-bit secret in it, behind a password. After five wrong passwords, each
+            wait doubles from a minute up to an hour, and guesses sent in parallel are counted one at a time. Logging out ends
+            every session, on every device.
+          </p>
+          <p>
+            Every webhook is checked against Meta’s signature before it’s parsed, and forged ones can’t fill your database.
+            Instagram tokens are encrypted with AES-256-GCM under a key that exists only in your Cloudflare account. No
+            JavaScript runs in the panel: its Content-Security-Policy is <code>default-src 'none'</code>.
+          </p>
+          <p>
+            <a href={docs('security/')}>Security</a> covers what isn’t defended against, and how to report a problem privately.
+          </p>
+        </div>
+      </section>
+
       <section class="row" aria-labelledby="h-setup">
         <h2 id="h-setup">Setup</h2>
         <div class="body">
@@ -202,7 +270,8 @@ npm run setup</code></pre>
           <p>
             <code>npm run setup</code> deploys the Worker, creates the database, generates every secret at the right size, and prints
             the exact values to paste into Meta’s dashboard. The Meta side (creating an app, adding yourself as a tester,
-            publishing it) is the slow part, and the guide shows every screen.
+            publishing it) is the slow part, and the guide shows every screen. Updating later is one command too:
+            <code>npm run update</code>.
           </p>
           <ul class="paths">
             <li><a href={docs('setup/')}>Self-setup guide</a>: Cloudflare and the Meta developer app, step by step.</li>
@@ -217,7 +286,9 @@ npm run setup</code></pre>
       <section class="row" aria-labelledby="h-limits">
         <h2 id="h-limits">Limits</h2>
         <div class="body">
-          <p class="intro">Meta’s rules, not ours. Each one has cost someone an evening, so here they are up front.</p>
+          <p class="intro">
+            Meta’s rules and Cloudflare’s free plan, not ours. Each one has cost someone an evening, so here they are up front.
+          </p>
           <ul class="limits">
             {limits.map((l) => (
               <li>
@@ -251,6 +322,9 @@ npm run setup</code></pre>
         <a href={docs('contributing/')}>Contributing</a>
         <a href={`${repo}/blob/master/LICENSE`}>MIT license</a>
       </nav>
+      <p>
+        Docs built with <a href="https://github.com/inkform-dev/framework">Inkform</a>.
+      </p>
       <p>
         Not affiliated with, endorsed by, or sponsored by Meta or Instagram. Instagram is a trademark of Meta Platforms, Inc.
       </p>

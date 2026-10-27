@@ -54,7 +54,8 @@ the design, not gaps to fill:
 
 Where things live: `src/routes/` (admin panel, Connect, webhook, `/health`, legal pages),
 `src/html.ts` (shared layout and styles: reuse them), `src/db.ts` (D1 queries), `src/meta.ts`
-(every Graph API call), `src/cron.ts` (scheduled jobs), `migrations/`, `test/`, `scripts/`
+(every Graph API call), `src/queue.ts` (the send queue and retries), `src/cron.ts` (scheduled
+jobs), `migrations/`, `test/`, `scripts/`
 (setup, doctor, unit tests), and `site/` (the docs, a separate package). The
 [architecture page](https://charanmn7.github.io/ig-comment-dm/docs/architecture/) has the
 whole map.

@@ -57,7 +57,7 @@ Follow-up DMs are out of scope. They need the person to reply first (a 24-hour w
 | GET, HEAD | `/a/:secret/manifest.webmanifest`, `/a/:secret/icon.svg`, `/a/:secret/icon-192.png`, `/a/:secret/icon-512.png` | The web app manifest and home-screen icons. No login, because browsers fetch them without cookies; a wrong secret still gets 404, and they're `no-store`. Mounted ahead of the admin routes so the login middleware never sees these four GETs. |
 | GET/POST | `/a/:secret/*` | Admin. `:secret` is `ADMIN_URL_SECRET` (32 characters). A wrong secret gets 404. |
 
-Admin pages, with a password and CSRF on every POST: `/` (dashboard), `/logs` (every `sent` row, keyset-paginated on `sent_at` then `comment_id`, with its filters in the query string), `/rules`, `/rules/:id/delete` (a confirmation page, then a POST), `/test` (a dry run that sends nothing, choosing the rule through the same `chooseRule` as the pipeline), `/accounts`, the first-run `/setup`, `/login`, `/logout` and `POST /run-cron`.
+Admin pages, with a password and CSRF on every POST: `/` (dashboard), `/logs` (every `sent` row, keyset-paginated on `sent_at` then `comment_id`, with its filters in the query string), `/rules` (with `/rules/new`, `/rules/:id/edit` and `POST /rules/:id/toggle`), `/rules/:id/delete` (a confirmation page, then a POST), `/test` (a dry run that sends nothing, choosing the rule through the same `chooseRule` as the pipeline), `/accounts` (with `POST /accounts/:id/deactivate` and `/activate` for Pause and Resume), the first-run `/setup`, `/login`, `/logout`, `POST /run-cron` ("Check connections now") and `POST /sends/:id/retry` (**Send again** on an `unsure` row, from Home or Logs).
 
 Three unlisted, session-gated endpoints are used by `scripts/selftest.ts`: `POST /a/:secret/selftest/seed`, `GET /a/:secret/selftest/status` and `POST /a/:secret/selftest/cleanup`, which deletes the fake account with its sends and the webhook rows that name it.
 
@@ -118,8 +118,6 @@ A retry waits 1, then 5, then 20 minutes, and the fourth refusal is final: `fail
 **Throughput.** Webhook sends and the cron share each account's 12 a minute, under 750 an hour. The cron is one Worker run a minute, so its capacity is shared, not per account: a backlog on one account with nothing new arriving drains at about 700 an hour (5,000 queued comments take about 7 hours, 10,000 about 14, if D1's write allowance lasts, below), and backlogs on two accounts drain at about 400 an hour each. Webhook sends come on top, each delivery with its own subrequests.
 
 **D1 writes, the real ceiling.** The free plan allows 100,000 rows written a day, and an index on a written column adds a row. Measured in `test/queue.test.ts`: a DM sent straight from the webhook writes 10 rows, plus 3 for the delivery's log (its `webhook_events` row, that row's index, and `last_webhook_received_at`); a DM that waits in the queue writes 13, plus the 3. A comment no rule matches writes only the log's 3, and an excluded one about 7. So about 6,000 to 7,500 DMs a day fit, fewer when many comments match nothing. Past 100,000, D1 refuses every query until 00:00 UTC, the webhook log and the queue included; comments that arrive then get no row, and the poll can find only the newest of them later. An idle minute job writes nothing.
-
-## Cron jobs
 
 ## Cron jobs
 
@@ -202,7 +200,7 @@ Not Worker environment:
 | `last_poll_ok_at` | When the comment poll, every fifth minute, last finished |
 | `health_first_seen_at` | When `/health` was first checked, the start of its grace period for jobs that haven't run yet |
 | `last_webhook_received_at` | When the last delivery that passed the signature check arrived. `webhook_events` is pruned after 7 days, so this is what tells Home and `npm run doctor` that Meta has reached the Worker before |
-| `poll_cursor:<ig_user_id>` | The last post the 5-minute poll finished reading for that account, when its rules cover more than 3 posts. The next sweep starts after it |
+| `poll_cursor:<ig_user_id>` | The last post the comment poll finished reading for that account, when its rules cover more than 3 posts. The next sweep starts after it |
 | `send_totals_snapshot` | All-time send totals for rows before a cutoff, as JSON, which Home adds its live counts to. Written by the daily job |
 | `admin_password_hash`, `admin_password_salt` | The admin password |
 | `session_epoch` | Goes up on every logout. Session cookies are signed over it, so a logout ends them all |

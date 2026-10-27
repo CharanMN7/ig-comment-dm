@@ -11,7 +11,7 @@ Every pull request starts as an issue with your name on it.
 1. **Find an issue, or open one.** For a bug, a typo or a broken link too: it takes ten seconds and saves a wasted PR.
 2. **Comment to claim it**, with a line or two on how you plan to do it.
 3. **Wait until a maintainer assigns it to you.** Then start building.
-4. **Open the PR with `Closes #<issue>` in the description.**
+4. **Open the PR with `Closes #<issue>` in the description**, and keep that line: the check runs again whenever the description is edited.
 
 A pull request from someone who isn't assigned to the issue it closes is closed automatically, however good the code is. We may still build the idea ourselves. It's nothing personal: writing a PR now takes seconds, reviewing one still takes an hour, and assignment is how two people avoid building the same thing twice. If you're assigned and go quiet for 7 days, the issue may be reassigned.
 
@@ -121,7 +121,7 @@ There's no linter, so these conventions are kept by hand:
 
 ## Adding a migration
 
-A schema change is a new file in `migrations/` with the next free number on `master`: after `006_match_all.sql` comes `007_…`. Nothing else needs editing: `npm run db:migrate`, `npm run deploy`, `npm run setup` and the integration tests all pick up every file in the folder. If another PR takes your number before yours merges, renumber yours.
+A schema change is a new file in `migrations/` with the next free number on `master`: after `011_send_budget_token_hold.sql` comes `012_…`. Nothing else needs editing: `npm run db:migrate`, `npm run deploy`, `npm run setup` and the integration tests all pick up every file in the folder. If another PR takes your number before yours merges, renumber yours.
 
 Wrangler's runner (`wrangler d1 migrations apply`) records each file it applies in a `d1_migrations` table and skips recorded files after that, so a migration runs once per database. That's what makes `ALTER TABLE` possible.
 
