@@ -65,13 +65,22 @@ import {
 import { chooseRule } from '../process.ts';
 import { parsePublicReplies, serializePublicReplies } from '../replies.ts';
 import { CRON_FIRST_RUN_SECONDS, jobState } from './health.ts';
-import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
+import {
+  type SessionBinding,
+  clearSessionCookie,
+  endAllSessions,
+  makeSession,
+  readSession,
+  readSessionBinding,
+  serializeSessionCookie,
+} from '../session.ts';
 import { LINK_MARKER, TEMPLATES, findTemplate, placeholderLinkIn, type RuleTemplate } from '../templates.ts';
 import { clearFailures, describeLock, lockRemaining, readThrottle, reserveAttempt } from '../throttle.ts';
 import type { Env, MatchMode, Rule, SessionData } from '../types.ts';
 
 type Vars = {
   adminBase: string;
+  binding: SessionBinding;
   session: SessionData;
   form: Record<string, string>;
 };
@@ -117,14 +126,15 @@ adminRoutes.use('*', async (c, next) => {
   c.set('adminBase', base);
   c.set('form', {});
 
-  let session = await readSession(c.env.SESSION_SIGNING_KEY, c.req.header('Cookie'));
+  const { binding, hasPassword } = await readSessionBinding(c.env.DB);
+  c.set('binding', binding);
+  let session = await readSession(c.env.SESSION_SIGNING_KEY, binding, c.req.header('Cookie'));
   const path = subPath(pathname);
   const isSetup = path === '/setup';
   const isLogin = path === '/login';
-  const hasPassword = await passwordConfigured(c.env);
 
   if (!session && c.req.method === 'GET') {
-    const made = await makeSession(c.env.SESSION_SIGNING_KEY, false);
+    const made = await makeSession(c.env.SESSION_SIGNING_KEY, binding, false);
     session = made.data;
     c.header('Set-Cookie', serializeSessionCookie(made.token, c.env.PUBLIC_BASE_URL, 60 * 60), { append: true });
   }
@@ -255,7 +265,7 @@ adminRoutes.post('/setup', async (c) => {
     await systemSet(c.env.DB, 'admin_password_hash', hash);
     await systemSet(c.env.DB, 'admin_password_salt', salt);
 
-    const made = await makeSession(c.env.SESSION_SIGNING_KEY, true);
+    const made = await makeSession(c.env.SESSION_SIGNING_KEY, { ...c.get('binding'), salt }, true);
     c.header('Set-Cookie', serializeSessionCookie(made.token, c.env.PUBLIC_BASE_URL, 30 * 24 * 60 * 60));
     return c.redirect(`${base}/`, 302);
   } catch (err) {
@@ -274,11 +284,12 @@ adminRoutes.post('/setup', async (c) => {
   }
 });
 
-function loginPage(opts: { base: string; csrf: string; error?: string; lockedFor?: number }) {
+function loginPage(opts: { base: string; csrf: string; error?: string; lockedFor?: number; loggedOut?: boolean }) {
   return layout({
     title: 'Log in',
     app: opts.base,
     body: html`
+      ${opts.loggedOut ? html`<div class="ok" role="status">Logged out on every browser and device.</div>` : html``}
       <h1>Log in</h1>
       ${opts.error ? html`<p class="err" role="alert">${opts.error}</p>` : html``}
       ${opts.lockedFor
@@ -313,6 +324,7 @@ adminRoutes.get('/login', async (c) => {
       csrf: c.get('session').csrf,
       error: c.req.query('e') ? 'Wrong password.' : undefined,
       lockedFor: remaining || undefined,
+      loggedOut: c.req.query('out') === '1',
     }),
   );
 });
@@ -353,14 +365,17 @@ adminRoutes.post('/login', async (c) => {
   }
 
   await clearFailures(c.env.DB);
-  const made = await makeSession(c.env.SESSION_SIGNING_KEY, true);
+  const made = await makeSession(c.env.SESSION_SIGNING_KEY, c.get('binding'), true);
   c.header('Set-Cookie', serializeSessionCookie(made.token, c.env.PUBLIC_BASE_URL, 30 * 24 * 60 * 60));
   return c.redirect(`${base}/`, 302);
 });
 
+// Logout ends every session, not just this browser's: a stateless cookie
+// can't be revoked on its own, and a copy of it would otherwise outlive this.
 adminRoutes.post('/logout', async (c) => {
+  await endAllSessions(c.env.DB);
   c.header('Set-Cookie', clearSessionCookie(c.env.PUBLIC_BASE_URL));
-  return c.redirect(`${c.get('adminBase')}/login`, 302);
+  return c.redirect(`${c.get('adminBase')}/login?out=1`, 302);
 });
 
 const DAY = 24 * 60 * 60;

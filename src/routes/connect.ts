@@ -1,7 +1,7 @@
 import { Hono, type MiddlewareHandler } from 'hono';
 import { html } from 'hono/html';
 import { encryptAesGcm, nowSeconds } from '../crypto.ts';
-import { systemGet, upsertAccount } from '../db.ts';
+import { upsertAccount } from '../db.ts';
 import {
   authorizeUrl,
   exchangeCodeForShortLived,
@@ -14,6 +14,7 @@ import {
   OAUTH_STATE_TTL_SECONDS,
   makeOauthState,
   readSession,
+  readSessionBinding,
   serializeConnectCookie,
   verifyOauthState,
 } from '../session.ts';
@@ -28,13 +29,10 @@ function startHref(reconnect: boolean): string {
 
 /** The same bar the admin panel sets: a logged-in session, and a password that still exists. */
 async function adminSignedIn(env: Env, cookieHeader: string | undefined): Promise<boolean> {
-  const session = await readSession(env.SESSION_SIGNING_KEY, cookieHeader);
-  if (!session?.authed) return false;
-  const [hash, salt] = await Promise.all([
-    systemGet(env.DB, 'admin_password_hash'),
-    systemGet(env.DB, 'admin_password_salt'),
-  ]);
-  return !!(hash && salt);
+  const { binding, hasPassword } = await readSessionBinding(env.DB);
+  if (!hasPassword) return false;
+  const session = await readSession(env.SESSION_SIGNING_KEY, binding, cookieHeader);
+  return !!session?.authed;
 }
 
 // Deliberately says nothing about where the admin page is: this is what a

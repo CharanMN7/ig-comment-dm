@@ -224,7 +224,7 @@ npx wrangler d1 execute ig-comment-dm --remote --command \
   "DELETE FROM system WHERE key IN ('admin_password_hash','admin_password_salt');"
 ```
 
-Then open your admin URL and create a new password. Connected accounts and rules are untouched.
+Then open your admin URL and create a new password. Connected accounts and rules are untouched. Any browser that was still logged in, yours or anyone else's, is logged out.
 
 ## Creating the first password returns a 500
 
