@@ -329,13 +329,23 @@ export async function updateSent(
 }
 
 /**
- * Fails `pending` rows claimed before `claimedBefore`. Only `pending` is
- * touched, so a send that does finish late still records its real outcome.
+ * Fails `pending` rows claimed in [claimedFrom, claimedBefore). Only `pending`
+ * is touched, so a send that does finish late still records its real outcome.
+ * The lower bound keeps this a range read on idx_sent_time: rows older than
+ * the last totals snapshot were already swept.
  */
-export async function failStalePending(db: D1Database, claimedBefore: number, error: string): Promise<void> {
+export async function failStalePending(
+  db: D1Database,
+  claimedFrom: number,
+  claimedBefore: number,
+  error: string,
+): Promise<void> {
   await db
-    .prepare(`UPDATE sent SET dm_status = 'failed', error = ? WHERE dm_status = 'pending' AND sent_at < ?`)
-    .bind(error, claimedBefore)
+    .prepare(
+      `UPDATE sent SET dm_status = 'failed', error = ?
+       WHERE dm_status = 'pending' AND sent_at >= ? AND sent_at < ?`,
+    )
+    .bind(error, claimedFrom, claimedBefore)
     .run();
 }
 
@@ -346,7 +356,7 @@ export async function recentSent(db: D1Database, limit: number): Promise<(Sent &
               s.error, s.sent_at, r.label AS rule_label
        FROM sent s
        LEFT JOIN rules r ON r.id = s.rule_id
-       ORDER BY s.sent_at DESC
+       ORDER BY s.sent_at DESC, s.comment_id DESC
        LIMIT ?`,
     )
     .bind(limit)
@@ -442,34 +452,72 @@ export async function paginatedSent(
 
 export type SendTotals = { sent: number; skipped: number; failed: number; reached: number };
 
+export const NO_SENDS: SendTotals = { sent: 0, skipped: 0, failed: 0, reached: 0 };
+
+export function addTotals(a: SendTotals, b: SendTotals): SendTotals {
+  return { sent: a.sent + b.sent, skipped: a.skipped + b.skipped, failed: a.failed + b.failed, reached: a.reached + b.reached };
+}
+
+/**
+ * The rows with `from <= sent_at < to`. With `firstReach`, people reached
+ * counts only commenters with no DM before `from`, which is what lets the
+ * span be added to a snapshot of everything before `from` without counting
+ * anyone twice.
+ */
+export type Span = { from: number; to?: number; firstReach?: boolean };
+
 type TotalsRow = Record<string, number | string | null>;
 
 /**
- * One column per status per window, so adding a window adds columns rather than
- * statements. The scan is the whole table whatever the windows are: the
- * all-time window reads every row, so no index could narrow it.
+ * One column per status per span, in one statement, read through a range on
+ * sent_at so the cost follows the widest span rather than the table.
  *
  * People reached counts each commenter once, from rows where a DM went out.
  * Someone whose comment was skipped, or whose DM failed, was not reached.
+ *
+ * Per account, the IN list makes SQLite read idx_sent_account_time one
+ * account at a time. With a bare GROUP BY it walks that whole index in
+ * account order instead, because without ANALYZE statistics it values
+ * skipping the sort over skipping the history.
  */
-function totalsQuery(starts: number[], perAccount: boolean): string {
-  const columns = starts.flatMap((_, i) => {
-    const since = `sent_at >= ?${i + 1}`;
+function totalsQuery(spans: Span[], perAccount: boolean): { sql: string; binds: number[] } {
+  const binds: number[] = [];
+  const param = (value: number) => {
+    binds.push(value);
+    return `?${binds.length}`;
+  };
+  const ends = spans.map((s) => s.to);
+  let range = `sent_at >= ${param(Math.min(...spans.map((s) => s.from)))}`;
+  if (ends.every((to) => to != null)) range += ` AND sent_at < ${param(Math.max(...ends))}`;
+  const sameAccount = perAccount ? ' AND p.ig_user_id = sent.ig_user_id' : '';
+  const columns = spans.flatMap((span, i) => {
+    const from = param(span.from);
+    let inSpan = `sent_at >= ${from}`;
+    if (span.to != null) inSpan += ` AND sent_at < ${param(span.to)}`;
+    // From 0 there is nothing earlier, so skip a lookup per row that can't match.
+    const firstTime =
+      span.firstReach && span.from > 0
+        ? ` AND NOT EXISTS (SELECT 1 FROM sent p WHERE p.commenter_id = sent.commenter_id${sameAccount}
+             AND p.dm_status = 'ok' AND p.sent_at < ${from})`
+        : '';
     return [
-      `COUNT(CASE WHEN ${since} AND dm_status = 'ok' THEN 1 END) AS sent_${i}`,
-      `COUNT(CASE WHEN ${since} AND dm_status = 'skipped' THEN 1 END) AS skipped_${i}`,
-      `COUNT(CASE WHEN ${since} AND dm_status = 'failed' THEN 1 END) AS failed_${i}`,
-      `COUNT(DISTINCT CASE WHEN ${since} AND dm_status = 'ok' THEN commenter_id END) AS reached_${i}`,
+      `COUNT(CASE WHEN ${inSpan} AND dm_status = 'ok' THEN 1 END) AS sent_${i}`,
+      `COUNT(CASE WHEN ${inSpan} AND dm_status = 'skipped' THEN 1 END) AS skipped_${i}`,
+      `COUNT(CASE WHEN ${inSpan} AND dm_status = 'failed' THEN 1 END) AS failed_${i}`,
+      `COUNT(DISTINCT CASE WHEN ${inSpan} AND dm_status = 'ok'${firstTime} THEN commenter_id END) AS reached_${i}`,
     ];
   });
-  return perAccount
-    ? `SELECT ig_user_id, ${columns.join(', ')} FROM sent GROUP BY ig_user_id`
-    : `SELECT ${columns.join(', ')} FROM sent`;
+  const sql = perAccount
+    ? `SELECT ig_user_id, ${columns.join(', ')} FROM sent
+       WHERE ig_user_id IN (SELECT ig_user_id FROM accounts) AND ${range}
+       GROUP BY ig_user_id`
+    : `SELECT ${columns.join(', ')} FROM sent WHERE ${range}`;
+  return { sql, binds };
 }
 
-function readTotals(row: TotalsRow | undefined, windows: number): SendTotals[] {
+function readTotals(row: TotalsRow | undefined, spans: number): SendTotals[] {
   const n = (key: string) => Number(row?.[key] ?? 0);
-  return Array.from({ length: windows }, (_, i) => ({
+  return Array.from({ length: spans }, (_, i) => ({
     sent: n(`sent_${i}`),
     skipped: n(`skipped_${i}`),
     failed: n(`failed_${i}`),
@@ -477,22 +525,75 @@ function readTotals(row: TotalsRow | undefined, windows: number): SendTotals[] {
   }));
 }
 
-/** Totals for each window starting at `starts[i]` (unix seconds), in one statement. */
-export async function sendTotals(db: D1Database, starts: number[]): Promise<SendTotals[]> {
-  const { results } = await db
-    .prepare(totalsQuery(starts, false))
-    .bind(...starts)
-    .all<TotalsRow>();
-  return readTotals(results?.[0], starts.length);
+/** Totals for each span, in one statement. */
+export async function sendTotals(db: D1Database, spans: Span[]): Promise<SendTotals[]> {
+  const { sql, binds } = totalsQuery(spans, false);
+  const { results } = await db.prepare(sql).bind(...binds).all<TotalsRow>();
+  return readTotals(results?.[0], spans.length);
 }
 
-/** The same totals per account, also in one statement. Accounts with no rows are absent. */
-export async function sendTotalsByAccount(db: D1Database, starts: number[]): Promise<Map<string, SendTotals[]>> {
-  const { results } = await db
-    .prepare(totalsQuery(starts, true))
-    .bind(...starts)
-    .all<TotalsRow>();
-  return new Map((results ?? []).map((row) => [String(row.ig_user_id), readTotals(row, starts.length)]));
+/**
+ * The same totals per connected account, also in one statement. Accounts with
+ * no rows in any span are absent.
+ */
+export async function sendTotalsByAccount(db: D1Database, spans: Span[]): Promise<Map<string, SendTotals[]>> {
+  const { sql, binds } = totalsQuery(spans, true);
+  const { results } = await db.prepare(sql).bind(...binds).all<TotalsRow>();
+  return new Map((results ?? []).map((row) => [String(row.ig_user_id), readTotals(row, spans.length)]));
+}
+
+/** How many rows `sent` has, counting no further than `limit`. */
+export async function countSentUpTo(db: D1Database, limit: number): Promise<number> {
+  const row = await db
+    .prepare('SELECT COUNT(*) AS n FROM (SELECT 1 FROM sent LIMIT ?)')
+    .bind(limit)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+/**
+ * Every row with sent_at before `cutoff`, counted. Those rows can no longer
+ * change, so Home adds a live count of the rows since `cutoff` to this rather
+ * than reading the whole history on every visit.
+ */
+export type TotalsSnapshot = { cutoff: number; all: SendTotals; accounts: Record<string, SendTotals> };
+
+export const TOTALS_SNAPSHOT_KEY = 'send_totals_snapshot';
+
+const isCount = (n: unknown): n is number => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
+
+function asTotals(value: unknown): SendTotals | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { sent, skipped, failed, reached } = value as Record<string, unknown>;
+  return isCount(sent) && isCount(skipped) && isCount(failed) && isCount(reached) ? { sent, skipped, failed, reached } : null;
+}
+
+/** The stored snapshot, or null when there is none or it can't be read, which both mean "count again". */
+export async function readTotalsSnapshot(db: D1Database): Promise<TotalsSnapshot | null> {
+  const raw = await systemGet(db, TOTALS_SNAPSHOT_KEY);
+  if (raw == null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const { cutoff, all, accounts } = parsed as Record<string, unknown>;
+  const total = asTotals(all);
+  if (!isCount(cutoff) || !total) return null;
+  if (typeof accounts !== 'object' || accounts === null) return null;
+  const byAccount: Record<string, SendTotals> = {};
+  for (const [id, value] of Object.entries(accounts)) {
+    const t = asTotals(value);
+    if (!t) return null;
+    byAccount[id] = t;
+  }
+  return { cutoff, all: total, accounts: byAccount };
+}
+
+export async function writeTotalsSnapshot(db: D1Database, snapshot: TotalsSnapshot): Promise<void> {
+  await systemSet(db, TOTALS_SNAPSHOT_KEY, JSON.stringify(snapshot));
 }
 
 export async function insertWebhookEvent(

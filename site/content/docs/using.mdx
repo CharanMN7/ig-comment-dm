@@ -18,19 +18,22 @@ Connecting needs you to be logged in to the admin panel; the Connect page refuse
 
 **Rules → New rule.**
 
+The form asks for the essentials first: a name, the keywords, and the message. Everything else has a sensible default.
+
 | Field | What to put |
 |---|---|
-| **Name** | For you only, e.g. `Free guide`. |
+| **Rule name** | For you only, e.g. `Free guide`. |
 | **Keywords** | One per line, **at least 3 characters** each, counted after emoji and punctuation are dropped. `AI` would fire on "again" and "email", so the form rejects it. Chinese and Japanese need 2, so `指南` works. |
-| **How to look for them** | **Whole words only** (the default): `guide` matches "Guide please!" but not "guides". **Anywhere in the comment**: also catches `#launch2026` and "guides", but `art` would match "start". |
-| **Exclusions** | Optional, one per line. A comment containing any of them is skipped by this rule even when a keyword matches: `how much`, `already have it`, `not interested`. |
-| **The DM** | Up to 1,000 characters. Put everything they need in this one message. `{username}` puts in their Instagram name. |
-| **Public reply** | Optional. Posted under their comment, and only once the DM has gone through. `{username}` works here too. Open **Add variations** to write it a few ways, and each comment gets one at random. |
+| **Reply to every comment on this post** | Instead of keywords, for giveaways and waitlists. Everyone who comments on that one post gets the DM, and the keyword fields disappear. It needs a specific post: on all posts it would message everyone who ever comments, so it's refused. |
+| **Exclusions and matching** | Folded away, since most rules don't need it. It opens by itself on a rule that uses either setting. |
+| ↳ **How to look for keywords** | **Whole words only** (the default): `guide` matches "Guide please!" but not "guides". **Anywhere in the comment**: also catches `#launch2026` and "guides", but `art` would match "start". |
+| ↳ **Exclusions** | Optional, one per line. A comment containing any of them is skipped by this rule even when a keyword matches: `how much`, `already have it`, `not interested`. |
 | **Which posts** | **All posts and reels** (which includes reels), or one post picked from the dropdown. |
-| **Reply to every comment on this post** | For giveaways and waitlists. Everyone who comments on that one post gets the DM, no keyword needed, and the keyword fields disappear. It needs a specific post: on all posts it would message everyone who ever comments, so it's refused. |
+| **DM** | Up to 1,000 characters. Put everything they need in this one message. `{username}` puts in their Instagram name. |
+| **Public reply** | Optional. Posted under their comment, and only once the DM has gone through. `{username}` works here too. Open **Add variations** to write it a few ways, and each comment gets one at random. |
 
 <Tip>
-**Put everything in that one message.** Instagram allows exactly one private reply per comment, ever. You don't get a follow-up unless they reply to you first.
+**Put everything in that one message.** Instagram allows exactly one DM per comment, ever. You don't get a follow-up unless they reply to you first.
 </Tip>
 
 The post dropdown lists your recent posts and reels after you connect. A post's ID is a long number, not the share link `instagram.com/reel/…`.
@@ -83,6 +86,7 @@ While you test, turn off Instagram's Hidden Words filter on the creator account.
 
 | Panel | What it tells you |
 |---|---|
+| **Get started** | Shown until your first DM goes out: connect an account, write a rule, test it. Each step says **Done** once it's happened. |
 | **Totals** | People reached, DMs sent, skipped and failed, for today, the last 7 and 30 days, and all time. Days start at midnight UTC, and the 7- and 30-day totals include today. People reached counts each person once, and only if a DM actually went out. With more than one account, each also gets its own. |
 | **Did Instagram reach us?** | Whether Meta is POSTing to your webhook at all. Empty means the problem is on Meta's side, usually an app still in Development. `Wrong secret` means `FACEBOOK_APP_SECRET` is missing or wrong. `Not signed` rows are scanners, not Meta, and are safe to ignore. |
 | **Last 20 sends** | Every DM, skip and failure, with the reason and the exact error from Meta. **View all logs** opens the full history, filtered by status, account, rule or UTC date. |
@@ -93,6 +97,8 @@ While you test, turn off Instagram's Hidden Words filter on the creator account.
 </Frame>
 
 **Check connections now** on Home runs the nightly job on demand: it refreshes tokens and re-registers the webhook subscription. It's harmless to run as often as you like.
+
+After you save, pause, resume or delete a rule, or pause an account, a green line at the top of the page confirms it.
 
 Tokens last 60 days and the nightly job refreshes them. If an account shows **Reconnect**, click it: it takes about 20 seconds and keeps your rules and history.
 

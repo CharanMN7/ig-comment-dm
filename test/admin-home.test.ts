@@ -36,7 +36,20 @@ describe('the admin home page', () => {
 
     const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
 
-    expect(textOf(page)).toContain('Today (UTC) 1 people reached 1 DMs sent 1 skipped 1 failed');
+    expect(textOf(page)).toContain('Today (UTC) 1 person reached 1 DM sent 1 skipped 1 failed');
+    expect(textOf(page)).toContain('Last 7 days 1 person reached 1 DM sent 1 skipped 1 failed');
+  });
+
+  it('counts a token with one day left in the singular, on Home and on Accounts', async () => {
+    await seedAccount({ expiresAt: NOW + DAY + 60 });
+    await seedAccount({ igUserId: '17841400000000002', username: 'second', expiresAt: NOW + 2 * DAY + 60 });
+    const admin = await signedInAdmin();
+    const home = textOf((await admin.get(adminPath('/'))).text);
+    expect(home).toContain('@creator Watching comments 1 day left');
+    expect(home).toContain('@second Watching comments 2 days left');
+    const accounts = textOf((await admin.get(adminPath('/accounts'))).text);
+    expect(accounts).toContain('@creator Watching comments · 1 day left');
+    expect(accounts).toContain('@second Watching comments · 2 days left');
   });
 
   it('shows a comment skipped by an exclusion, with the rule and the exclusion that matched', async () => {
@@ -145,6 +158,35 @@ describe('the admin home page', () => {
     const res = await request(adminPath('/'), { headers: { Cookie: admin.cookieHeader }, env: { FACEBOOK_APP_SECRET: '' } });
     expect(res.text).toContain('A Worker secret needs attention.');
     expect(res.text).toContain('<code>FACEBOOK_APP_SECRET</code>');
+  });
+});
+
+describe('getting started on Home', () => {
+  it('lists the three steps on a new install, and ticks each off as it happens', async () => {
+    const admin = await signedInAdmin();
+    let page = textOf((await admin.get(adminPath('/'))).text);
+    expect(page).toContain('Get started');
+    expect(page).toContain('Connect your Instagram account . It takes about 20 seconds.');
+    expect(page).toContain('Write your first rule , or start from a template.');
+    expect(page).toContain('Test your rule with a sample comment.');
+
+    await seedAccount();
+    await seedRule({ keywords: ['guide'] });
+    page = textOf((await admin.get(adminPath('/'))).text);
+    expect(page).toContain('Done: connected @creator.');
+    expect(page).toContain('Done: one rule written.');
+    expect(page).toContain('Test your rule with a sample comment.');
+
+    await postWebhook(commentPayload({ text: 'guide' }));
+    expect((await admin.get(adminPath('/'))).text).not.toContain('Get started');
+  });
+
+  it('says the connections were checked after the button is pressed', async () => {
+    const admin = await signedInAdmin();
+    await admin.get(adminPath('/'));
+    const res = await admin.submit(adminPath('/run-cron'));
+    expect(res.location).toBe(adminPath('/?done=checked'));
+    expect((await admin.get(res.location!)).text).toContain('<div class="ok" role="status">Connections checked.');
   });
 });
 

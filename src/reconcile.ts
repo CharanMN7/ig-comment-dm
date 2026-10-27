@@ -92,13 +92,15 @@ export async function reconcileComments(env: Env): Promise<void> {
         if (!match && excluded.length === 0) continue;
         if ((await countSentByComment(env.DB, comment.id)) > 0) continue;
         try {
-          await processComment(env, account.ig_user_id, ts, {
+          const claimed = await processComment(env, account.ig_user_id, ts, {
             id: comment.id,
             text: comment.text,
             from: comment.from,
             media: { id: mediaId },
           }, deadline);
-          processed += 1;
+          // A comment the webhook claimed after the check above costs no send,
+          // so it mustn't use up the cap and leave real work for the next sweep.
+          if (claimed) processed += 1;
         } catch (err) {
           console.error('poll process failed', comment.id, err instanceof Error ? err.message : err);
         }

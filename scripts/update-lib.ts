@@ -72,11 +72,12 @@ export function changedPaths(porcelainZ: string): string[] {
 const DATABASE_ID_LINE = /^\s*database_id\s*=\s*"[^"]*"\s*(#.*)?$/;
 
 /**
- * Wrangler (and the README of older versions) put the D1 database id into
- * wrangler.toml, and the comment there says not to commit it. Almost every copy
- * deployed from a laptop can therefore carry that one uncommitted line, and
- * refusing to update over it would refuse nearly everyone. Returns the line
- * when it is the only change in `git diff -U0 HEAD -- wrangler.toml`.
+ * The README of older versions had the D1 database id pasted into
+ * wrangler.toml, and the comment there says not to commit it. Wrangler itself
+ * finds the database by name and doesn't write the id back into a TOML with
+ * comments, but every copy set up the old way carries that one uncommitted
+ * line, and refusing to update over it would refuse all of them. Returns the
+ * line when it is the only change in `git diff -U0 HEAD -- wrangler.toml`.
  */
 export function onlyDatabaseIdChange(diff: string): string | null {
   let added: string | null = null;

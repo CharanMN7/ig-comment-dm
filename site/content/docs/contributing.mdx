@@ -84,7 +84,7 @@ Both must pass. CI runs them, a `wrangler deploy --dry-run`, and a secret scan.
 - `npm run test:unit` runs `scripts/test-unit.ts`: pure functions on Node's built-in `node:test` runner, no framework to learn. It also runs `scripts/test-update.ts`, which checks `npm run update` against throwaway git repositories in a temporary folder.
 - `npm run test:integration` runs `test/*.test.ts`: the real Worker in workerd, with a fresh local D1 for each test and every file in `migrations/` applied. Meta is faked in `test/support/meta.ts`, so no request leaves the machine and tests assert exactly what the Worker sent. A Meta call with no fake fails the test, so if your change adds one, add a route there.
 
-You need no Meta app and no `.dev.vars` for either. If you fix a bug in the webhook, the admin panel or the cron, add an integration test that fails without your fix.
+You need no Meta app and no `.dev.vars` for either. The integration tests give every secret a fixed test value in `vitest.config.ts`, so your `.dev.vars` can't change a result; if it sets a name the config doesn't, the run stops and names it. If you add a secret the Worker reads, give it a test value there too. If you fix a bug in the webhook, the admin panel or the cron, add an integration test that fails without your fix.
 
 There's also a live end-to-end check that drives a running Worker:
 

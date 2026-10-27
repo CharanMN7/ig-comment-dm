@@ -50,6 +50,26 @@ describe('admin pages at phone width', () => {
     expect(two).toContain('@only_one');
   });
 
+  it('keeps the nav on one row that scrolls by itself, with full-size links and the current page marked', async () => {
+    await seedAccount();
+    const page = (await (await signedInAdmin()).get(adminPath('/accounts'))).text;
+    const css = page.match(/<style>([\s\S]*?)<\/style>/)![1]!.replace(/\/\*[\s\S]*?\*\//g, '');
+    const declarations = (selector: string) =>
+      [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+        .filter((m) => m[1]!.trim() === selector)
+        .map((m) => m[2]!)
+        .join(';');
+    const nav = declarations('header.top nav');
+    expect(nav).toContain('flex-wrap: nowrap');
+    expect(nav).not.toContain('flex-wrap: wrap');
+    expect(nav).toContain('overflow-x: auto');
+    // Without this a link shrinks to its 44px floor and its word spills out of it.
+    expect(declarations('header.top nav > *')).toContain('flex: none');
+    const links = declarations('header.top nav a');
+    expect(links.match(/min-(height|width): [^;]+/g)).toEqual(['min-height: 44px', 'min-width: 44px']);
+    expect(page).toContain('aria-current="page">Accounts</a>');
+  });
+
   it('makes the rule list Edit link a full-size button', async () => {
     await seedAccount();
     const rule = await seedRule();

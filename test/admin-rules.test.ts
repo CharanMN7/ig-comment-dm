@@ -4,7 +4,7 @@ import { MATCH_ALL_NEEDS_POST_MESSAGE } from '../src/routes/admin.ts';
 import { LINK_MARKER, TEMPLATES, findTemplate } from '../src/templates.ts';
 import { meta } from './support/meta.ts';
 import { ACCESS_TOKEN, IG_USER, NOW, accountRow, ruleRows, seedAccount, seedRule, sentRows } from './support/seed.ts';
-import { adminPath, commentPayload, postWebhook, signedInAdmin } from './support/worker.ts';
+import { Browser, adminPath, commentPayload, postWebhook, signedInAdmin } from './support/worker.ts';
 
 /** The escaping hono/html applies, so expectations can name what the page must contain. */
 function escaped(s: string): string {
@@ -41,7 +41,7 @@ describe('creating a rule from the admin form', () => {
     });
 
     expect(res.status).toBe(302);
-    expect(res.location).toBe(adminPath('/rules'));
+    expect(res.location).toBe(adminPath('/rules?done=rule-saved'));
     expect(await ruleRows()).toMatchObject([
       {
         id: 1,
@@ -109,15 +109,15 @@ describe('creating a rule from the admin form', () => {
       { keywords: 'free guide\npdf', exclude_keywords: 'guide' },
       'The keyword “free guide” could never get a message, because it contains the exclusion “guide”.',
     ],
-    ['no DM text', { dm_text: '   ' }, 'Write the private message to send.'],
-    ['DM text over 1,000 characters', { dm_text: 'x'.repeat(1001) }, 'The private message must be 1,000 characters or fewer.'],
+    ['no DM text', { dm_text: '   ' }, 'Write the DM to send.'],
+    ['DM text over 1,000 characters', { dm_text: 'x'.repeat(1001) }, 'The DM must be 1,000 characters or fewer.'],
     ['a post link instead of an id', { media_id: 'https://www.instagram.com/reel/abc/' }, 'That looks like a link, not a post ID.'],
     [
       'DM text a long username could push past 1,000 characters',
       { dm_text: `${'x'.repeat(981)}{username}` },
-      'The private message must be 1,000 characters or fewer. This one is 991, and each {username} can add up to 20 characters for a long name, so it could reach 1,011.',
+      'The DM must be 1,000 characters or fewer. This one is 991, and each {username} can add up to 20 characters for a long name, so it could reach 1,011.',
     ],
-    ['DM text that is only {username}', { dm_text: ' {username} ' }, 'The private message needs more than {username}.'],
+    ['DM text that is only {username}', { dm_text: ' {username} ' }, 'The DM needs more than {username}.'],
     ['a public reply over 1,000 characters', { public_reply_text: 'x'.repeat(1001) }, 'The public reply must be 1,000 characters or fewer. This one is 1,001.'],
     [
       'a public reply a long username could push past 1,000 characters',
@@ -128,12 +128,12 @@ describe('creating a rule from the admin form', () => {
     [
       'the template link marker still in the DM',
       { dm_text: `Here it is: ${LINK_MARKER}` },
-      `The private message still says ${LINK_MARKER}. Replace it with your own link, or delete it, before saving.`,
+      `The DM still says ${LINK_MARKER}. Replace it with your own link, or delete it, before saving.`,
     ],
     [
       'a sample link in the DM',
       { dm_text: 'Book here: calendly.com/example' },
-      'The private message links to “calendly.com/example”, a sample address that isn’t yours.',
+      'The DM links to “calendly.com/example”, a sample address that isn’t yours.',
     ],
     [
       'a sample link in the public reply',
@@ -164,7 +164,7 @@ describe('creating a rule from the admin form', () => {
     expect(form.text).toContain('Up to 1,000 characters.');
     const res = await admin.submit(adminPath('/rules'), { ...validRule, dm_text: 'x'.repeat(1234) });
     expect(res.status).toBe(400);
-    expect(res.text).toContain('The private message must be 1,000 characters or fewer. This one is 1,234.');
+    expect(res.text).toContain('The DM must be 1,000 characters or fewer. This one is 1,234.');
   });
 
   it('accepts text that fits 1,000 characters with the longest possible username', async () => {
@@ -264,6 +264,51 @@ describe('choosing how keywords match', () => {
   });
 });
 
+describe('messages after a rule changes', () => {
+  const note = (text: string) => `<div class="ok" role="status">${text}`;
+
+  it('says a new or edited rule was saved, with a link to try it, and only right after saving', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const created = await admin.submit(adminPath('/rules'), validRule);
+    const list = (await admin.get(created.location!)).text;
+    expect(list).toContain(note(`Rule saved. <a href="${adminPath('/test')}">Try it with a sample comment</a>.`));
+    expect((await admin.get(adminPath('/rules'))).text).not.toContain('class="ok"');
+
+    await admin.get(adminPath('/rules/1/edit'));
+    const edited = await admin.submit(adminPath('/rules/1'), { ...validRule, label: 'Renamed' });
+    expect(edited.location).toBe(adminPath('/rules?done=rule-saved'));
+  });
+
+  it('says whether Pause or Resume just happened', async () => {
+    const admin = await adminWithAccount();
+    const id = await seedRule();
+    await admin.get(adminPath('/rules'));
+    const paused = await admin.submit(adminPath(`/rules/${id}/toggle`));
+    expect(paused.location).toBe(adminPath('/rules?done=rule-paused'));
+    expect((await admin.get(paused.location!)).text).toContain(note('Rule paused.'));
+    const resumed = await admin.submit(adminPath(`/rules/${id}/toggle`));
+    expect(resumed.location).toBe(adminPath('/rules?done=rule-resumed'));
+    expect((await admin.get(resumed.location!)).text).toContain(note('Rule resumed.'));
+  });
+
+  it('says a deleted rule is gone', async () => {
+    const admin = await adminWithAccount();
+    const id = await seedRule();
+    await admin.get(adminPath(`/rules/${id}/delete`));
+    const res = await admin.submit(adminPath(`/rules/${id}/delete`));
+    expect((await admin.get(res.location!)).text).toContain(note('Rule deleted.'));
+  });
+
+  it('shows nothing for a code it does not know, so a link cannot put words on the page', async () => {
+    const admin = await adminWithAccount();
+    const page = (await admin.get(adminPath('/rules?done=%3Cb%3Ehi%3C%2Fb%3E'))).text;
+    expect(page).not.toContain('class="ok"');
+    expect(page).not.toContain('<b>hi</b>');
+    expect((await admin.get(adminPath('/rules?done=constructor'))).text).not.toContain('class="ok"');
+  });
+});
+
 describe('exclusions on the rule form', () => {
   it('saves one exclusion per line, shows them when editing and in the list, and clears them', async () => {
     const admin = await adminWithAccount();
@@ -313,7 +358,7 @@ describe('replying to every comment on a post', () => {
     expect(page).toContain('Reply to every comment on this post');
     expect(page).toMatch(/<input type="checkbox" id="match_all" name="match_all" value="1"\s*\/>/);
     expect(page).toContain('All posts and reels (recommended)');
-    expect(page).toContain('Leave this on <b>All posts and reels</b> unless you want one reel only.');
+    expect(page).toContain('Leave this on <b>All posts and reels</b> unless the rule is for one post.');
     // Hidden by CSS when the box is ticked; a required field there would block the form.
     expect(page).toMatch(/<textarea id="keywords" name="keywords" placeholder/);
     expect(page).toContain('25 newest comments from the last 3 days');
@@ -355,6 +400,50 @@ describe('replying to every comment on a post', () => {
     const res = await admin.submit(adminPath(`/rules/${id}`), { ...giveaway, media_id: '' });
     expect(res.status).toBe(400);
     expect(await ruleRows()).toMatchObject([{ label: 'Old', match_all: 0 }]);
+  });
+});
+
+describe('the rule form layout', () => {
+  const folded = '<details class="matching" >';
+  const unfolded = '<details class="matching" open>';
+
+  it('asks for keywords first and folds exclusions and match mode away on a new rule', async () => {
+    const admin = await adminWithAccount();
+    const page = (await admin.get(adminPath('/rules/new'))).text;
+    const at = (needle: string) => page.indexOf(needle);
+    expect(at('id="keywords"')).toBeLessThan(at('id="match_all"'));
+    expect(at('id="match_all"')).toBeLessThan(at('id="ig_user_id"'));
+    expect(at('id="ig_user_id"')).toBeLessThan(at('id="dm_text"'));
+    expect(page).toContain(folded);
+    expect(page).toContain('<summary>Exclusions and matching (optional)</summary>');
+    expect(at(folded)).toBeLessThan(at('id="exclude_keywords"'));
+    expect(at(folded)).toBeLessThan(at('name="match_mode"'));
+    expect(page).toContain(`<a class="btn secondary" href="${adminPath('/rules')}">Cancel</a>`);
+  });
+
+  it.each([
+    ['exclusions', { excludeKeywords: ['how much'] }],
+    ['contains mode', { matchMode: 'contains' as const }],
+  ])('opens the folded section when editing a rule that uses %s', async (_, opts) => {
+    const admin = await adminWithAccount();
+    const id = await seedRule(opts);
+    const page = (await admin.get(adminPath(`/rules/${id}/edit`))).text;
+    expect(page).toContain(unfolded);
+    expect(page).not.toContain(folded);
+  });
+
+  it('keeps it folded when editing a rule that uses neither', async () => {
+    const admin = await adminWithAccount();
+    const id = await seedRule();
+    expect((await admin.get(adminPath(`/rules/${id}/edit`))).text).toContain(folded);
+  });
+
+  it('opens it when the form comes back with an error and exclusions typed', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const res = await admin.submit(adminPath('/rules'), { ...validRule, label: '', exclude_keywords: 'how much' });
+    expect(res.status).toBe(400);
+    expect(res.text).toContain(unfolded);
   });
 });
 
@@ -560,7 +649,7 @@ describe('starting a rule from a template', () => {
     const fields = formFields((await admin.get(adminPath('/rules/new?template=prices'))).text);
     const res = await admin.submit(adminPath('/rules'), fields);
     expect(res.status).toBe(400);
-    expect(res.text).toContain(`The private message still says ${LINK_MARKER}. Replace it with your own link, or delete it, before saving.`);
+    expect(res.text).toContain(`The DM still says ${LINK_MARKER}. Replace it with your own link, or delete it, before saving.`);
     expect(formFields(res.text)).toEqual(fields);
     expect(await ruleRows()).toEqual([]);
   });
@@ -612,10 +701,23 @@ describe('editing, pausing and deleting rules', () => {
     expect(await ruleRows()).toEqual([expect.objectContaining({ label: 'Old' })]);
   });
 
-  it('answers 404 for a rule that does not exist', async () => {
+  it('answers 404 for a rule that does not exist, inside the panel with a way back', async () => {
     const admin = await adminWithAccount();
-    expect((await admin.get(adminPath('/rules/999/edit'))).status).toBe(404);
+    const page = await admin.get(adminPath('/rules/999/edit'));
+    expect(page.status).toBe(404);
+    expect(page.text).toContain('That rule doesn’t exist. It may have been deleted.');
+    expect(page.text).toContain(`<a class="btn secondary" href="${adminPath('/rules')}">Back to rules</a>`);
     expect((await admin.submit(adminPath('/rules/999'), validRule)).status).toBe(404);
+  });
+
+  it('answers an unknown admin page with the panel 404 once logged in, and the login page before', async () => {
+    const admin = await adminWithAccount();
+    const page = await admin.get(adminPath('/no-such-page'));
+    expect(page.status).toBe(404);
+    expect(page.text).toContain('There’s no page at this address.');
+    const stranger = await new Browser().get(adminPath('/no-such-page'));
+    expect(stranger.status).toBe(302);
+    expect(stranger.location).toBe(adminPath('/login'));
   });
 
   it('pauses and resumes a rule', async () => {
@@ -649,7 +751,7 @@ describe('editing, pausing and deleting rules', () => {
 
     const res = await admin.submit(adminPath(`/rules/${drop}/delete`));
     expect(res.status).toBe(302);
-    expect(res.location).toBe(adminPath('/rules'));
+    expect(res.location).toBe(adminPath('/rules?done=rule-deleted'));
     expect((await ruleRows()).map((r) => r.id)).toEqual([keep]);
   });
 
@@ -847,13 +949,24 @@ describe('the accounts page', () => {
     expect(page.text).toContain('@creator');
   });
 
-  it('pauses and resumes an account', async () => {
+  it('pauses and resumes an account, and says so after each', async () => {
     const admin = await adminWithAccount();
     await admin.get(adminPath('/accounts'));
-    await admin.submit(adminPath(`/accounts/${IG_USER}/deactivate`));
+    const paused = await admin.submit(adminPath(`/accounts/${IG_USER}/deactivate`));
     expect(await accountRow()).toMatchObject({ active: 0 });
-    await admin.get(adminPath('/accounts'));
-    await admin.submit(adminPath(`/accounts/${IG_USER}/activate`));
+    expect(paused.location).toBe(adminPath('/accounts?done=account-paused'));
+    expect((await admin.get(paused.location!)).text).toContain('Account paused. None of its rules reply until you resume it.');
+    const resumed = await admin.submit(adminPath(`/accounts/${IG_USER}/activate`));
     expect(await accountRow()).toMatchObject({ active: 1 });
+    expect((await admin.get(resumed.location!)).text).toContain('Account resumed.');
+  });
+
+  it('folds the Meta addresses away once an account is connected', async () => {
+    const admin = await signedInAdmin();
+    expect((await admin.get(adminPath('/accounts'))).text).toContain('<details open>');
+    await seedAccount();
+    const page = (await admin.get(adminPath('/accounts'))).text;
+    expect(page).toContain('<details >');
+    expect(page).toContain('<summary>Addresses to save in Meta first</summary>');
   });
 });

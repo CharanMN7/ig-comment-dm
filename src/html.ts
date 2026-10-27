@@ -12,11 +12,22 @@ const CSS = `
 body { margin: 0; }
 main { max-width: 44rem; margin: 0 auto; padding: 1.25rem 1rem 4rem; }
 header.top { border-bottom: 1px solid #ddd; background: #fff; }
-header.top nav { max-width: 44rem; margin: 0 auto; padding: 0.65rem 1rem; display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+header.top nav { max-width: 44rem; margin: 0 auto; padding: 0.65rem 1rem; display: flex; gap: 0.4rem; align-items: center; flex-wrap: nowrap; overflow-x: auto; }
+header.top nav > * { flex: none; }
 header.top nav a { color: #111; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; padding: 0 0.5rem; }
 header.top nav a:hover { text-decoration: underline; }
+/* Bold and underlined, so the current page doesn't rely on colour. */
+header.top nav a[aria-current=page] { font-weight: 650; text-decoration: underline; text-underline-offset: 0.3em; }
 header.top .brand { font-weight: 650; margin-right: 0.5rem; }
 header.top form { margin-left: auto; }
+/* The name and five tap targets don't fit across a 375px phone. The name goes,
+   since the tab title and the installed app already say it, and anything still
+   too wide (a larger text size) scrolls inside the nav rather than wrapping. */
+@media (max-width: 34rem) {
+  header.top .brand { display: none; }
+  header.top nav { gap: 0.25rem; }
+  header.top nav a { padding: 0 0.35rem; }
+}
 h1 { font-size: 1.35rem; margin: 0 0 0.75rem; }
 h2 { font-size: 1.05rem; margin: 1.5rem 0 0.5rem; }
 h3 { font-size: 0.95rem; margin: 1rem 0 0.25rem; }
@@ -34,9 +45,11 @@ th, td { text-align: left; padding: 0.4rem 0.55rem; border-bottom: 1px solid #ee
 th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; color: #555; background: #fafafa; }
 label { display: block; font-weight: 650; margin: 0.85rem 0 0.25rem; }
 input[type=text], input[type=password], input[type=date], textarea, select {
-  width: 100%; padding: 0.4rem 0.5rem; font: inherit; border: 1px solid #ccc; background: #fff;
+  width: 100%; padding: 0.4rem 0.5rem; font: inherit; border: 1px solid #888; background: #fff;
 }
 input[type=text], input[type=password], input[type=date], select { min-height: 44px; }
+/* Browser defaults go as pale as 2.3:1 on white, and Firefox fades any colour set here unless opacity is 1. */
+::placeholder { color: #666; opacity: 1; }
 textarea { min-height: 6rem; }
 fieldset { min-width: 0; margin: 1.25rem 0 0; padding: 0.3rem 0.85rem 0.9rem; border: 1px solid #e4e4e0; background: #fff; }
 legend { font-weight: 650; padding: 0 0.3rem; }
@@ -61,7 +74,7 @@ button, .btn {
   background: #111; color: #fff; border: 0; padding: 0.42rem 0.8rem; font: inherit; cursor: pointer;
   text-decoration: none; display: inline-flex; align-items: center; min-height: 44px;
 }
-button.secondary, a.btn.secondary { background: #fff; color: #111; border: 1px solid #bbb; }
+button.secondary, a.btn.secondary { background: #fff; color: #111; border: 1px solid #888; }
 button.danger, a.btn.danger { background: #a11; }
 .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem; margin: 0.75rem 0 0.5rem; }
 @media (max-width: 40rem) { .kpis { grid-template-columns: repeat(2, 1fr); } }
@@ -78,15 +91,30 @@ pre.raw { background: #111; color: #eee; padding: 0.6rem 0.7rem; overflow: auto;
 .actions form { display: inline; }
 .actions .btn, .actions button { margin: 0.15rem 0; }
 code { font-size: 0.88em; }
+:focus-visible { outline: 2px solid #111; outline-offset: 2px; }
+.steps { padding-left: 1.4rem; }
+.steps li { margin: 0.4rem 0; }
 `;
 
 export function csrfField(token: string) {
   return html`<input type="hidden" name="csrf" value="${token}" />`;
 }
 
+const SECTIONS = [
+  { id: 'home', path: '/', name: 'Home' },
+  { id: 'logs', path: '/logs', name: 'Logs' },
+  { id: 'rules', path: '/rules', name: 'Rules' },
+  { id: 'test', path: '/test', name: 'Test' },
+  { id: 'accounts', path: '/accounts', name: 'Accounts' },
+] as const;
+
+export type Section = (typeof SECTIONS)[number]['id'];
+
 export function layout(opts: {
   title: string;
   base?: string;
+  /** The nav entry this page belongs to, marked as the current page. */
+  section?: Section;
   /** The admin base for pages without the nav (login, setup), so they can be installed too. */
   app?: string;
   csrf?: string;
@@ -98,7 +126,6 @@ export function layout(opts: {
   const install = app
     ? html`
         <link rel="manifest" href="${app}/manifest.webmanifest" />
-        <link rel="icon" href="${app}/icon.svg" type="image/svg+xml" />
         <link rel="apple-touch-icon" href="${app}/icon-192.png" />
         <meta name="apple-mobile-web-app-title" content="Comment to DM" />
         <meta name="theme-color" content="${THEME_COLOR}" />
@@ -109,11 +136,10 @@ export function layout(opts: {
         <header class="top">
           <nav>
             <span class="brand">Comment to DM</span>
-            <a href="${opts.base}/">Home</a>
-            <a href="${opts.base}/logs">Logs</a>
-            <a href="${opts.base}/rules">Rules</a>
-            <a href="${opts.base}/test">Test</a>
-            <a href="${opts.base}/accounts">Accounts</a>
+            ${SECTIONS.map(
+              (s) =>
+                html`<a href="${opts.base}${s.path}"${s.id === opts.section ? raw(' aria-current="page"') : ''}>${s.name}</a>`,
+            )}
             <form method="post" action="${opts.base}/logout">
               ${opts.csrf ? csrfField(opts.csrf) : html``}
               <button class="secondary" type="submit">Log out</button>
@@ -127,7 +153,8 @@ export function layout(opts: {
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>${opts.title}</title>
+        <title>${opts.title} · Comment to DM</title>
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
         ${install}
         <style>
           ${raw(CSS)}
@@ -156,6 +183,11 @@ export function fmtWhen(unix: number): string {
 
 export function daysUntil(expiresAt: number, now: number): number {
   return Math.floor((expiresAt - now) / 86400);
+}
+
+/** Takes both forms because the words that need it here aren't all regular: person, people. */
+export function plural(n: number, one: string, many: string): string {
+  return n === 1 ? one : many;
 }
 
 export function statusWords(dm: string): string {

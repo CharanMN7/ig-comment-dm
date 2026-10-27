@@ -157,8 +157,11 @@ async function main(): Promise<void> {
 
   // ------------------------------------------------------- 2. first deploy
   step(2, TOTAL, 'Creating the database and deploying');
-  say(`${DIM}  Wrangler provisions the D1 database on this first deploy. It may ask you`);
-  say(`  to confirm creating it — say yes.${RESET}\n`);
+  // The database's name is in wrangler.toml, so Wrangler creates it without
+  // asking, and the steps below find it by that name. Nothing relies on Wrangler
+  // writing the id back into wrangler.toml, which it skips for a commented TOML.
+  say(`${DIM}  Wrangler creates the D1 database named in wrangler.toml on this first`);
+  say(`  deploy, or reuses it if your account already has one by that name.${RESET}\n`);
   const first = wrangler(['deploy']);
   if (first.code !== 0) {
     rl.close();

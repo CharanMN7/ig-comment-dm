@@ -19,6 +19,8 @@ describe('Connect (Instagram Business Login)', () => {
     expect(res.text).toContain(`${CALLBACK}\n${CALLBACK}/`);
     expect(res.text).toContain(`<code>${env.META_APP_ID}</code>`);
     expect(res.text).toContain('href="/connect/start?reconnect=1"');
+    // Only a logged-in admin gets this far, so the way back may name the admin page.
+    expect(res.text).toContain(`<a class="btn secondary" href="${adminPath('/accounts')}">Cancel</a>`);
   });
 
   it('redirects to Instagram with a signed state and a short-lived cookie that binds it to this browser', async () => {
@@ -123,13 +125,37 @@ describe('Connect (Instagram Business Login)', () => {
     expect(meta.calls).toEqual([]);
   });
 
-  it('explains a cancelled login and changes nothing', async () => {
-    const res = await request('/connect/callback?error=access_denied&error_description=The+user+denied+your+request.');
+  it('treats Cancel on Instagram’s screen calmly, changes nothing, and offers a way back to Accounts', async () => {
+    const admin = await signedInAdmin();
+    await startConnect(admin);
+    const res = await returnFromInstagram(admin, {
+      error: 'access_denied',
+      error_reason: 'user_denied',
+      error_description: 'The user denied your request.',
+    });
     expect(res.status).toBe(200);
-    expect(res.text).toContain('You didn’t connect Instagram. Nothing was changed.');
-    expect(res.text).toContain('The user denied your request.');
+    expect(res.text).toContain('<h1>Not connected</h1>');
+    expect(res.text).toContain('You cancelled on Instagram’s screen, so no account was connected and nothing changed.');
+    expect(res.text).not.toContain('Something went wrong');
+    expect(res.text).toContain('<a class="btn" href="/connect/accounts">Back to Accounts</a>');
     expect(res.text).not.toContain(env.ADMIN_URL_SECRET);
     expect(meta.calls).toEqual([]);
+    expect(await accountCount()).toBe(0);
+
+    // Following the link is a click on our own page, so the session cookie goes with it.
+    const back = await admin.get('/connect/accounts');
+    expect(back.status).toBe(302);
+    expect(back.location).toBe(adminPath('/accounts'));
+  });
+
+  it('still shows Instagram’s reason for any other refusal, with a way back', async () => {
+    const res = await request('/connect/callback?error=invalid_request&error_description=Invalid+scope');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('<h1>Not connected</h1>');
+    expect(res.text).not.toContain('Something went wrong');
+    expect(res.text).toContain('Invalid scope');
+    expect(res.text).toContain('href="/connect/accounts"');
+    expect(res.text).not.toContain(env.ADMIN_URL_SECRET);
   });
 
   it("shows Instagram's reason when the code exchange fails and stores no account", async () => {
@@ -158,6 +184,8 @@ describe('Connect without an admin session', () => {
     ['the start of Instagram login', '/connect/start'],
     ['the checklist with a trailing slash', '/connect/'],
     ['the start of Instagram login with a trailing slash', '/connect/start/'],
+    ['the way back to Accounts', '/connect/accounts'],
+    ['the way back to Accounts with a trailing slash', '/connect/accounts/'],
   ])('will not show %s to a visitor with no session', async (_, path) => {
     await signedInAdmin();
     const res = await request(path);
@@ -169,9 +197,9 @@ describe('Connect without an admin session', () => {
     expect(res.text).not.toContain('/connect/start');
   });
 
-  it('will not start Instagram login for a session that has not logged in', async () => {
+  it.each(['/connect/start', '/connect/accounts'])('will not answer %s for a session that has not logged in', async (path) => {
     const visitor = await visitorBeforeLogin();
-    const res = await visitor.get('/connect/start');
+    const res = await visitor.get(path);
     expect(res.status).toBe(403);
     expect(res.location).toBeNull();
     expect(res.text).not.toContain(env.ADMIN_URL_SECRET);

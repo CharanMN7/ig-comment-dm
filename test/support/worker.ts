@@ -43,18 +43,49 @@ export async function runScheduled(cron: string): Promise<void> {
   await waitOnExecutionContext(ctx);
 }
 
-/** The real database, counting the statements prepared against it. */
-export function countingDb(): { db: D1Database; statements: string[] } {
+export type DbCall = { sql: string; binds: unknown[]; rowsRead: number };
+
+/**
+ * Records the binds and D1's rows-read figure, the number the free plan's
+ * daily cap counts. `first()` goes through `all()` because only that returns
+ * the figure; D1 runs the whole statement either way.
+ */
+function traced(stmt: D1PreparedStatement, call: DbCall): D1PreparedStatement {
+  const tally = <T extends { meta: { rows_read: number } }>(result: T): T => {
+    call.rowsRead += result.meta.rows_read;
+    return result;
+  };
+  return {
+    bind: (...values: unknown[]) => {
+      call.binds = values;
+      return traced(stmt.bind(...values), call);
+    },
+    first: async (column?: string) => {
+      const row = tally(await stmt.all<Record<string, unknown>>()).results[0];
+      if (row == null) return null;
+      return column == null ? row : row[column];
+    },
+    all: async () => tally(await stmt.all()),
+    run: async () => tally(await stmt.run()),
+    raw: (options?: { columnNames?: boolean }) => stmt.raw(options as { columnNames: true }),
+  } as unknown as D1PreparedStatement;
+}
+
+/** The real database, recording the statements prepared against it. */
+export function countingDb(): { db: D1Database; statements: string[]; calls: DbCall[] } {
   const statements: string[] = [];
+  const calls: DbCall[] = [];
   const db = {
     prepare: (sql: string) => {
       statements.push(sql);
-      return env.DB.prepare(sql);
+      const call: DbCall = { sql, binds: [], rowsRead: 0 };
+      calls.push(call);
+      return traced(env.DB.prepare(sql), call);
     },
     batch: (s: D1PreparedStatement[]) => env.DB.batch(s),
     exec: (sql: string) => env.DB.exec(sql),
   } as unknown as D1Database;
-  return { db, statements };
+  return { db, statements, calls };
 }
 
 // --- Webhooks ----------------------------------------------------------------

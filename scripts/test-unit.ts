@@ -11,7 +11,7 @@ import {
   verifyMetaSignatureAny,
 } from '../src/crypto.ts';
 import { findConfigProblems } from '../src/config.ts';
-import { FREE_ATTEMPTS, lockRemaining, lockSecondsFor } from '../src/throttle.ts';
+import { FREE_ATTEMPTS, describeLock, lockRemaining, lockSecondsFor } from '../src/throttle.ts';
 import type { Env } from '../src/types.ts';
 import {
   META_CALL_MAX_MS,
@@ -995,7 +995,7 @@ describe('placeholderLinkIn', () => {
   it('stops a rule being saved with one, in the message or any reply, and names it', () => {
     const form = { ig_user_id: 'acct', label: 'Guide', keywords: 'guide', dm_text: 'Here: https://ana.studio/g', public_reply_text: 'Sent!' };
     assert.deepEqual(readRuleFields({ ...form, dm_text: 'Here: https://example.com/guide' }), {
-      error: 'The private message links to “https://example.com/guide”, a sample address that isn’t yours. Replace it with your own link before saving.',
+      error: 'The DM links to “https://example.com/guide”, a sample address that isn’t yours. Replace it with your own link before saving.',
     });
     assert.deepEqual(readRuleFields({ ...form, public_reply_text: `Also at ${LINK_MARKER}` }), {
       error: `The public reply still says ${LINK_MARKER}. Replace it with your own link, or delete it, before saving.`,
@@ -1244,6 +1244,15 @@ describe('login throttle', () => {
     assert.equal(lockRemaining({ fails: 9, lockedUntil: 1_000 }, 900), 100);
     assert.equal(lockRemaining({ fails: 9, lockedUntil: 1_000 }, 1_000), 0);
     assert.equal(lockRemaining({ fails: 0, lockedUntil: 0 }, 1_000), 0);
+  });
+
+  it('words the wait for the login page, one second included', () => {
+    assert.equal(describeLock(1), '1 second');
+    assert.equal(describeLock(45), '45 seconds');
+    assert.equal(describeLock(60), '60 seconds');
+    assert.equal(describeLock(61), '2 minutes');
+    assert.equal(describeLock(119), '2 minutes');
+    assert.equal(describeLock(240), '4 minutes');
   });
 });
 

@@ -1,5 +1,6 @@
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { html } from 'hono/html';
+import type { HtmlEscapedString } from 'hono/utils/html';
 import {
   CRON_STALE_SECONDS,
   DM_TEXT_MAX,
@@ -11,11 +12,16 @@ import {
   timingSafeEqualString,
   verifyPassword,
 } from '../crypto.ts';
-import { ensureCommentSubscriptions, runCron } from '../cron.ts';
+import { EMPTY_SNAPSHOT, ensureCommentSubscriptions, runCron, snapshotTotals } from '../cron.ts';
 import {
   HEALTH_FIRST_SEEN_KEY,
+  NO_SENDS,
   type SendTotals,
+  type Span,
+  type TotalsSnapshot,
+  addTotals,
   countSentByComment,
+  countSentUpTo,
   deleteRule,
   getAccount,
   getRule,
@@ -26,6 +32,7 @@ import {
   listAccounts,
   listRules,
   paginatedSent,
+  readTotalsSnapshot,
   recentSent,
   recentWebhookEvents,
   sendTotals,
@@ -38,7 +45,7 @@ import {
   upsertAccount,
 } from '../db.ts';
 import { findConfigProblems } from '../config.ts';
-import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
+import { type Section, csrfField, daysUntil, fmtWhen, layout, pageError, plural, statusWords } from '../html.ts';
 import { LOGS_PAGE_SIZE, LOG_STATUSES, logsHref, pageLinks, parseLogsQuery } from '../logs.ts';
 import {
   EXCLUSION_TOO_SHORT_MESSAGE,
@@ -162,28 +169,84 @@ function formOf(c: { get: (key: 'form') => Record<string, string> }): Record<str
   return c.get('form') ?? {};
 }
 
-adminRoutes.get('/setup', async (c) => {
-  if (await passwordConfigured(c.env)) return c.redirect(`${c.get('adminBase')}/login`, 302);
+type AdminContext = Context<{ Bindings: Env; Variables: Vars }>;
+
+/**
+ * What a page says after one of its forms posts and redirects back. Only the
+ * code travels in the URL, so a crafted link can show one of these lines and
+ * nothing else.
+ */
+const DONE = new Map<string, (base: string) => HtmlEscapedString | Promise<HtmlEscapedString>>([
+  ['rule-saved', (base) => html`Rule saved. <a href="${base}/test">Try it with a sample comment</a>.`],
+  ['rule-paused', () => html`Rule paused. It won’t reply to anyone until you resume it.`],
+  ['rule-resumed', () => html`Rule resumed. It replies to new comments again.`],
+  ['rule-deleted', () => html`Rule deleted.`],
+  ['account-paused', () => html`Account paused. None of its rules reply until you resume it.`],
+  ['account-resumed', () => html`Account resumed. Its rules reply to new comments again.`],
+  ['checked', () => html`Connections checked. Anything that needs you is listed at the top.`],
+]);
+
+function redirectDone(c: AdminContext, path: string, done: string) {
+  return c.redirect(`${c.get('adminBase')}${path}?done=${done}`, 302);
+}
+
+function doneNote(c: AdminContext) {
+  const message = DONE.get(c.req.query('done') ?? '');
+  return message ? html`<div class="ok" role="status">${message(c.get('adminBase'))}</div>` : html``;
+}
+
+/** A 404 inside the panel, with the nav and a way back, for someone already logged in. */
+function notFoundPage(c: AdminContext, opts: { section?: Section; message: string; back: string; backLabel: string }) {
   const base = c.get('adminBase');
-  const session = c.get('session');
   return c.html(
     layout({
-      title: 'Create password',
-      app: base,
+      title: 'Not found',
+      base,
+      section: opts.section,
+      csrf: c.get('session').csrf,
       body: html`
-        <h1>Create your password</h1>
-        <p>This page is only shown once. Pick a password you will remember — there is no email reset.</p>
-        <form method="post" action="${base}/setup">
-          ${csrfField(session.csrf)}
-          <label for="password">Password</label>
-          <input id="password" name="password" type="password" required minlength="8" autocomplete="new-password" />
-          <label for="confirm">Type it again</label>
-          <input id="confirm" name="confirm" type="password" required minlength="8" autocomplete="new-password" />
-          <div class="row"><button type="submit">Save password</button></div>
-        </form>
+        <h1>Not found</h1>
+        <p>${opts.message}</p>
+        <p><a class="btn secondary" href="${base}${opts.back}">${opts.backLabel}</a></p>
       `,
     }),
+    404,
   );
+}
+
+function ruleNotFound(c: AdminContext) {
+  return notFoundPage(c, {
+    section: 'rules',
+    message: 'That rule doesn’t exist. It may have been deleted.',
+    back: '/rules',
+    backLabel: 'Back to rules',
+  });
+}
+
+function setupPage(opts: { base: string; csrf: string; error?: string }) {
+  return layout({
+    title: 'Create password',
+    app: opts.base,
+    body: html`
+      <h1>Create your password</h1>
+      ${opts.error ? html`<p class="err" role="alert">${opts.error}</p>` : html``}
+      <p>This page is only shown once. Pick a password you will remember — there is no email reset.</p>
+      <form method="post" action="${opts.base}/setup">
+        ${csrfField(opts.csrf)}
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" required minlength="8" autocomplete="new-password" />
+        <p class="muted">At least 8 characters.</p>
+        <label for="confirm">Type it again</label>
+        <input id="confirm" name="confirm" type="password" required minlength="8" autocomplete="new-password" />
+        <div class="row"><button type="submit">Save password</button></div>
+      </form>
+    `,
+  });
+}
+
+adminRoutes.get('/setup', async (c) => {
+  if (await passwordConfigured(c.env)) return c.redirect(`${c.get('adminBase')}/login`, 302);
+  return c.html(setupPage({ base: c.get('adminBase'), csrf: c.get('session').csrf }));
 });
 
 adminRoutes.post('/setup', async (c) => {
@@ -192,24 +255,9 @@ adminRoutes.post('/setup', async (c) => {
   const password = form.password ?? '';
   const confirm = form.confirm ?? '';
   const base = c.get('adminBase');
-  if (password.length < 8) {
-    return c.html(
-      layout({
-        title: 'Create password',
-        body: html`<p class="err">Use at least 8 characters.</p><p><a class="btn secondary" href="${base}/setup">Back</a></p>`,
-      }),
-      400,
-    );
-  }
-  if (password !== confirm) {
-    return c.html(
-      layout({
-        title: 'Create password',
-        body: html`<p class="err">Those two passwords did not match.</p><p><a class="btn secondary" href="${base}/setup">Back</a></p>`,
-      }),
-      400,
-    );
-  }
+  const problem =
+    password.length < 8 ? 'Use at least 8 characters.' : password !== confirm ? 'Those two passwords did not match.' : null;
+  if (problem) return c.html(setupPage({ base, csrf: c.get('session').csrf, error: problem }), 400);
   try {
     const { hash, salt } = await hashPassword(password);
     await systemSet(c.env.DB, 'admin_password_hash', hash);
@@ -240,7 +288,7 @@ function loginPage(opts: { base: string; csrf: string; error?: string; lockedFor
     app: opts.base,
     body: html`
       <h1>Log in</h1>
-      ${opts.error ? html`<p class="err">${opts.error}</p>` : html``}
+      ${opts.error ? html`<p class="err" role="alert">${opts.error}</p>` : html``}
       ${opts.lockedFor
         ? html`<p class="muted">
             Too many wrong passwords. Try again in ${describeLock(opts.lockedFor)}. Each further
@@ -340,7 +388,58 @@ const TOTAL_WINDOWS = [
 
 function windowStarts(now: number): number[] {
   const today = Math.floor(now / DAY) * DAY;
-  return TOTAL_WINDOWS.map((w) => (w.days == null ? 0 : today - (w.days - 1) * DAY));
+  return TOTAL_WINDOWS.flatMap((w) => (w.days == null ? [] : [today - (w.days - 1) * DAY]));
+}
+
+// With no snapshot yet and at most this many rows, Home counts all time live.
+// That reads fewer rows than the 30-day window does on a busy account, and
+// spares a page view the sweep and the write.
+const LIVE_TOTALS_MAX_ROWS = 1_000;
+
+// The daily job keeps the snapshot under about 24 hours old. Past this it has
+// missed a run, and Home would read every row since, so it catches up itself.
+const SNAPSHOT_MAX_AGE = 2 * DAY;
+
+/**
+ * The snapshot Home adds its live counts to. Without one, a small table is
+ * counted whole, and a large one, an upgrade before its first nightly run,
+ * gets its snapshot now, so the full read happens once rather than per visit.
+ */
+async function totalsBase(db: D1Database, now: number): Promise<TotalsSnapshot> {
+  const stored = await readTotalsSnapshot(db);
+  if (stored && now - stored.cutoff <= SNAPSHOT_MAX_AGE) return stored;
+  if (!stored && (await countSentUpTo(db, LIVE_TOTALS_MAX_ROWS + 1)) <= LIVE_TOTALS_MAX_ROWS) return EMPTY_SNAPSHOT;
+  try {
+    return await snapshotTotals(db, now);
+  } catch (err) {
+    // Counting live from the old snapshot, or from nothing, is slower but still right.
+    console.error('snapshot send totals failed', err instanceof Error ? err.message : err);
+    return stored ?? EMPTY_SNAPSHOT;
+  }
+}
+
+/**
+ * Each window in TOTAL_WINDOWS order. All time is the snapshot plus the rows
+ * since its cutoff, which are a range read like the other windows.
+ */
+async function homeTotals(
+  db: D1Database,
+  now: number,
+  perAccount: boolean,
+): Promise<{ all: SendTotals[]; byAccount: Map<string, SendTotals[]> | null }> {
+  const base = await totalsBase(db, now);
+  const spans: Span[] = [...windowStarts(now).map((from) => ({ from })), { from: base.cutoff, firstReach: true }];
+  const withBase = (live: SendTotals[], snapshot: SendTotals): SendTotals[] =>
+    spans.map((_, i) => {
+      const t = live[i] ?? NO_SENDS;
+      return i === spans.length - 1 ? addTotals(snapshot, t) : t;
+    });
+  const all = withBase(await sendTotals(db, spans), base.all);
+  if (!perAccount) return { all, byAccount: null };
+  const live = await sendTotalsByAccount(db, spans);
+  const ids = new Set([...live.keys(), ...Object.keys(base.accounts)]);
+  const byAccount = new Map([...ids].map((id) => [id, withBase(live.get(id) ?? [], base.accounts[id] ?? NO_SENDS)]));
+  return { all, byAccount };
 }
 
 function fmtCount(n: number): string {
@@ -356,14 +455,40 @@ function totalsTiles(totals: SendTotals[]) {
         return html`<div class="kpi">
           <span class="muted">${w.label}</span>
           <b>${fmtCount(t.reached)}</b>
-          people reached
+          ${plural(t.reached, 'person', 'people')} reached
           <div class="muted">
-            ${fmtCount(t.sent)} DMs sent<br />${fmtCount(t.skipped)} skipped<br />
+            ${fmtCount(t.sent)} ${plural(t.sent, 'DM', 'DMs')} sent<br />${fmtCount(t.skipped)} skipped<br />
             ${t.failed ? html`<span class="err">${failed}</span>` : failed}
           </div>
         </div>`;
       })}
     </div>
+  `;
+}
+
+/** Until the first DM goes out, Home leads with the three steps that get there. */
+function gettingStarted(base: string, accounts: { username: string }[], ruleCount: number, anySent: boolean) {
+  const done = html`<b>Done:</b>`;
+  return html`
+    <h2>Get started</h2>
+    <ol class="steps">
+      <li>
+        ${accounts.length
+          ? html`${done} connected ${accounts.map((a) => `@${a.username}`).join(', ')}.`
+          : html`<a href="/connect">Connect your Instagram account</a>. It takes about 20 seconds.`}
+      </li>
+      <li>
+        ${ruleCount
+          ? html`${done} ${ruleCount === 1 ? 'one rule' : `${String(ruleCount)} rules`} written.`
+          : html`<a href="${base}/rules">Write your first rule</a>, or start from a template.`}
+      </li>
+      <li>
+        ${anySent
+          ? html`${done} your first DM went out.`
+          : html`<a href="${base}/test">Test your rule</a> with a sample comment. Then ask a friend to comment
+              from their own account: their DM shows up under Last 20 sends.`}
+      </li>
+    </ol>
   `;
 }
 
@@ -382,10 +507,8 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   } catch {
     events = [];
   }
-  const starts = windowStarts(now);
-  const totals = await sendTotals(c.env.DB, starts);
   // With one account the breakdown would repeat the totals, so skip its query.
-  const byAccount = accounts.length > 1 ? await sendTotalsByAccount(c.env.DB, starts) : null;
+  const { all: totals, byAccount } = await homeTotals(c.env.DB, now, accounts.length > 1);
   const health = await healthSnapshot(c.env.DB, now);
   // Shares /health's clock, so a deploy nobody monitors still gets its grace
   // period from the first time the operator opens Home.
@@ -393,6 +516,9 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   const cron = jobState(health.lastCronOkAt, CRON_STALE_SECONDS, CRON_FIRST_RUN_SECONDS, health.firstSeenAt ?? now, now);
   const reconnect = accounts.filter((a) => a.needs_reconnect === 1 || a.token_expires_at <= now);
   const configProblems = findConfigProblems(c.env);
+  const anySent = (totals.at(-1)?.sent ?? 0) > 0;
+  // Gone for good once a DM has gone out, which also spares Home the rules query.
+  const steps = anySent && accounts.length ? html`` : gettingStarted(base, accounts, (await listRules(c.env.DB)).length, anySent);
 
   const banners = [];
   if (reconnect.length) {
@@ -456,10 +582,13 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
     layout({
       title: 'Home',
       base,
+      section: 'home',
       csrf: c.get('session').csrf,
       body: html`
+        ${doneNote(c)}
         ${banners}
         <h1>Home</h1>
+        ${steps}
         ${totalsTiles(totals)}
         <p class="muted">
           Days start at 00:00 UTC, and the 7- and 30-day totals include today. People reached counts each
@@ -490,7 +619,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                 <tbody>
                   ${accounts.map((a) => {
                     const days = daysUntil(a.token_expires_at, now);
-                    let token = days < 0 ? 'Expired' : `${days} day${days === 1 ? '' : 's'} left`;
+                    let token = days < 0 ? 'Expired' : `${days} ${plural(days, 'day', 'days')} left`;
                     if (a.needs_reconnect) token = 'Needs reconnect';
                     const status = a.active ? 'Watching comments' : 'Paused';
                     return html`<tr>
@@ -697,7 +826,7 @@ adminRoutes.get('/logs', async (c) => {
 
 adminRoutes.post('/run-cron', async (c) => {
   await runCron(c.env);
-  return c.redirect(`${c.get('adminBase')}/`, 302);
+  return redirectDone(c, '/', 'checked');
 });
 
 function looksLikePostUrl(s: string): boolean {
@@ -831,6 +960,9 @@ function ruleForm(opts: {
   const [mainReply = '', ...variations] = v.public_replies;
   const variationFields = Array.from({ length: Math.max(EXTRA_REPLIES, variations.length) }, (_, i) => variations[i] ?? '');
   const contains = v.match_mode === 'contains';
+  // Folded away on a new rule, but a rule already using one of these opens
+  // with it showing, so nobody edits a rule without seeing how it matches.
+  const fineTuned = contains || v.exclude_keywords.trim() !== '';
   return html`
     ${opts.error ? html`<p class="err" role="alert">${opts.error}</p>` : html``}
     <form class="rule-form" method="post" action="${opts.action}">
@@ -838,6 +970,67 @@ function ruleForm(opts: {
       <label for="label">Rule name</label>
       <input id="label" name="label" type="text" required value="${v.label}" placeholder="Free guide" />
       <p class="muted">Only you see this. It helps you tell your rules apart.</p>
+
+      <fieldset class="group">
+        <legend>When someone comments</legend>
+        <div class="when-keywords">
+          <label for="keywords">Keywords</label>
+          <textarea id="keywords" name="keywords" placeholder="guide&#10;freebie">${v.keywords}</textarea>
+          <p class="muted">
+            One per line. A comment with any of these gets your message. Capitals, accents, emoji and
+            punctuation don’t matter, so “GUIDE!!” counts as “guide”. Each keyword needs at least 3 letters,
+            or 2 in Chinese and Japanese.
+          </p>
+        </div>
+        <label class="choice">
+          <input type="checkbox" id="match_all" name="match_all" value="1" ${v.match_all ? 'checked' : ''} />
+          <span>
+            <b>Reply to every comment on this post</b>
+            <span class="muted">
+              Instead of keywords, for giveaways and waitlists: everyone who comments gets the message. Each
+              comment gets its own message, so someone who comments three times gets it three times.
+            </span>
+          </span>
+        </label>
+        <p class="err needs-post">
+          Pick one post under “Which posts” below. This can’t be used on all posts: it would message
+          everyone who comments on anything, and Instagram may restrict the account.
+        </p>
+        <p class="muted when-all">
+          Older posts: every 5 minutes a check also reads the post’s 25 newest comments from the last 3 days,
+          and any it hasn’t handled before get the message too, up to 10 messages per check. Comments it
+          already skipped stay skipped.
+        </p>
+        <details class="matching" ${fineTuned ? 'open' : ''}>
+          <summary>Exclusions and matching (optional)</summary>
+          <fieldset class="choices when-keywords">
+            <legend>How to look for keywords</legend>
+            <label class="choice">
+              <input type="radio" name="match_mode" value="word" ${contains ? '' : 'checked'} />
+              <span>
+                <b>${MATCH_MODE_WORDS.word}</b> (recommended)
+                <span class="muted">“guide” matches “Guide please!” but not “guides” or “guidelines”.</span>
+              </span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="match_mode" value="contains" ${contains ? 'checked' : ''} />
+              <span>
+                <b>${MATCH_MODE_WORDS.contains}</b>
+                <span class="muted">Contains also catches #launch2026, but “art” would match “start”.</span>
+              </span>
+            </label>
+          </fieldset>
+          <label for="exclude_keywords">Exclusions</label>
+          <textarea id="exclude_keywords" name="exclude_keywords" placeholder="how much&#10;already have it&#10;not interested">${v.exclude_keywords}</textarea>
+          <p class="muted">
+            Skip comments that contain any of these, even when a keyword matches. One per line. Useful for
+            “how much is the guide?” or “I already have the guide”, which mention your keyword but don’t want
+            the message. They are found the same way as your keywords. Another rule without these exclusions
+            can still reply.
+          </p>
+          <p class="muted when-all">On a rule that replies to every comment, exclusions are found as whole words.</p>
+        </details>
+      </fieldset>
 
       <fieldset class="group">
         <legend>Where to watch</legend>
@@ -862,86 +1055,27 @@ function ruleForm(opts: {
             : html``}
         </select>
         <p class="muted when-keywords">
-          Leave this on <b>All posts and reels</b> unless you want one reel only. A reel’s ID is a long number
-          from Instagram, not the share link (<code>instagram.com/reel/…</code>). If the list is empty, leave it
-          on all posts — that still covers reels.
+          Leave this on <b>All posts and reels</b> unless the rule is for one post. If the list is empty, leave
+          it as it is: that still covers every post.
         </p>
-        <p class="muted when-all">Pick the one post or reel whose commenters should all get the message.</p>
-      </fieldset>
-
-      <fieldset class="group">
-        <legend>Which comments get a message</legend>
-        <label class="choice">
-          <input type="checkbox" id="match_all" name="match_all" value="1" ${v.match_all ? 'checked' : ''} />
-          <span>
-            <b>Reply to every comment on this post</b>
-            <span class="muted">
-              For giveaways and waitlists: everyone who comments gets the message, no keyword needed. Each
-              comment gets its own message, so someone who comments three times gets it three times.
-            </span>
-          </span>
-        </label>
-        <p class="err needs-post">
-          Pick one post or reel under “Which posts” above. This can’t be used on all posts: it would message
-          everyone who comments on anything, and Instagram may restrict the account.
-        </p>
-        <p class="muted when-all">
-          Older posts: every 5 minutes a check also reads the post’s 25 newest comments from the last 3 days,
-          and any it hasn’t handled before get the message too, up to 10 messages per check. Comments it
-          already skipped stay skipped.
-        </p>
-        <div class="when-keywords">
-          <label for="keywords">Keywords</label>
-          <textarea id="keywords" name="keywords" placeholder="guide&#10;freebie">${v.keywords}</textarea>
-          <p class="muted">
-            One per line. A comment with any of these gets your message. Capitals, accents, emoji and
-            punctuation don’t matter, so “GUIDE!!” counts as “guide”. Each keyword needs at least 3 letters,
-            or 2 in Chinese and Japanese.
-          </p>
-          <fieldset class="choices">
-            <legend>How to look for them</legend>
-            <label class="choice">
-              <input type="radio" name="match_mode" value="word" ${contains ? '' : 'checked'} />
-              <span>
-                <b>${MATCH_MODE_WORDS.word}</b> (recommended)
-                <span class="muted">“guide” matches “Guide please!” but not “guides” or “guidelines”.</span>
-              </span>
-            </label>
-            <label class="choice">
-              <input type="radio" name="match_mode" value="contains" ${contains ? 'checked' : ''} />
-              <span>
-                <b>${MATCH_MODE_WORDS.contains}</b>
-                <span class="muted">Contains also catches #launch2026, but “art” would match “start”.</span>
-              </span>
-            </label>
-          </fieldset>
-        </div>
-        <label for="exclude_keywords">Exclusions (optional)</label>
-        <textarea id="exclude_keywords" name="exclude_keywords" placeholder="how much&#10;already have it&#10;not interested">${v.exclude_keywords}</textarea>
-        <p class="muted">
-          Skip comments that contain any of these, even when a keyword matches. One per line. Useful for
-          “how much is the guide?” or “I already have the guide”, which mention your keyword but don’t want
-          the message. They are found the same way as your keywords. Another rule without these exclusions
-          can still reply.
-        </p>
-        <p class="muted when-all">On a rule that replies to every comment, exclusions are found as whole words.</p>
+        <p class="muted when-all">Pick the one post whose commenters should all get the message.</p>
       </fieldset>
 
       <fieldset class="group">
         <legend>What to send</legend>
-        <label for="dm_text">Private message</label>
+        <label for="dm_text">DM</label>
         <textarea id="dm_text" name="dm_text" required maxlength="${String(DM_TEXT_MAX)}">${v.dm_text}</textarea>
         <p class="muted">
-          Up to 1,000 characters. Instagram allows one private message per comment, so put everything they
+          Up to 1,000 characters. Instagram allows one DM per comment, so put everything they
           need in this one, link included.
           <code>{username}</code> puts in their Instagram name and counts as 30. It’s the only placeholder for now.
         </p>
         <label for="public_reply_text">Public reply under their comment (optional)</label>
         <textarea id="public_reply_text" name="public_reply_text" maxlength="${String(PUBLIC_REPLY_MAX)}">${mainReply}</textarea>
         <p class="muted">
-          Everyone reading the comments sees this, for example “Sent you a DM!”. Leave it blank to reply
-          privately only. If the private message fails, the public reply is not posted either. Up to 1,000
-          characters, and <code>{username}</code> works here too.
+          Everyone reading the comments sees this, for example “Sent you a DM!”. Leave it blank to send
+          only the DM. If the DM fails, the public reply is not posted either. Up to 1,000 characters, and
+          <code>{username}</code> works here too.
         </p>
         <details ${variations.some((r) => r.trim()) ? 'open' : ''}>
           <summary>Add variations (optional)</summary>
@@ -956,7 +1090,10 @@ function ruleForm(opts: {
         </details>
       </fieldset>
 
-      <div class="row"><button type="submit">Save rule</button></div>
+      <div class="row">
+        <button type="submit">Save rule</button>
+        <a class="btn secondary" href="${opts.base}/rules">Cancel</a>
+      </div>
     </form>
   `;
 }
@@ -988,10 +1125,12 @@ adminRoutes.get('/rules', async (c) => {
     layout({
       title: 'Rules',
       base,
+      section: 'rules',
       csrf: c.get('session').csrf,
       body: html`
+        ${doneNote(c)}
         <h1>Rules</h1>
-        <p class="muted">When a comment matches a keyword, we send that person one private message.</p>
+        <p class="muted">When a comment matches a keyword, we send that person one DM.</p>
         <div class="row">
           <a class="btn" href="${base}/rules/new">New rule</a>
           ${rules.length ? html`<a class="btn secondary" href="#templates">Start from a template</a>` : html``}
@@ -1005,7 +1144,7 @@ adminRoutes.get('/rules', async (c) => {
                     <th>Name</th>
                     ${showAccount ? html`<th>Account</th>` : html``}
                     <th>Keywords</th>
-                    <th>On</th>
+                    <th>Status</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -1025,7 +1164,7 @@ adminRoutes.get('/rules', async (c) => {
                           ? html`<div class="muted">Exclusions: ${exclusions.join(', ')}</div>`
                           : html``}
                       </td>
-                      <td>${r.active ? 'Yes' : 'Paused'}</td>
+                      <td>${r.active ? 'On' : 'Paused'}</td>
                       <td class="actions">
                         <a class="btn secondary" href="${base}/rules/${String(r.id)}/edit">Edit</a>
                         <form method="post" action="${base}/rules/${String(r.id)}/toggle">
@@ -1053,6 +1192,7 @@ adminRoutes.get('/rules/new', async (c) => {
       layout({
         title: 'New rule',
         base,
+        section: 'rules',
         csrf: c.get('session').csrf,
         body: html`<h1>New rule</h1><p>Connect an Instagram account first on the <a href="${base}/accounts">Accounts</a> page.</p>`,
       }),
@@ -1074,6 +1214,7 @@ adminRoutes.get('/rules/new', async (c) => {
     layout({
       title: 'New rule',
       base,
+      section: 'rules',
       csrf: c.get('session').csrf,
       body: html`<h1>New rule</h1>${intro}${ruleForm({
         base,
@@ -1164,9 +1305,9 @@ export function readRuleFields(form: Record<string, string>) {
       error: `The keyword “${swallowed.keyword}” could never get a message, because it contains the exclusion “${swallowed.exclusion}”. Remove one of them.`,
     };
   }
-  if (!dm) return { error: 'Write the private message to send.' };
+  if (!dm) return { error: 'Write the DM to send.' };
   const dmProblem =
-    messageProblem('The private message', dm, DM_TEXT_MAX) ?? placeholderLinkProblem('The private message', dm);
+    messageProblem('The DM', dm, DM_TEXT_MAX) ?? placeholderLinkProblem('The DM', dm);
   if (dmProblem) return { error: dmProblem };
   for (const [i, reply] of replies.entries()) {
     const what = i === 0 ? 'The public reply' : `Reply ${String(i + 1)}`;
@@ -1176,7 +1317,7 @@ export function readRuleFields(form: Record<string, string>) {
   if (media && looksLikePostUrl(media)) {
     return {
       error:
-        'That looks like a link, not a post ID. Leave “Which posts” on All posts and reels, or pick a reel from the list.',
+        'That looks like a link, not a post ID. Leave “Which posts” on All posts and reels, or pick a post from the list.',
     };
   }
   return {
@@ -1203,6 +1344,7 @@ adminRoutes.post('/rules', async (c) => {
       layout({
         title: 'New rule',
         base,
+        section: 'rules',
         csrf: c.get('session').csrf,
         body: html`<h1>New rule</h1>${ruleForm({
           base,
@@ -1218,19 +1360,20 @@ adminRoutes.post('/rules', async (c) => {
     );
   }
   await insertRule(c.env.DB, { ...fields.row, created_at: nowSeconds() });
-  return c.redirect(`${base}/rules`, 302);
+  return redirectDone(c, '/rules', 'rule-saved');
 });
 
 adminRoutes.get('/rules/:id/edit', async (c) => {
   const id = Number(c.req.param('id'));
   const rule = await getRule(c.env.DB, id);
   const base = c.get('adminBase');
-  if (!rule) return c.notFound();
+  if (!rule) return ruleNotFound(c);
   const accounts = await listAccounts(c.env.DB);
   return c.html(
     layout({
       title: 'Edit rule',
       base,
+      section: 'rules',
       csrf: c.get('session').csrf,
       body: html`<h1>Edit rule</h1>${ruleForm({
         base,
@@ -1247,7 +1390,7 @@ adminRoutes.get('/rules/:id/edit', async (c) => {
 adminRoutes.post('/rules/:id', async (c) => {
   const id = Number(c.req.param('id'));
   const existing = await getRule(c.env.DB, id);
-  if (!existing) return c.notFound();
+  if (!existing) return ruleNotFound(c);
   const fields = readRuleFields(formOf(c));
   const base = c.get('adminBase');
   if ('error' in fields) {
@@ -1256,6 +1399,7 @@ adminRoutes.post('/rules/:id', async (c) => {
       layout({
         title: 'Edit rule',
         base,
+        section: 'rules',
         csrf: c.get('session').csrf,
         body: html`<h1>Edit rule</h1>${ruleForm({
           base,
@@ -1271,17 +1415,20 @@ adminRoutes.post('/rules/:id', async (c) => {
     );
   }
   await updateRule(c.env.DB, id, fields.row);
-  return c.redirect(`${base}/rules`, 302);
+  return redirectDone(c, '/rules', 'rule-saved');
 });
 
 adminRoutes.post('/rules/:id/toggle', async (c) => {
-  await toggleRule(c.env.DB, Number(c.req.param('id')));
-  return c.redirect(`${c.get('adminBase')}/rules`, 302);
+  const id = Number(c.req.param('id'));
+  await toggleRule(c.env.DB, id);
+  const rule = await getRule(c.env.DB, id);
+  if (!rule) return c.redirect(`${c.get('adminBase')}/rules`, 302);
+  return redirectDone(c, '/rules', rule.active ? 'rule-resumed' : 'rule-paused');
 });
 
 adminRoutes.get('/rules/:id/delete', async (c) => {
   const rule = await getRule(c.env.DB, Number(c.req.param('id')));
-  if (!rule) return c.notFound();
+  if (!rule) return ruleNotFound(c);
   const base = c.get('adminBase');
   const session = c.get('session');
   const account = await getAccount(c.env.DB, rule.ig_user_id);
@@ -1289,6 +1436,7 @@ adminRoutes.get('/rules/:id/delete', async (c) => {
     layout({
       title: 'Delete rule',
       base,
+      section: 'rules',
       csrf: session.csrf,
       body: html`
         <h1>Delete this rule?</h1>
@@ -1301,7 +1449,7 @@ adminRoutes.get('/rules/:id/delete', async (c) => {
           </tr>
         </table></div>
         <p>
-          Matching comments will stop getting a private message. This cannot be undone. To stop it for now
+          Matching comments will stop getting a DM. This cannot be undone. To stop it for now
           and keep it, pause it instead.
         </p>
         <form method="post" action="${base}/rules/${String(rule.id)}/delete">
@@ -1318,7 +1466,7 @@ adminRoutes.get('/rules/:id/delete', async (c) => {
 
 adminRoutes.post('/rules/:id/delete', async (c) => {
   await deleteRule(c.env.DB, Number(c.req.param('id')));
-  return c.redirect(`${c.get('adminBase')}/rules`, 302);
+  return redirectDone(c, '/rules', 'rule-deleted');
 });
 
 adminRoutes.get('/test', async (c) => {
@@ -1329,6 +1477,7 @@ adminRoutes.get('/test', async (c) => {
     layout({
       title: 'Test',
       base,
+      section: 'test',
       csrf: c.get('session').csrf,
       body: html`
         <h1>Test a comment</h1>
@@ -1350,7 +1499,7 @@ adminRoutes.get('/test', async (c) => {
                   ${posts.map((p) => html`<option value="${p.id}">${p.label}</option>`)}
                 </select>
                 <p class="muted">
-                  Leave on all posts unless you limited a rule to one reel. A rule that replies to every comment
+                  Leave on all posts unless you limited a rule to one post. A rule that replies to every comment
                   only shows up when you pick its post here.
                 </p>
                 <div class="row"><button type="submit">See what would happen</button></div>
@@ -1394,6 +1543,7 @@ adminRoutes.post('/test', async (c) => {
     layout({
       title: 'Test',
       base,
+      section: 'test',
       csrf: c.get('session').csrf,
       body: html`
         <h1>Test result</h1>
@@ -1417,7 +1567,7 @@ adminRoutes.post('/test', async (c) => {
                     messages use the name of whoever commented.
                   </p>`
                 : html``}
-              <h2>Private message that would be sent</h2>
+              <h2>DM that would be sent</h2>
               <p class="message">${fillPlaceholders(match.rule.dm_text, SAMPLE_USERNAME)}</p>
               ${replies.length === 0
                 ? html`<p class="muted">No public reply for this rule.</p>`
@@ -1465,19 +1615,24 @@ adminRoutes.get('/accounts', async (c) => {
     layout({
       title: 'Accounts',
       base,
+      section: 'accounts',
       csrf: c.get('session').csrf,
       body: html`
+        ${doneNote(c)}
         <h1>Accounts</h1>
         <p>Connect the Instagram account you post from. You can connect more than one if they are all yours.</p>
-        <p class="muted">
-          In Meta: Instagram → API setup with Instagram login → click <b>Set up</b> under
-          “3. Set up Instagram business login”. Paste the first line as <b>Redirect URL</b>. Then
-          Business login settings → OAuth redirect URIs (add both lines). Use the Instagram App ID
-          from that same page, not the Facebook app id at the top of the dashboard.
-        </p>
-        <pre class="raw">${callback}
-${callback}/</pre>
         <p><a class="btn" href="/connect">Connect a new account</a></p>
+        <details ${accounts.length ? '' : 'open'}>
+          <summary>Addresses to save in Meta first</summary>
+          <p class="muted">
+            In Meta: Instagram → API setup with Instagram login → click <b>Set up</b> under
+            “3. Set up Instagram business login”. Paste the first line as <b>Redirect URL</b>. Then
+            Business login settings → OAuth redirect URIs (add both lines). Use the Instagram App ID
+            from that same page, not the Facebook app id at the top of the dashboard.
+          </p>
+          <pre class="raw">${callback}
+${callback}/</pre>
+        </details>
         ${accounts.length === 0
           ? html`<p class="muted">None connected yet.</p>`
           : html`
@@ -1496,11 +1651,11 @@ ${callback}/</pre>
                     return html`<tr>
                       <td>@${a.username}</td>
                       <td>
-                        ${a.active ? 'Active' : 'Paused'}
-                        · ${expired ? html`<span class="err">needs reconnect</span>` : `${days} days left`}
+                        ${a.active ? 'Watching comments' : 'Paused'}
+                        · ${expired ? html`<span class="err">needs reconnect</span>` : `${days} ${plural(days, 'day', 'days')} left`}
                       </td>
                       <td class="actions">
-                        <a class="btn" href="/connect?reconnect=1">Reconnect</a>
+                        <a class="btn${expired ? '' : ' secondary'}" href="/connect?reconnect=1">Reconnect</a>
                         ${a.active
                           ? html`<form method="post" action="${base}/accounts/${a.ig_user_id}/deactivate">
                               ${csrfField(session.csrf)}
@@ -1523,12 +1678,12 @@ ${callback}/</pre>
 
 adminRoutes.post('/accounts/:id/deactivate', async (c) => {
   await setAccountActive(c.env.DB, c.req.param('id'), 0);
-  return c.redirect(`${c.get('adminBase')}/accounts`, 302);
+  return redirectDone(c, '/accounts', 'account-paused');
 });
 
 adminRoutes.post('/accounts/:id/activate', async (c) => {
   await setAccountActive(c.env.DB, c.req.param('id'), 1);
-  return c.redirect(`${c.get('adminBase')}/accounts`, 302);
+  return redirectDone(c, '/accounts', 'account-resumed');
 });
 
 /** Unlisted. Used by scripts/selftest.ts against a deployed URL. */
@@ -1554,3 +1709,10 @@ adminRoutes.get('/selftest/status', async (c) => {
   const row = commentId ? await getSent(c.env.DB, commentId) : null;
   return c.json({ last_cron_ok_at: lastCron, count, row });
 });
+
+// Last, so it only answers paths nothing above did. The login middleware has
+// already run, so only a logged-in operator sees this; a wrong secret still
+// gets the bare 404.
+adminRoutes.get('*', (c) =>
+  notFoundPage(c, { message: 'There’s no page at this address.', back: '/', backLabel: 'Go to Home' }),
+);

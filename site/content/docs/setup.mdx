@@ -156,7 +156,7 @@ Meta doesn't show a field called just "oauth". Do this:
    ```
 
 4. Save, then click **Business login settings**.
-5. Under **OAuth redirect URIs**, paste **both** lines. They're also shown on the admin **Accounts** page and on Connect.
+5. Under **OAuth redirect URIs**, paste **both** lines. They're also shown on Connect, and on the admin **Accounts** page under **Addresses to save in Meta first**.
 
    ```
    https://ig-comment-dm.YOURNAME.workers.dev/connect/callback
@@ -266,7 +266,7 @@ npm install
 npx wrangler login
 ```
 
-Wrangler creates the D1 database from the `database_name` in `wrangler.toml` on your first deploy. There's no `wrangler d1 create` step and no database ID to copy into a config file, so a fresh clone deploys with zero file edits.
+Wrangler creates the D1 database from the `database_name` in `wrangler.toml` on your first deploy. There's no `wrangler d1 create` step and no database ID to copy into a config file: later deploys and `wrangler d1` commands find the database by that name, so a fresh clone deploys with zero file edits.
 
 ```bash
 npx wrangler deploy
