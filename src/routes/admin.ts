@@ -518,7 +518,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
     const names = reconnect.map((a) => `@${a.username}`).join(', ');
     banners.push(html`
       <div class="banner">
-        Instagram needs reconnecting${reconnect.length === 1 ? '' : ` for ${names}`}.
+        Instagram needs reconnecting${accounts.length === 1 ? '' : ` for ${names}`}.
         <a href="/connect?reconnect=1">Click here — takes 20 seconds.</a>
       </div>
     `);
