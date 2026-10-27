@@ -61,7 +61,7 @@ import {
   worstCaseLength,
 } from '../src/placeholders.ts';
 import { parsePublicReplies, pickReply, serializePublicReplies } from '../src/replies.ts';
-import { MATCH_ALL_NEEDS_POST_MESSAGE, readRuleFields } from '../src/routes/admin.ts';
+import { MATCH_ALL_NEEDS_POST_MESSAGE, UNKNOWN_ACCOUNT_MESSAGE, readRuleFields } from '../src/routes/admin.ts';
 import { LINK_MARKER, TEMPLATES, findTemplate, placeholderLinkIn, type RuleTemplate } from '../src/templates.ts';
 import type { Rule } from '../src/types.ts';
 
@@ -695,6 +695,9 @@ describe('public replies from the other matching rules', () => {
   });
 });
 
+// The accounts a rule form can name: every form below uses 'acct'.
+const ACCOUNTS = [{ ig_user_id: 'acct' }];
+
 describe('readRuleFields', () => {
   const valid = {
     ig_user_id: 'acct',
@@ -707,13 +710,20 @@ describe('readRuleFields', () => {
     public_reply_text: '',
   };
 
+  it('refuses an account that is not connected, before anything reaches the database', () => {
+    const form = { ...valid, keywords: 'guide', ig_user_id: 'someone-else' };
+    assert.deepEqual(readRuleFields(form, ACCOUNTS), { error: UNKNOWN_ACCOUNT_MESSAGE });
+    assert.deepEqual(readRuleFields(form, []), { error: UNKNOWN_ACCOUNT_MESSAGE });
+    assert.ok('row' in readRuleFields({ ...form, ig_user_id: ' acct ' }, ACCOUNTS));
+  });
+
   it('rejects a match-all rule with no post', () => {
-    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', media_id: '' }), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
-    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', media_id: '   ' }), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
+    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', media_id: '' }, ACCOUNTS), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
+    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', media_id: '   ' }, ACCOUNTS), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
   });
 
   it('accepts a match-all rule on one post without keywords, and keeps none', () => {
-    const read = readRuleFields({ ...valid, match_all: '1', keywords: 'AI\n🔥', match_mode: 'contains' });
+    const read = readRuleFields({ ...valid, match_all: '1', keywords: 'AI\n🔥', match_mode: 'contains' }, ACCOUNTS);
     assert.ok('row' in read);
     assert.deepEqual(
       { keywords: read.row.keywords, match_mode: read.row.match_mode, match_all: read.row.match_all, media_id: read.row.media_id },
@@ -722,21 +732,21 @@ describe('readRuleFields', () => {
   });
 
   it('still checks the exclusions of a match-all rule', () => {
-    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', exclude_keywords: 'no' }), { error: EXCLUSION_TOO_SHORT_MESSAGE });
+    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', exclude_keywords: 'no' }, ACCOUNTS), { error: EXCLUSION_TOO_SHORT_MESSAGE });
   });
 
   it('stores the reply-without-DM box ticked as 1, and left out as 0', () => {
     const base = { ...valid, keywords: 'guide' };
-    const ticked = readRuleFields({ ...base, reply_without_dm: '1' });
-    const unticked = readRuleFields(base);
+    const ticked = readRuleFields({ ...base, reply_without_dm: '1' }, ACCOUNTS);
+    const unticked = readRuleFields(base, ACCOUNTS);
     assert.ok('row' in ticked && 'row' in unticked);
     assert.equal(ticked.row.reply_without_dm, 1);
     assert.equal(unticked.row.reply_without_dm, 0);
   });
 
   it('needs keywords when the box is not ticked, and stores match_all 0', () => {
-    assert.deepEqual(readRuleFields(valid), { error: 'Add at least one keyword, one per line.' });
-    const read = readRuleFields({ ...valid, keywords: 'guide', media_id: '' });
+    assert.deepEqual(readRuleFields(valid, ACCOUNTS), { error: 'Add at least one keyword, one per line.' });
+    const read = readRuleFields({ ...valid, keywords: 'guide', media_id: '' }, ACCOUNTS);
     assert.ok('row' in read);
     assert.equal(read.row.match_all, 0);
     assert.equal(read.row.media_id, null);
@@ -992,7 +1002,7 @@ describe('rule templates', () => {
 
   for (const t of TEMPLATES) {
     it(`${t.id}: passes the rule form's checks once the link is put in, and saves as written`, () => {
-      const read = readRuleFields(templateForm(t, LINK));
+      const read = readRuleFields(templateForm(t, LINK), ACCOUNTS);
       assert.ok('row' in read, 'error' in read ? read.error : '');
       assert.deepEqual(
         {
@@ -1016,7 +1026,7 @@ describe('rule templates', () => {
 
     it(`${t.id}: can't be saved with the link marker still in it`, () => {
       assert.ok(t.dm.includes(LINK_MARKER));
-      const read = readRuleFields(templateForm(t, LINK_MARKER));
+      const read = readRuleFields(templateForm(t, LINK_MARKER), ACCOUNTS);
       assert.ok('error' in read);
       assert.match(read.error, new RegExp(`still says ${LINK_MARKER}`));
     });
@@ -1066,7 +1076,7 @@ describe('rule templates', () => {
   it('only the giveaway replies to every comment, and it needs its post', () => {
     assert.deepEqual(TEMPLATES.filter((t) => t.matchAll).map((t) => t.id), ['giveaway']);
     const giveaway = findTemplate('giveaway')!;
-    assert.deepEqual(readRuleFields({ ...templateForm(giveaway, LINK), media_id: '' }), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
+    assert.deepEqual(readRuleFields({ ...templateForm(giveaway, LINK), media_id: '' }, ACCOUNTS), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
   });
 });
 
@@ -1105,16 +1115,16 @@ describe('placeholderLinkIn', () => {
 
   it('stops a rule being saved with one, in the message or any reply, and names it', () => {
     const form = { ig_user_id: 'acct', label: 'Guide', keywords: 'guide', dm_text: 'Here: https://ana.studio/g', public_reply_text: 'Sent!' };
-    assert.deepEqual(readRuleFields({ ...form, dm_text: 'Here: https://example.com/guide' }), {
+    assert.deepEqual(readRuleFields({ ...form, dm_text: 'Here: https://example.com/guide' }, ACCOUNTS), {
       error: 'The DM links to “https://example.com/guide”, a sample address that isn’t yours. Replace it with your own link before saving.',
     });
-    assert.deepEqual(readRuleFields({ ...form, public_reply_text: `Also at ${LINK_MARKER}` }), {
+    assert.deepEqual(readRuleFields({ ...form, public_reply_text: `Also at ${LINK_MARKER}` }, ACCOUNTS), {
       error: `The public reply still says ${LINK_MARKER}. Replace it with your own link, or delete it, before saving.`,
     });
-    const third = readRuleFields({ ...form, public_reply_text_2: 'Sent', public_reply_text_3: 'see yourshop.com' });
+    const third = readRuleFields({ ...form, public_reply_text_2: 'Sent', public_reply_text_3: 'see yourshop.com' }, ACCOUNTS);
     assert.ok('error' in third);
     assert.match(third.error, /^Reply 3 links to “yourshop\.com”/);
-    assert.ok('row' in readRuleFields(form));
+    assert.ok('row' in readRuleFields(form, ACCOUNTS));
   });
 });
 

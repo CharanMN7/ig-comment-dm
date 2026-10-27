@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EXCLUSION_TOO_SHORT_MESSAGE, KEYWORD_TOO_SHORT_MESSAGE } from '../src/match.ts';
-import { MATCH_ALL_NEEDS_POST_MESSAGE } from '../src/routes/admin.ts';
+import { MATCH_ALL_NEEDS_POST_MESSAGE, UNKNOWN_ACCOUNT_MESSAGE } from '../src/routes/admin.ts';
 import { LINK_MARKER, TEMPLATES, findTemplate } from '../src/templates.ts';
 import { meta } from './support/meta.ts';
 import { ACCESS_TOKEN, IG_USER, NOW, accountRow, ruleRows, seedAccount, seedRule, sentRows } from './support/seed.ts';
@@ -148,6 +148,26 @@ describe('creating a rule from the admin form', () => {
     expect(res.text).toContain(escaped(message));
     expect(res.text).toContain(escaped(fields.dm_text ?? validRule.dm_text));
     expect(await ruleRows()).toEqual([]);
+  });
+
+  it('refuses an account that is not connected with a form error, not a database error', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const res = await admin.submit(adminPath('/rules'), { ...validRule, ig_user_id: '17841499999999999' });
+    expect(res.status).toBe(400);
+    expect(res.text).toContain(escaped(UNKNOWN_ACCOUNT_MESSAGE));
+    expect(res.text).toContain(escaped(validRule.dm_text));
+    expect(await ruleRows()).toEqual([]);
+  });
+
+  it('refuses moving a rule to an account that is not connected', async () => {
+    const admin = await adminWithAccount();
+    const id = await seedRule({ keywords: ['guide'] });
+    await admin.get(adminPath(`/rules/${String(id)}/edit`));
+    const res = await admin.submit(adminPath(`/rules/${String(id)}`), { ...validRule, ig_user_id: '17841499999999999' });
+    expect(res.status).toBe(400);
+    expect(res.text).toContain(escaped(UNKNOWN_ACCOUNT_MESSAGE));
+    expect(await ruleRows()).toMatchObject([{ id, ig_user_id: IG_USER }]);
   });
 
   it('accepts DM text of exactly 1,000 characters', async () => {

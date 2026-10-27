@@ -1207,12 +1207,15 @@ function placeholderLinkProblem(what: string, text: string): string | null {
 export const MATCH_ALL_NEEDS_POST_MESSAGE =
   '“Reply to every comment” needs one post. Pick it under “Which posts”, or untick the box. On all posts it would message everyone who comments on anything, and Instagram may restrict the account.';
 
+export const UNKNOWN_ACCOUNT_MESSAGE = 'Pick an Instagram account from the list. The one this form sent isn’t connected here.';
+
 /**
  * Exported for the unit tests. CSS can hide a field but cannot stop a form
  * being posted, so this, not the form, is what keeps a match-all rule off
- * "All posts".
+ * "All posts", and a rule off an account that isn't connected, which the
+ * database would otherwise refuse with an error page.
  */
-export function readRuleFields(form: Record<string, string>) {
+export function readRuleFields(form: Record<string, string>, accounts: readonly { ig_user_id: string }[]) {
   const keywords = keywordLines(form.keywords ?? '');
   const exclusions = keywordLines(form.exclude_keywords ?? '');
   // Browsers submit each textarea line break as CRLF but count it as one
@@ -1227,6 +1230,7 @@ export function readRuleFields(form: Record<string, string>) {
   const replyWithoutDm = form.reply_without_dm === '1';
   if (!label) return { error: 'Give this rule a name.' };
   if (!ig) return { error: 'Pick an Instagram account.' };
+  if (!accounts.some((a) => a.ig_user_id === ig)) return { error: UNKNOWN_ACCOUNT_MESSAGE };
   if (matchAll && !media) return { error: MATCH_ALL_NEEDS_POST_MESSAGE };
   // A match-all rule hides the keywords and the radios, and the matcher never
   // reads its keywords, so neither is checked or kept. Its exclusions are
@@ -1283,10 +1287,10 @@ export function readRuleFields(form: Record<string, string>) {
 }
 
 adminRoutes.post('/rules', async (c) => {
-  const fields = readRuleFields(formOf(c));
+  const accounts = await listAccounts(c.env.DB);
+  const fields = readRuleFields(formOf(c), accounts);
   const base = c.get('adminBase');
   if ('error' in fields) {
-    const accounts = await listAccounts(c.env.DB);
     return c.html(
       layout({
         title: 'New rule',
@@ -1338,10 +1342,10 @@ adminRoutes.post('/rules/:id', async (c) => {
   const id = Number(c.req.param('id'));
   const existing = await getRule(c.env.DB, id);
   if (!existing) return ruleNotFound(c);
-  const fields = readRuleFields(formOf(c));
+  const accounts = await listAccounts(c.env.DB);
+  const fields = readRuleFields(formOf(c), accounts);
   const base = c.get('adminBase');
   if ('error' in fields) {
-    const accounts = await listAccounts(c.env.DB);
     return c.html(
       layout({
         title: 'Edit rule',
