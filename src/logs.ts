@@ -2,7 +2,7 @@ import type { SentLogCursor, SentLogFilters } from './db.ts';
 
 export const LOGS_PAGE_SIZE = 50;
 
-export const LOG_STATUSES = ['ok', 'failed', 'skipped', 'pending'] as const;
+export const LOG_STATUSES = ['ok', 'failed', 'skipped', 'queued', 'pending', 'retry', 'unsure'] as const;
 
 /** Filter values as the form shows them and page links carry them. */
 export type LogsForm = { status: string; ig_user_id: string; rule_id: string; from: string; to: string };

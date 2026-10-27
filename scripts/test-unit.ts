@@ -1537,6 +1537,12 @@ describe('logs query', () => {
     assert.deepEqual(parseLogsQuery({ status: 'ok', rule_id: '12' }).filters, { status: 'ok', rule_id: 12 });
   });
 
+  it('accepts every status the send queue can leave a row in', () => {
+    for (const status of ['ok', 'failed', 'skipped', 'queued', 'pending', 'retry', 'unsure']) {
+      assert.deepEqual(parseLogsQuery({ status }).filters, { status }, status);
+    }
+  });
+
   it('reads an Older or a Newer cursor, and needs both halves of it', () => {
     assert.deepEqual(parseLogsQuery({ before: '1759320000', before_id: '179' }).cursor, {
       dir: 'older',

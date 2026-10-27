@@ -1,9 +1,23 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
-import { sentLogQuery } from '../src/db.ts';
+import { claimExtraReply } from '../src/db.ts';
+import { fmtWhen } from '../src/html.ts';
 import { LOGS_PAGE_SIZE } from '../src/logs.ts';
-import { DAY, NOW, seedAccount, seedRule, seedSent } from './support/seed.ts';
-import { Browser, adminPath, signedInAdmin } from './support/worker.ts';
+import { MAX_ATTEMPTS } from '../src/queue.ts';
+import { meta } from './support/meta.ts';
+import { DAY, NOW, seedAccount, seedQueued, seedRule, seedSent, sentRow } from './support/seed.ts';
+import {
+  Browser,
+  type DbCall,
+  MINUTE_CRON,
+  adminPath,
+  commentPayload,
+  countingDb,
+  postWebhook,
+  request,
+  runScheduled,
+  signedInAdmin,
+} from './support/worker.ts';
 
 const OTHER_USER = '17841400000000002';
 
@@ -16,6 +30,13 @@ function rowsOn(page: string): string[] {
 function linkOn(page: string, label: 'Newer' | 'Older'): string | null {
   const m = page.match(new RegExp(`<a class="btn secondary" href="([^"]+)">[^<]*${label}[^<]*</a>`));
   return m ? m[1]!.replaceAll('&amp;', '&') : null;
+}
+
+async function plan(call: DbCall): Promise<string[]> {
+  const { results } = await env.DB.prepare(`EXPLAIN QUERY PLAN ${call.sql}`)
+    .bind(...call.binds)
+    .all<{ detail: string }>();
+  return results.map((r) => r.detail);
 }
 
 function pad(n: number): string {
@@ -161,22 +182,78 @@ describe('the logs page', () => {
     expect(reflected).not.toContain('<script');
   });
 
-  it('reads about one page of rows from D1, however deep the page is', async () => {
+  it('shows queued, retrying and possibly delivered sends, offers Send again, and filters on each', async () => {
+    await seedAccount();
+    const ruleId = await seedRule();
+    await seedQueued({ commentId: 'r1', ruleId });
+    meta.on('POST', '/:id/messages', { status: 400, json: { error: { message: 'refused', type: 'IGApiException', code: 2 } } });
+    await runScheduled(MINUTE_CRON);
+    meta.on('POST', '/:id/messages', { status: 503, json: {} });
+    await postWebhook(commentPayload({ commentId: 'u1' }));
+    await seedQueued({ commentId: 'q1', ruleId });
+    expect(await sentRow('r1')).toMatchObject({ dm_status: 'retry', attempts: 1 });
+    expect(await sentRow('u1')).toMatchObject({ dm_status: 'unsure' });
+    expect(await sentRow('q1')).toMatchObject({ dm_status: 'queued' });
+
+    const admin = await signedInAdmin();
+    const retrying = `Try 2 of ${MAX_ATTEMPTS} at ${fmtWhen(NOW + 60)}`;
+    const sendAgain = `action="${adminPath('/sends/u1/retry')}"`;
+    const waiting = 'Waiting its turn under Instagram’s hourly limit.';
+    const page = async (qs: string) => (await admin.get(adminPath(`/logs${qs}`))).text;
+
+    const all = await page('');
+    for (const text of ['Retrying', retrying, 'May have been delivered', sendAgain, 'Queued', waiting]) {
+      expect(all).toContain(text);
+    }
+    const retry = await page('?status=retry');
+    expect(retry).toContain(retrying);
+    expect(retry).not.toContain(sendAgain);
+    expect(retry).not.toContain(waiting);
+    const unsure = await page('?status=unsure');
+    expect(unsure).toContain('<option value="unsure" selected>May have been delivered</option>');
+    expect(unsure).toContain(sendAgain);
+    expect(unsure).not.toContain(retrying);
+    const queued = await page('?status=queued');
+    expect(queued).toContain(waiting);
+    expect(queued).not.toContain(sendAgain);
+
+    const res = await admin.submit(adminPath('/sends/u1/retry'));
+    expect(res.location).toContain('done=send-requeued');
+    expect(await sentRow('u1')).toMatchObject({ dm_status: 'retry', attempts: 0 });
+  });
+
+  it('lists the other rules’ public replies under a send, as Home does', async () => {
+    await seedAccount();
+    const guide = await seedRule({ label: 'Free guide' });
+    const promo = await seedRule({ label: 'Promo code', keywords: ['promo'] });
+    await seedSent({ commentId: 'c1', status: 'ok', at: NOW, ruleId: guide });
+    await claimExtraReply(env.DB, { comment_id: 'c1', rule_id: promo, status: 'ok', error: null, sent_at: NOW });
+    const page = (await (await signedInAdmin()).get(adminPath('/logs'))).text;
+    expect(page).toContain('Also matched <b>Promo code</b>: public reply posted.');
+  });
+
+  it('reads one page of sends through idx_sent_time, and their extra replies by key, however deep the page', async () => {
     await seedAccount();
     const newestFirst = await seedMany(300, (i) => NOW - DAY + Math.floor(i / 7));
     // The send 200 rows down, as the Older link on page four carries it.
     const deep = Number(newestFirst[199]);
-    for (const dir of ['older', 'newer'] as const) {
-      const { sql, bindings } = sentLogQuery(
-        {},
-        { dir, sent_at: NOW - DAY + Math.floor(deep / 7), comment_id: `c${pad(deep)}` },
-        LOGS_PAGE_SIZE + 1,
+    const admin = await signedInAdmin();
+    for (const key of ['before', 'after']) {
+      const { db, calls } = countingDb();
+      const qs = `${key}=${NOW - DAY + Math.floor(deep / 7)}&${key}_id=c${pad(deep)}`;
+      const res = await request(adminPath(`/logs?${qs}`), { headers: { Cookie: admin.cookieHeader }, env: { DB: db } });
+      expect(rowsOn(res.text), key).toHaveLength(LOGS_PAGE_SIZE);
+
+      const onSent = calls.filter((c) => /\bFROM sent s\b/.test(c.sql));
+      expect(onSent, key).toHaveLength(1);
+      expect(onSent[0]!.rowsRead, key).toBeLessThan(2 * LOGS_PAGE_SIZE);
+      expect(await plan(onSent[0]!)).toContainEqual(expect.stringMatching(/^SEARCH s USING INDEX idx_sent_time \(sent_at[<>]\?\)$/));
+
+      const extras = calls.filter((c) => c.sql.includes('FROM sent_extra_replies'));
+      expect(extras, key).toHaveLength(1);
+      expect(await plan(extras[0]!)).toContainEqual(
+        expect.stringMatching(/^SEARCH e USING INDEX sqlite_autoindex_sent_extra_replies_1 \(comment_id=\?\)$/),
       );
-      const { results, meta } = await env.DB.prepare(sql).bind(...bindings).all();
-      expect(results).toHaveLength(LOGS_PAGE_SIZE + 1);
-      expect(meta.rows_read, dir).toBeLessThan(2 * LOGS_PAGE_SIZE);
-      const plan = await env.DB.prepare(`EXPLAIN QUERY PLAN ${sql}`).bind(...bindings).all<{ detail: string }>();
-      expect(plan.results.map((r) => r.detail).join(' | '), dir).toMatch(/SEARCH s USING INDEX idx_sent_time \(sent_at[<>]\?\)/);
     }
   });
 });
