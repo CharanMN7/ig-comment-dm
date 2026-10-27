@@ -12,11 +12,16 @@ import {
   timingSafeEqualString,
   verifyPassword,
 } from '../crypto.ts';
-import { ensureCommentSubscriptions, runCron } from '../cron.ts';
+import { EMPTY_SNAPSHOT, ensureCommentSubscriptions, runCron, snapshotTotals } from '../cron.ts';
 import {
   HEALTH_FIRST_SEEN_KEY,
+  NO_SENDS,
   type SendTotals,
+  type Span,
+  type TotalsSnapshot,
+  addTotals,
   countSentByComment,
+  countSentUpTo,
   deleteRule,
   getAccount,
   getRule,
@@ -26,6 +31,7 @@ import {
   latestSignedWebhookStatus,
   listAccounts,
   listRules,
+  readTotalsSnapshot,
   recentSent,
   recentWebhookEvents,
   sendTotals,
@@ -366,7 +372,58 @@ const TOTAL_WINDOWS = [
 
 function windowStarts(now: number): number[] {
   const today = Math.floor(now / DAY) * DAY;
-  return TOTAL_WINDOWS.map((w) => (w.days == null ? 0 : today - (w.days - 1) * DAY));
+  return TOTAL_WINDOWS.flatMap((w) => (w.days == null ? [] : [today - (w.days - 1) * DAY]));
+}
+
+// With no snapshot yet and at most this many rows, Home counts all time live.
+// That reads fewer rows than the 30-day window does on a busy account, and
+// spares a page view the sweep and the write.
+const LIVE_TOTALS_MAX_ROWS = 1_000;
+
+// The daily job keeps the snapshot under about 24 hours old. Past this it has
+// missed a run, and Home would read every row since, so it catches up itself.
+const SNAPSHOT_MAX_AGE = 2 * DAY;
+
+/**
+ * The snapshot Home adds its live counts to. Without one, a small table is
+ * counted whole, and a large one, an upgrade before its first nightly run,
+ * gets its snapshot now, so the full read happens once rather than per visit.
+ */
+async function totalsBase(db: D1Database, now: number): Promise<TotalsSnapshot> {
+  const stored = await readTotalsSnapshot(db);
+  if (stored && now - stored.cutoff <= SNAPSHOT_MAX_AGE) return stored;
+  if (!stored && (await countSentUpTo(db, LIVE_TOTALS_MAX_ROWS + 1)) <= LIVE_TOTALS_MAX_ROWS) return EMPTY_SNAPSHOT;
+  try {
+    return await snapshotTotals(db, now);
+  } catch (err) {
+    // Counting live from the old snapshot, or from nothing, is slower but still right.
+    console.error('snapshot send totals failed', err instanceof Error ? err.message : err);
+    return stored ?? EMPTY_SNAPSHOT;
+  }
+}
+
+/**
+ * Each window in TOTAL_WINDOWS order. All time is the snapshot plus the rows
+ * since its cutoff, which are a range read like the other windows.
+ */
+async function homeTotals(
+  db: D1Database,
+  now: number,
+  perAccount: boolean,
+): Promise<{ all: SendTotals[]; byAccount: Map<string, SendTotals[]> | null }> {
+  const base = await totalsBase(db, now);
+  const spans: Span[] = [...windowStarts(now).map((from) => ({ from })), { from: base.cutoff, firstReach: true }];
+  const withBase = (live: SendTotals[], snapshot: SendTotals): SendTotals[] =>
+    spans.map((_, i) => {
+      const t = live[i] ?? NO_SENDS;
+      return i === spans.length - 1 ? addTotals(snapshot, t) : t;
+    });
+  const all = withBase(await sendTotals(db, spans), base.all);
+  if (!perAccount) return { all, byAccount: null };
+  const live = await sendTotalsByAccount(db, spans);
+  const ids = new Set([...live.keys(), ...Object.keys(base.accounts)]);
+  const byAccount = new Map([...ids].map((id) => [id, withBase(live.get(id) ?? [], base.accounts[id] ?? NO_SENDS)]));
+  return { all, byAccount };
 }
 
 function fmtCount(n: number): string {
@@ -434,10 +491,8 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   } catch {
     events = [];
   }
-  const starts = windowStarts(now);
-  const totals = await sendTotals(c.env.DB, starts);
   // With one account the breakdown would repeat the totals, so skip its query.
-  const byAccount = accounts.length > 1 ? await sendTotalsByAccount(c.env.DB, starts) : null;
+  const { all: totals, byAccount } = await homeTotals(c.env.DB, now, accounts.length > 1);
   const health = await healthSnapshot(c.env.DB, now);
   // Shares /health's clock, so a deploy nobody monitors still gets its grace
   // period from the first time the operator opens Home.
