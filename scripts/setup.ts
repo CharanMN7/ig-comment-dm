@@ -14,10 +14,10 @@
  * already recorded are skipped, and existing secrets are left alone unless
  * --rotate is passed.
  */
-import { spawn, spawnSync } from 'node:child_process';
 import { webcrypto } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
+import { runWrangler, runWranglerWithInput, wranglerBin } from './wrangler.ts';
 
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
@@ -28,6 +28,7 @@ const YELLOW = '\x1b[33m';
 const CYAN = '\x1b[36m';
 
 const rotate = process.argv.includes('--rotate');
+const WRANGLER = wranglerBin();
 
 function say(msg = ''): void {
   console.log(msg);
@@ -65,13 +66,9 @@ function random(n: number): Uint8Array {
 
 /** Runs wrangler and returns its combined output. Never echoes stdin. */
 function wrangler(args: string[], opts: { quiet?: boolean } = {}): { code: number; out: string } {
-  const res = spawnSync('npx', ['wrangler', ...args], {
-    encoding: 'utf8',
-    stdio: opts.quiet ? ['ignore', 'pipe', 'pipe'] : ['inherit', 'pipe', 'pipe'],
-  });
-  const out = `${res.stdout ?? ''}${res.stderr ?? ''}`;
-  if (!opts.quiet) process.stdout.write(dim(indent(out)));
-  return { code: res.status ?? 1, out };
+  const res = runWrangler(WRANGLER, args, { stdin: opts.quiet ? 'ignore' : 'inherit' });
+  if (!opts.quiet) process.stdout.write(dim(indent(res.out)));
+  return res;
 }
 
 function indent(text: string): string {
@@ -90,21 +87,10 @@ function dim(text: string): string {
  * which keeps the secret out of the process list — an argv-passed secret is
  * readable by any other process on the machine via `ps`.
  */
-function putSecret(name: string, value: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const child = spawn('npx', ['wrangler', 'secret', 'put', name], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    let out = '';
-    child.stdout.on('data', (d) => (out += String(d)));
-    child.stderr.on('data', (d) => (out += String(d)));
-    child.on('close', (code) => {
-      if (code !== 0) say(indent(out));
-      resolve(code === 0);
-    });
-    child.stdin.write(value);
-    child.stdin.end();
-  });
+async function putSecret(name: string, value: string): Promise<boolean> {
+  const res = await runWranglerWithInput(WRANGLER, ['secret', 'put', name], value);
+  if (res.code !== 0) say(indent(res.out));
+  return res.code === 0;
 }
 
 function existingSecretNames(): Set<string> {
@@ -144,6 +130,10 @@ async function main(): Promise<void> {
 
   // ---------------------------------------------------------------- 1. login
   step(1, TOTAL, 'Checking your Cloudflare login');
+  if (!WRANGLER) {
+    rl.close();
+    die('Wrangler is not installed in this folder yet.', 'Run  npm install  here, then npm run setup again.');
+  }
   const who = wrangler(['whoami'], { quiet: true });
   if (who.code !== 0 || /not authenticated|you are not logged in/i.test(who.out)) {
     rl.close();

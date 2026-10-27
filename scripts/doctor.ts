@@ -13,7 +13,7 @@
  * This checks the four of those that are visible from outside, so the bug
  * report starts from a real answer instead of a guess.
  */
-import { spawnSync } from 'node:child_process';
+import { runWrangler, wranglerBin } from './wrangler.ts';
 
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
@@ -30,12 +30,10 @@ function record(level: Level, title: string, detail?: string, fix?: string): voi
   results.push({ level, title, detail, fix });
 }
 
+const WRANGLER = wranglerBin();
+
 function wrangler(args: string[]): { code: number; out: string } {
-  const res = spawnSync('npx', ['wrangler', ...args], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  return { code: res.status ?? 1, out: `${res.stdout ?? ''}${res.stderr ?? ''}` };
+  return runWrangler(WRANGLER, args);
 }
 
 const REQUIRED = [
@@ -49,6 +47,10 @@ const REQUIRED = [
 ];
 
 function checkLogin(): boolean {
+  if (!WRANGLER) {
+    record('fail', 'Wrangler is not installed in this folder', undefined, 'npm install');
+    return false;
+  }
   const who = wrangler(['whoami']);
   if (who.code !== 0 || /not authenticated|you are not logged in/i.test(who.out)) {
     record('fail', 'Not logged in to Cloudflare', undefined, 'npx wrangler login');
