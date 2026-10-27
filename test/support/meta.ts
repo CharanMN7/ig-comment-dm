@@ -24,7 +24,11 @@ export type MetaCall = {
   at: number;
 };
 
-export type MetaReply = { status?: number; json: unknown } | { networkError: true };
+export type MetaReply =
+  | { status?: number; json: unknown }
+  | { networkError: true }
+  /** Headers arrive, then the body breaks off partway, as when a connection drops mid-answer. */
+  | { status?: number; cutOff: true };
 type Responder = MetaReply | ((call: MetaCall) => MetaReply);
 type Route = { method: string; pattern: RegExp; respond: Responder };
 
@@ -130,6 +134,15 @@ class FakeMeta {
     }
     const reply = typeof route.respond === 'function' ? route.respond(call) : route.respond;
     if ('networkError' in reply) return Response.error();
+    if ('cutOff' in reply) {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"recipient_id":"12'));
+          controller.error(new Error('the connection closed partway through the answer'));
+        },
+      });
+      return new Response(body, { status: reply.status ?? 200, headers: { 'Content-Type': 'application/json' } });
+    }
     return Response.json(reply.json, { status: reply.status ?? 200 });
   }
 }

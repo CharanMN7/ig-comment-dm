@@ -26,10 +26,10 @@ import { refreshLongLived, subscribeCommentWebhooks } from './meta.ts';
 import type { Env } from './types.ts';
 
 /**
- * A send makes at most two Meta calls (DM, then public reply), so it ends
- * within 2 x META_CALL_MAX_MS, about 65 s. A row still `pending` long after
- * that was claimed by a Worker stopped mid-send: waitUntil's 30 s cap, a
- * deploy, a crash. scripts/test-unit.ts keeps this above 10x that bound.
+ * A send makes at most two Meta calls (DM, then public reply), one attempt
+ * each, so it ends within 2 x META_SEND_MAX_MS, 20 s. A row still `pending`
+ * long after that was claimed by a Worker stopped mid-send: waitUntil's 30 s
+ * cap, a deploy, a crash. scripts/test-unit.ts keeps this above 10x that bound.
  */
 export const STALE_PENDING_SECONDS = 15 * 60;
 
