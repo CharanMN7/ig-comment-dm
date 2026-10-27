@@ -13,7 +13,7 @@
     "db:migrate:list": "wrangler d1 migrations list DB --remote",
     "db:migrate:list:local": "wrangler d1 migrations list DB --local",
     "test": "npm run test:unit && npm run test:integration",
-    "test:unit": "node --experimental-strip-types --test scripts/test-unit.ts scripts/test-update.ts",
+    "test:unit": "node --experimental-strip-types --test scripts/test-unit.ts scripts/test-update.ts scripts/test-setup.ts",
     "test:integration": "vitest run",
     "typecheck": "tsc --noEmit && tsc --noEmit -p test",
     "selftest": "node --experimental-strip-types scripts/selftest.ts",
