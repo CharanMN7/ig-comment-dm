@@ -1,5 +1,5 @@
 ---
-description: Have Claude Code run the terminal side and Claude in Chrome click through Meta's dashboard. You still log in, approve each permission and handle every secret yourself.
+description: Open the repo in Claude Code and say "set this up". It runs the terminal side, and with Claude in Chrome it clicks through Meta's dashboard. You still log in, approve each permission and handle every secret yourself.
 ---
 
 Most of the [self-setup guide](/setup) is typing commands and clicking through Meta's developer dashboard. Claude Code can do the first part in your terminal, and with the Claude in Chrome extension it can do most of the second in your browser. You stay at the keyboard for the parts that are yours: logins, approvals, and every secret.
@@ -12,19 +12,32 @@ It's for people who'd rather approve each step than hunt for the right screen in
 - The [Claude in Chrome extension](https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn), version 1.0.36 or later, in Chrome, Edge or another Chromium browser. It doesn't work from WSL.
 - Everything in [Before you start](/setup#before-you-start): an Instagram professional account, free Cloudflare and Meta for Developers accounts, and Node.js 20 or newer.
 
-Start Claude Code with the browser connected:
+## Start it
+
+Clone the repo and start Claude Code inside it, with the browser connected:
 
 ```bash
+git clone https://github.com/CharanMN7/ig-comment-dm.git
+cd ig-comment-dm
 claude --chrome
 ```
 
 Run `/chrome` to check it. It should say **Status: Enabled** and **Extension: Installed**. Claude opens its own tabs in a tab group and uses your browser's logins, so sign in to Cloudflare and Facebook in that browser first, or wait for it to ask.
 
+Then say:
+
+```text
+Set this up.
+```
+
+The repo ships a Claude Code skill for exactly this, [`.claude/skills/setup/SKILL.md`](https://github.com/CharanMN7/ig-comment-dm/blob/master/.claude/skills/setup/SKILL.md), and Claude picks it up when you ask. Type `/setup` to start it by name. It follows the [self-setup guide](/setup) step by step, stops and asks whenever one of Meta's screens doesn't match it, and keeps to the split in the table below. It works without the browser too: Claude describes each screen and you click.
+
 ## Who does what
 
 | Step | Claude | You |
 |---|---|---|
-| Clone the repo, `npm install` | Runs it | |
+| Clone the repo, start `claude --chrome` | | Run it |
+| Check Node.js, `npm ci` | Runs it | |
 | Log in to Cloudflare, Facebook and Instagram, 2FA, CAPTCHAs | Pauses and asks you | Log in |
 | Part 1: create the Meta app, add Instagram | Clicks through it | |
 | Copy the two app secrets | Shows you where they are, never clicks **Show** | Reveal and paste them into `npm run setup` |
@@ -35,12 +48,13 @@ Run `/chrome` to check it. It should say **Status: Enabled** and **Extension: In
 | Webhook subscription toggle per account | Flips it | Confirm if Meta asks for a token, and leave the token alone |
 | Part 5: legal URLs | Fills them in | Click **Publish** |
 | Part 6: connect an account, write a rule | | Open your admin URL yourself |
+| Check `/health` and `npm run doctor` | Runs them | |
 
 Your Worker URL (`https://ig-comment-dm.YOURNAME.workers.dev`) is public, so it's fine to give it to Claude. Your admin URL is not: it contains `ADMIN_URL_SECRET`. Open the admin panel yourself rather than letting Claude read it from a tab.
 
-## The prompt
+## Using another agent
 
-Paste this into Claude Code and fill in your Instagram usernames.
+The skill only loads in Claude Code, from inside the repo. For another agent that can drive a browser, or for Claude Code before you've cloned the repo, paste this prompt instead and fill in your Instagram usernames.
 
 ```text
 Set up ig-comment-dm for me: a self-hosted Instagram comment-to-DM Worker on my own Cloudflare account.
@@ -63,7 +77,7 @@ Rules:
 - Use Instagram's own settings pages, never Facebook Login → Valid OAuth Redirect URIs.
 ```
 
-`npm run doctor` is safe to run through Claude: it reads secret names, never values, and it checks the database and the cron jobs.
+`npm run doctor` is safe to run through an agent: it reads secret names, never values, and it checks the database and the cron jobs.
 
 ## Approving actions
 
