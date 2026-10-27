@@ -717,6 +717,9 @@ function ruleForm(opts: {
   const [mainReply = '', ...variations] = v.public_replies;
   const variationFields = Array.from({ length: Math.max(EXTRA_REPLIES, variations.length) }, (_, i) => variations[i] ?? '');
   const contains = v.match_mode === 'contains';
+  // Folded away on a new rule, but a rule already using one of these opens
+  // with it showing, so nobody edits a rule without seeing how it matches.
+  const fineTuned = contains || v.exclude_keywords.trim() !== '';
   return html`
     ${opts.error ? html`<p class="err" role="alert">${opts.error}</p>` : html``}
     <form class="rule-form" method="post" action="${opts.action}">
@@ -724,6 +727,67 @@ function ruleForm(opts: {
       <label for="label">Rule name</label>
       <input id="label" name="label" type="text" required value="${v.label}" placeholder="Free guide" />
       <p class="muted">Only you see this. It helps you tell your rules apart.</p>
+
+      <fieldset class="group">
+        <legend>When someone comments</legend>
+        <div class="when-keywords">
+          <label for="keywords">Keywords</label>
+          <textarea id="keywords" name="keywords" placeholder="guide&#10;freebie">${v.keywords}</textarea>
+          <p class="muted">
+            One per line. A comment with any of these gets your message. Capitals, accents, emoji and
+            punctuation don’t matter, so “GUIDE!!” counts as “guide”. Each keyword needs at least 3 letters,
+            or 2 in Chinese and Japanese.
+          </p>
+        </div>
+        <label class="choice">
+          <input type="checkbox" id="match_all" name="match_all" value="1" ${v.match_all ? 'checked' : ''} />
+          <span>
+            <b>Reply to every comment on this post</b>
+            <span class="muted">
+              Instead of keywords, for giveaways and waitlists: everyone who comments gets the message. Each
+              comment gets its own message, so someone who comments three times gets it three times.
+            </span>
+          </span>
+        </label>
+        <p class="err needs-post">
+          Pick one post under “Which posts” below. This can’t be used on all posts: it would message
+          everyone who comments on anything, and Instagram may restrict the account.
+        </p>
+        <p class="muted when-all">
+          Older posts: every 5 minutes a check also reads the post’s 25 newest comments from the last 3 days,
+          and any it hasn’t handled before get the message too, up to 10 messages per check. Comments it
+          already skipped stay skipped.
+        </p>
+        <details class="matching" ${fineTuned ? 'open' : ''}>
+          <summary>Exclusions and matching (optional)</summary>
+          <fieldset class="choices when-keywords">
+            <legend>How to look for keywords</legend>
+            <label class="choice">
+              <input type="radio" name="match_mode" value="word" ${contains ? '' : 'checked'} />
+              <span>
+                <b>${MATCH_MODE_WORDS.word}</b> (recommended)
+                <span class="muted">“guide” matches “Guide please!” but not “guides” or “guidelines”.</span>
+              </span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="match_mode" value="contains" ${contains ? 'checked' : ''} />
+              <span>
+                <b>${MATCH_MODE_WORDS.contains}</b>
+                <span class="muted">Contains also catches #launch2026, but “art” would match “start”.</span>
+              </span>
+            </label>
+          </fieldset>
+          <label for="exclude_keywords">Exclusions</label>
+          <textarea id="exclude_keywords" name="exclude_keywords" placeholder="how much&#10;already have it&#10;not interested">${v.exclude_keywords}</textarea>
+          <p class="muted">
+            Skip comments that contain any of these, even when a keyword matches. One per line. Useful for
+            “how much is the guide?” or “I already have the guide”, which mention your keyword but don’t want
+            the message. They are found the same way as your keywords. Another rule without these exclusions
+            can still reply.
+          </p>
+          <p class="muted when-all">On a rule that replies to every comment, exclusions are found as whole words.</p>
+        </details>
+      </fieldset>
 
       <fieldset class="group">
         <legend>Where to watch</legend>
@@ -748,69 +812,10 @@ function ruleForm(opts: {
             : html``}
         </select>
         <p class="muted when-keywords">
-          Leave this on <b>All posts and reels</b> unless you want one reel only. A reel’s ID is a long number
-          from Instagram, not the share link (<code>instagram.com/reel/…</code>). If the list is empty, leave it
-          on all posts — that still covers reels.
+          Leave this on <b>All posts and reels</b> unless the rule is for one post. If the list is empty, leave
+          it as it is: that still covers every post.
         </p>
-        <p class="muted when-all">Pick the one post or reel whose commenters should all get the message.</p>
-      </fieldset>
-
-      <fieldset class="group">
-        <legend>Which comments get a message</legend>
-        <label class="choice">
-          <input type="checkbox" id="match_all" name="match_all" value="1" ${v.match_all ? 'checked' : ''} />
-          <span>
-            <b>Reply to every comment on this post</b>
-            <span class="muted">
-              For giveaways and waitlists: everyone who comments gets the message, no keyword needed. Each
-              comment gets its own message, so someone who comments three times gets it three times.
-            </span>
-          </span>
-        </label>
-        <p class="err needs-post">
-          Pick one post or reel under “Which posts” above. This can’t be used on all posts: it would message
-          everyone who comments on anything, and Instagram may restrict the account.
-        </p>
-        <p class="muted when-all">
-          Older posts: every 5 minutes a check also reads the post’s 25 newest comments from the last 3 days,
-          and any it hasn’t handled before get the message too, up to 10 messages per check. Comments it
-          already skipped stay skipped.
-        </p>
-        <div class="when-keywords">
-          <label for="keywords">Keywords</label>
-          <textarea id="keywords" name="keywords" placeholder="guide&#10;freebie">${v.keywords}</textarea>
-          <p class="muted">
-            One per line. A comment with any of these gets your message. Capitals, accents, emoji and
-            punctuation don’t matter, so “GUIDE!!” counts as “guide”. Each keyword needs at least 3 letters,
-            or 2 in Chinese and Japanese.
-          </p>
-          <fieldset class="choices">
-            <legend>How to look for them</legend>
-            <label class="choice">
-              <input type="radio" name="match_mode" value="word" ${contains ? '' : 'checked'} />
-              <span>
-                <b>${MATCH_MODE_WORDS.word}</b> (recommended)
-                <span class="muted">“guide” matches “Guide please!” but not “guides” or “guidelines”.</span>
-              </span>
-            </label>
-            <label class="choice">
-              <input type="radio" name="match_mode" value="contains" ${contains ? 'checked' : ''} />
-              <span>
-                <b>${MATCH_MODE_WORDS.contains}</b>
-                <span class="muted">Contains also catches #launch2026, but “art” would match “start”.</span>
-              </span>
-            </label>
-          </fieldset>
-        </div>
-        <label for="exclude_keywords">Exclusions (optional)</label>
-        <textarea id="exclude_keywords" name="exclude_keywords" placeholder="how much&#10;already have it&#10;not interested">${v.exclude_keywords}</textarea>
-        <p class="muted">
-          Skip comments that contain any of these, even when a keyword matches. One per line. Useful for
-          “how much is the guide?” or “I already have the guide”, which mention your keyword but don’t want
-          the message. They are found the same way as your keywords. Another rule without these exclusions
-          can still reply.
-        </p>
-        <p class="muted when-all">On a rule that replies to every comment, exclusions are found as whole words.</p>
+        <p class="muted when-all">Pick the one post whose commenters should all get the message.</p>
       </fieldset>
 
       <fieldset class="group">
@@ -842,7 +847,10 @@ function ruleForm(opts: {
         </details>
       </fieldset>
 
-      <div class="row"><button type="submit">Save rule</button></div>
+      <div class="row">
+        <button type="submit">Save rule</button>
+        <a class="btn secondary" href="${opts.base}/rules">Cancel</a>
+      </div>
     </form>
   `;
 }
@@ -1062,7 +1070,7 @@ export function readRuleFields(form: Record<string, string>) {
   if (media && looksLikePostUrl(media)) {
     return {
       error:
-        'That looks like a link, not a post ID. Leave “Which posts” on All posts and reels, or pick a reel from the list.',
+        'That looks like a link, not a post ID. Leave “Which posts” on All posts and reels, or pick a post from the list.',
     };
   }
   return {

@@ -313,7 +313,7 @@ describe('replying to every comment on a post', () => {
     expect(page).toContain('Reply to every comment on this post');
     expect(page).toMatch(/<input type="checkbox" id="match_all" name="match_all" value="1"\s*\/>/);
     expect(page).toContain('All posts and reels (recommended)');
-    expect(page).toContain('Leave this on <b>All posts and reels</b> unless you want one reel only.');
+    expect(page).toContain('Leave this on <b>All posts and reels</b> unless the rule is for one post.');
     // Hidden by CSS when the box is ticked; a required field there would block the form.
     expect(page).toMatch(/<textarea id="keywords" name="keywords" placeholder/);
     expect(page).toContain('25 newest comments from the last 3 days');
@@ -355,6 +355,50 @@ describe('replying to every comment on a post', () => {
     const res = await admin.submit(adminPath(`/rules/${id}`), { ...giveaway, media_id: '' });
     expect(res.status).toBe(400);
     expect(await ruleRows()).toMatchObject([{ label: 'Old', match_all: 0 }]);
+  });
+});
+
+describe('the rule form layout', () => {
+  const folded = '<details class="matching" >';
+  const unfolded = '<details class="matching" open>';
+
+  it('asks for keywords first and folds exclusions and match mode away on a new rule', async () => {
+    const admin = await adminWithAccount();
+    const page = (await admin.get(adminPath('/rules/new'))).text;
+    const at = (needle: string) => page.indexOf(needle);
+    expect(at('id="keywords"')).toBeLessThan(at('id="match_all"'));
+    expect(at('id="match_all"')).toBeLessThan(at('id="ig_user_id"'));
+    expect(at('id="ig_user_id"')).toBeLessThan(at('id="dm_text"'));
+    expect(page).toContain(folded);
+    expect(page).toContain('<summary>Exclusions and matching (optional)</summary>');
+    expect(at(folded)).toBeLessThan(at('id="exclude_keywords"'));
+    expect(at(folded)).toBeLessThan(at('name="match_mode"'));
+    expect(page).toContain(`<a class="btn secondary" href="${adminPath('/rules')}">Cancel</a>`);
+  });
+
+  it.each([
+    ['exclusions', { excludeKeywords: ['how much'] }],
+    ['contains mode', { matchMode: 'contains' as const }],
+  ])('opens the folded section when editing a rule that uses %s', async (_, opts) => {
+    const admin = await adminWithAccount();
+    const id = await seedRule(opts);
+    const page = (await admin.get(adminPath(`/rules/${id}/edit`))).text;
+    expect(page).toContain(unfolded);
+    expect(page).not.toContain(folded);
+  });
+
+  it('keeps it folded when editing a rule that uses neither', async () => {
+    const admin = await adminWithAccount();
+    const id = await seedRule();
+    expect((await admin.get(adminPath(`/rules/${id}/edit`))).text).toContain(folded);
+  });
+
+  it('opens it when the form comes back with an error and exclusions typed', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const res = await admin.submit(adminPath('/rules'), { ...validRule, label: '', exclude_keywords: 'how much' });
+    expect(res.status).toBe(400);
+    expect(res.text).toContain(unfolded);
   });
 });
 
