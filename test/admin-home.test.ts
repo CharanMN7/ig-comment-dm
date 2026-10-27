@@ -210,6 +210,21 @@ describe('the admin home page', () => {
     expect(page).toContain('Expired');
   });
 
+  it('names the account that needs reconnecting whenever there is more than one', async () => {
+    await seedAccount({ username: 'lapsed', expiresAt: NOW - 1 });
+    await seedAccount({ igUserId: '17841400000000002', username: 'healthy', expiresAt: NOW + 30 * DAY });
+    const admin = await signedInAdmin();
+    expect(textOf((await admin.get(adminPath('/'))).text)).toContain('Instagram needs reconnecting for @lapsed. ');
+
+    await env.DB.prepare('UPDATE accounts SET needs_reconnect = 1 WHERE username = ?').bind('healthy').run();
+    expect(textOf((await admin.get(adminPath('/'))).text)).toContain('Instagram needs reconnecting for @healthy, @lapsed. ');
+  });
+
+  it('leaves the name out when there is only one account to mean', async () => {
+    await seedAccount({ username: 'lapsed', expiresAt: NOW - 1 });
+    expect(textOf((await (await signedInAdmin()).get(adminPath('/'))).text)).toContain('Instagram needs reconnecting. ');
+  });
+
   it('shows no secrets banner when the config is right, and names a missing FACEBOOK_APP_SECRET', async () => {
     const admin = await signedInAdmin();
     expect((await admin.get(adminPath('/'))).text).not.toContain('need attention');
