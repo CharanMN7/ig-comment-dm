@@ -1,8 +1,8 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it, vi } from 'vitest';
-import { HEALTH_FIRST_SEEN_KEY, systemSet } from '../src/db.ts';
+import { HEALTH_FIRST_SEEN_KEY, claimExtraReply, systemSet } from '../src/db.ts';
 import { meta } from './support/meta.ts';
-import { DAY, FROZEN_NOW_MS, IG_USER, NOW, seedAccount, seedRule, systemValue } from './support/seed.ts';
+import { DAY, FROZEN_NOW_MS, IG_USER, NOW, seedAccount, seedRule, seedSent, systemValue } from './support/seed.ts';
 import { adminPath, commentPayload, postWebhook, request, signedInAdmin } from './support/worker.ts';
 
 /** The page as a reader sees it: tags gone, whitespace collapsed. */
@@ -75,6 +75,43 @@ describe('the admin home page', () => {
     const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
     expect(page).toContain('Send failed.');
     expect(page).toContain('Public reply not posted, because Instagram didn’t confirm the DM.');
+  });
+
+  it('lists the other rules that matched a send, and what became of their public replies', async () => {
+    await seedAccount();
+    await seedRule({ label: 'Guide', keywords: ['guide'] });
+    await seedRule({ label: 'Price', keywords: ['guide'], publicReply: 'From $20', replyWithoutDm: true });
+    await seedRule({ label: 'Booking', keywords: ['guide'], publicReply: 'Book here', replyWithoutDm: true });
+    await seedRule({ label: 'Quiet', keywords: ['guide'] });
+    await seedRule({ label: 'Own DM only', keywords: ['guide'], publicReply: 'Check your DMs' });
+    meta.on('POST', '/:id/replies', (call) =>
+      (call.body as { message: string }).message === 'Book here'
+        ? { status: 400, json: { error: { message: '<b>rate limited</b>' } } }
+        : { json: { id: '18000000000000001' } },
+    );
+    await postWebhook(commentPayload({ text: 'guide' }));
+
+    const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
+
+    expect(textOf(page)).toContain(
+      'Guide Sent Also matched Price : public reply posted. Also matched Booking : public reply failed. ' +
+        'public reply: {&quot;error&quot;:{&quot;message&quot;:&quot;&lt;b&gt;rate limited&lt;/b&gt;&quot;}} Also matched Quiet : this rule has no public reply. ' +
+        'Also matched Own DM only : public reply only when this rule sends the DM.',
+    );
+  });
+
+  it('says when the Worker stopped before another rule’s public reply finished', async () => {
+    await seedAccount();
+    const price = await seedRule({ label: 'Price' });
+    await seedSent({ commentId: 'stuck', status: 'ok', at: NOW - 3600 });
+    await claimExtraReply(env.DB, { comment_id: 'stuck', rule_id: price, status: 'pending', error: null, sent_at: NOW - 3600 });
+    await seedSent({ commentId: 'sending', status: 'ok', at: NOW - 60 });
+    await claimExtraReply(env.DB, { comment_id: 'sending', rule_id: price, status: 'pending', error: null, sent_at: NOW - 60 });
+
+    const page = textOf((await (await signedInAdmin()).get(adminPath('/'))).text);
+
+    expect(page).toContain('Also matched Price : public reply still sending.');
+    expect(page).toContain('Also matched Price : the Worker stopped before its public reply finished, so it was not tried again.');
   });
 
   async function wrongSecretFor(minutes: number) {

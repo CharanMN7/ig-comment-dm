@@ -47,7 +47,7 @@ if (a === 'whoami') {
   const sql = args.find((x) => x.startsWith('--command=')).slice('--command='.length);
   const now = String(Math.floor(Date.now() / 1000));
   const results = sql.includes('sqlite_master')
-    ? ['accounts', 'rules', 'sent', 'system', 'webhook_events'].map((name) => ({ name }))
+    ? ['accounts', 'rules', 'sent', 'sent_extra_replies', 'system', 'webhook_events'].map((name) => ({ name }))
     : sql.includes('FROM system')
       ? [{ key: 'last_cron_ok_at', value: now }, { key: 'last_poll_ok_at', value: now }]
       : [{ n: sql.includes("status = 'bad_sig'") ? 0 : 1 }];

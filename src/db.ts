@@ -1,4 +1,4 @@
-import type { Account, MatchMode, Rule, Sent, WebhookEvent } from './types.ts';
+import type { Account, ExtraReply, MatchMode, Rule, Sent, WebhookEvent } from './types.ts';
 
 export async function systemGet(db: D1Database, key: string): Promise<string | null> {
   const row = await db.prepare('SELECT value FROM system WHERE key = ?').bind(key).first<{ value: string | null }>();
@@ -165,7 +165,7 @@ export async function accountsNeedingRefresh(db: D1Database, expiresBefore: numb
 // Every reader selects the same columns, so a migration that adds one to
 // `rules` is a one-line change here rather than four that can drift apart.
 const RULE_COLUMNS =
-  'id, ig_user_id, label, keywords, match_mode, exclude_keywords, match_all, media_id, dm_text, public_reply_text, active, created_at';
+  'id, ig_user_id, label, keywords, match_mode, exclude_keywords, match_all, reply_without_dm, media_id, dm_text, public_reply_text, active, created_at';
 
 export async function listActiveRules(db: D1Database, igUserId: string): Promise<Rule[]> {
   const { results } = await db
@@ -213,6 +213,7 @@ export async function insertRule(
     match_mode: MatchMode;
     exclude_keywords: string;
     match_all: number;
+    reply_without_dm: number;
     media_id: string | null;
     dm_text: string;
     public_reply_text: string | null;
@@ -222,9 +223,9 @@ export async function insertRule(
   await db
     .prepare(
       `INSERT INTO rules (
-         ig_user_id, label, keywords, match_mode, exclude_keywords, match_all, media_id, dm_text, public_reply_text,
-         active, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+         ig_user_id, label, keywords, match_mode, exclude_keywords, match_all, reply_without_dm, media_id, dm_text,
+         public_reply_text, active, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
     )
     .bind(
       row.ig_user_id,
@@ -233,6 +234,7 @@ export async function insertRule(
       row.match_mode,
       row.exclude_keywords,
       row.match_all,
+      row.reply_without_dm,
       row.media_id,
       row.dm_text,
       row.public_reply_text,
@@ -251,6 +253,7 @@ export async function updateRule(
     match_mode: MatchMode;
     exclude_keywords: string;
     match_all: number;
+    reply_without_dm: number;
     media_id: string | null;
     dm_text: string;
     public_reply_text: string | null;
@@ -260,7 +263,7 @@ export async function updateRule(
     .prepare(
       `UPDATE rules
        SET ig_user_id = ?, label = ?, keywords = ?, match_mode = ?, exclude_keywords = ?, match_all = ?,
-           media_id = ?, dm_text = ?, public_reply_text = ?
+           reply_without_dm = ?, media_id = ?, dm_text = ?, public_reply_text = ?
        WHERE id = ?`,
     )
     .bind(
@@ -270,6 +273,7 @@ export async function updateRule(
       row.match_mode,
       row.exclude_keywords,
       row.match_all,
+      row.reply_without_dm,
       row.media_id,
       row.dm_text,
       row.public_reply_text,
@@ -326,6 +330,57 @@ export async function updateSent(
     )
     .bind(patch.rule_id, patch.dm_status, patch.reply_status, patch.error, patch.sent_at, commentId)
     .run();
+}
+
+/**
+ * The same claim as tryClaimComment, per rule: true only for the one caller
+ * that wrote the row, so that caller alone posts this rule's public reply.
+ */
+export async function claimExtraReply(db: D1Database, row: ExtraReply): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `INSERT INTO sent_extra_replies (comment_id, rule_id, status, error, sent_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(comment_id, rule_id) DO NOTHING`,
+    )
+    .bind(row.comment_id, row.rule_id, row.status, row.error, row.sent_at)
+    .run();
+  const meta = result.meta as { changes?: number; rows_written?: number };
+  return (meta.changes ?? meta.rows_written ?? 0) > 0;
+}
+
+export async function updateExtraReply(
+  db: D1Database,
+  commentId: string,
+  ruleId: number,
+  patch: { status: string; error: string | null; sent_at: number },
+): Promise<void> {
+  await db
+    .prepare('UPDATE sent_extra_replies SET status = ?, error = ?, sent_at = ? WHERE comment_id = ? AND rule_id = ?')
+    .bind(patch.status, patch.error, patch.sent_at, commentId, ruleId)
+    .run();
+}
+
+/**
+ * The other matching rules for these comments, in matching order. A lookup
+ * per comment on the primary key, so Home reads only these rows.
+ */
+export async function extraRepliesFor(
+  db: D1Database,
+  commentIds: string[],
+): Promise<(ExtraReply & { rule_label: string | null })[]> {
+  if (commentIds.length === 0) return [];
+  const { results } = await db
+    .prepare(
+      `SELECT e.comment_id, e.rule_id, e.status, e.error, e.sent_at, r.label AS rule_label
+       FROM sent_extra_replies e
+       LEFT JOIN rules r ON r.id = e.rule_id
+       WHERE e.comment_id IN (${commentIds.map(() => '?').join(', ')})
+       ORDER BY e.rowid`,
+    )
+    .bind(...commentIds)
+    .all<ExtraReply & { rule_label: string | null }>();
+  return results ?? [];
 }
 
 /**
@@ -581,6 +636,22 @@ export async function latestSignedWebhookStatuses(db: D1Database, limit: number)
     .bind(limit)
     .all<{ status: string }>();
   return (results ?? []).map((r) => r.status);
+}
+
+/**
+ * Deletes an account with its rules, its sends, and the logged webhooks that
+ * name it. Only selftest's fake account is ever removed this way: a real one
+ * keeps its history when it's paused.
+ */
+export async function purgeAccount(db: D1Database, igUserId: string): Promise<void> {
+  await db.batch([
+    db.prepare('DELETE FROM sent WHERE ig_user_id = ?').bind(igUserId),
+    db.prepare('DELETE FROM rules WHERE ig_user_id = ?').bind(igUserId),
+    db.prepare('DELETE FROM accounts WHERE ig_user_id = ?').bind(igUserId),
+    // The preview is the body's first 200 characters, and entry[0].id falls
+    // well inside them.
+    db.prepare('DELETE FROM webhook_events WHERE instr(preview, ?) > 0').bind(`"id":"${igUserId}"`),
+  ]);
 }
 
 export async function pruneWebhookEvents(db: D1Database, olderThan: number): Promise<void> {

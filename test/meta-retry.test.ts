@@ -1,7 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NO_TIME_FOR_PUBLIC_REPLY_ERROR, WEBHOOK_SEND_BUDGET_MS } from '../src/process.ts';
 import { FAKE_EXPIRES_IN, FAKE_ME, meta, type MetaReply } from './support/meta.ts';
-import { DAY, FROZEN_NOW_MS, NOW, accountRow, seedAccount, seedRule, sentRow, storedToken, systemValue } from './support/seed.ts';
+import {
+  DAY,
+  FROZEN_NOW_MS,
+  NOW,
+  accountRow,
+  extraReplyRows,
+  seedAccount,
+  seedRule,
+  sentRow,
+  storedToken,
+  systemValue,
+} from './support/seed.ts';
 import {
   commentPayload,
   commentValue,
@@ -241,6 +252,22 @@ describe('the time a webhook delivery is allowed', () => {
     expect(meta.callsTo('POST', '/:id/replies')).toHaveLength(1);
     expect(await sentRow('first')).toMatchObject({ dm_status: 'ok', reply_status: 'ok', error: null });
     expect(await sentRow('second')).toMatchObject({ dm_status: 'ok', reply_status: 'failed', error: NO_TIME_FOR_PUBLIC_REPLY_ERROR });
+  });
+
+  it("records another rule's public reply as failed when the DM rule's own reply used up the time", async () => {
+    meta.on('POST', '/:id/replies', () => {
+      vi.setSystemTime(deadline - 1_000);
+      return { json: { id: '18000000000000001' } };
+    });
+    await seedAccount();
+    await seedRule({ publicReply: 'Sent you a DM!' });
+    const other = await seedRule({ publicReply: 'From $20', replyWithoutDm: true });
+
+    await withBackoffSkipped(postWebhook(commentPayload()));
+
+    expect(meta.callsTo('POST', '/:id/replies').map((c) => c.body)).toEqual([{ message: 'Sent you a DM!' }]);
+    expect(await sentRow('17900000000000001')).toMatchObject({ dm_status: 'ok', reply_status: 'ok', error: null });
+    expect(await extraReplyRows()).toMatchObject([{ rule_id: other, status: 'failed', error: NO_TIME_FOR_PUBLIC_REPLY_ERROR }]);
   });
 
   it('shares the time across a batched delivery and claims no comment it has no time to send', async () => {

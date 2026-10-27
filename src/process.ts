@@ -4,13 +4,15 @@ import {
   nowSeconds,
 } from './crypto.ts';
 import {
+  claimExtraReply,
   getAccount,
   listActiveRules,
   tryClaimComment,
+  updateExtraReply,
   updateSent,
 } from './db.ts';
 import { isSelfComment } from './guard.ts';
-import { type MatchVerdict, exclusionSkipReason, matchComment } from './match.ts';
+import { type MatchVerdict, type RuleMatch, exclusionSkipReason, matchComment } from './match.ts';
 import { type SendResult, hasTimeForCall, sendPrivateReply, sendPublicReply } from './meta.ts';
 import { fillPlaceholders } from './placeholders.ts';
 import { parsePublicReplies, pickReply } from './replies.ts';
@@ -38,6 +40,20 @@ export function sendError(what: 'DM' | 'public reply', result: SendResult): stri
     ? `DM: ${cause}, so it may have been delivered. It wasn't sent again, so it can't arrive twice.${detail}`
     : `public reply: ${cause}, so it may have been posted. It wasn't posted again, so it can't appear twice.${detail}`;
 }
+
+/**
+ * How many rules besides the DM's may post a public reply to one comment.
+ * With the DM rule's own, that is up to three replies from the account under
+ * one comment, which still reads as answers; five matching rules stacking
+ * five replies reads as a bot. Each is also one more Meta call inside the
+ * webhook's 25 seconds, which every comment in a delivery shares.
+ */
+export const EXTRA_PUBLIC_REPLY_CAP = 2;
+
+export const EXTRA_REPLY_NONE = 'this rule has no public reply';
+export const EXTRA_REPLY_OWN_DM_ONLY = 'public reply only when this rule sends the DM';
+export const EXTRA_REPLY_OVER_CAP = `only ${EXTRA_PUBLIC_REPLY_CAP} other rules can publicly reply to one comment`;
+export const EXTRA_REPLY_NO_DM = 'public reply not posted, because Instagram didn’t confirm the DM';
 
 type CommentValue = {
   id?: string | number;
@@ -142,6 +158,32 @@ export async function chooseRule(
   return matchComment(await listActiveRules(db, igUserId), text, mediaId, originalMediaId);
 }
 
+export type OtherRule = RuleMatch & { replies: string[]; posts: boolean };
+
+/**
+ * Which of the other matching rules post a public reply: those that have one
+ * and were set to post it without their own DM, in matching order, up to the
+ * cap. Only opted-in rules, because a reply usually says "Sent you a DM", and
+ * here this rule's DM isn't sent. The Test page shows this same plan, so it
+ * can't promise a reply a real comment wouldn't get.
+ */
+export function planOtherRules(also: RuleMatch[]): OtherRule[] {
+  let posting = 0;
+  return also.map((m) => {
+    const replies = parsePublicReplies(m.rule.public_reply_text);
+    const posts = replies.length > 0 && m.rule.reply_without_dm === 1 && posting < EXTRA_PUBLIC_REPLY_CAP;
+    if (posts) posting += 1;
+    return { ...m, replies, posts };
+  });
+}
+
+/** Why the plan leaves out this rule's public reply, or null when it posts one. */
+export function otherRuleSkipReason(other: OtherRule): string | null {
+  if (other.replies.length === 0) return EXTRA_REPLY_NONE;
+  if (other.rule.reply_without_dm !== 1) return EXTRA_REPLY_OWN_DM_ONLY;
+  return other.posts ? null : EXTRA_REPLY_OVER_CAP;
+}
+
 /**
  * `deadline` (epoch ms) is when every Meta call for this comment must have
  * ended, so the outcome is written before the runtime stops the Worker.
@@ -208,7 +250,7 @@ export async function processComment(
   });
   if (!claimed) return false;
 
-  const { match, excluded } = await chooseRule(env.DB, account.ig_user_id, text, mediaId, originalMediaId);
+  const { match, also, excluded } = await chooseRule(env.DB, account.ig_user_id, text, mediaId, originalMediaId);
   if (!match) {
     // When several rules were excluded, the first in matching order is the one
     // that would have fired, so that is the rule and the reason Home shows.
@@ -242,6 +284,7 @@ export async function processComment(
       error: `could not decrypt access token: ${err instanceof Error ? err.message : 'unknown'}`,
       sent_at: nowSeconds(),
     });
+    await replyForOtherRules(env.DB, commentId, also, null, username, deadline);
     return true;
   }
 
@@ -277,5 +320,46 @@ export async function processComment(
     error: errors.length ? errors.join('\n') : null,
     sent_at: nowSeconds(),
   });
+  await replyForOtherRules(env.DB, commentId, also, dmSent ? token : null, username, deadline);
   return true;
+}
+
+/**
+ * Runs after the comment's own row is final, so a Worker stopped here can't
+ * leave a DM that went out looking unsent. `token` is null unless Instagram
+ * confirmed the DM, and then nothing is posted, for the same reason the DM
+ * rule's own reply isn't. Every other matching rule gets a row saying what
+ * happened, and a reply is posted only by whoever claims its row, in one
+ * attempt, never again.
+ */
+async function replyForOtherRules(
+  db: D1Database,
+  commentId: string,
+  also: RuleMatch[],
+  token: string | null,
+  username: string | undefined,
+  deadline: number,
+): Promise<void> {
+  for (const other of planOtherRules(also)) {
+    const row = { comment_id: commentId, rule_id: other.rule.id, status: 'skipped', error: otherRuleSkipReason(other) };
+    const reply = pickReply(other.replies);
+    if (row.error === null && token === null) row.error = EXTRA_REPLY_NO_DM;
+    if (row.error === null && !hasTimeForCall(deadline)) {
+      row.status = 'failed';
+      row.error = NO_TIME_FOR_PUBLIC_REPLY_ERROR;
+    }
+    if (row.error !== null || token === null || reply === null) {
+      await claimExtraReply(db, { ...row, sent_at: nowSeconds() });
+      continue;
+    }
+    if (!(await claimExtraReply(db, { ...row, status: 'pending', sent_at: nowSeconds() }))) continue;
+    const text = fillPlaceholders(reply, username);
+    const result = await sendPublicReply(commentId, token, text, deadline);
+    const posted = result.outcome === 'sent';
+    await updateExtraReply(db, commentId, other.rule.id, {
+      status: posted ? 'ok' : 'failed',
+      error: posted ? null : sendError('public reply', result),
+      sent_at: nowSeconds(),
+    });
+  }
 }

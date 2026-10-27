@@ -28,6 +28,7 @@ The form asks for the essentials first: a name, the keywords, and the message. E
 | **Exclusions and matching** | Folded away, since most rules don't need it. It opens by itself on a rule that uses either setting. |
 | ↳ **How to look for keywords** | **Whole words only** (the default): `guide` matches "Guide please!" but not "guides". **Anywhere in the comment**: also catches `#launch2026` and "guides", but `art` would match "start". |
 | ↳ **Exclusions** | Optional, one per line. A comment containing any of them is skipped by this rule even when a keyword matches: `how much`, `already have it`, `not interested`. |
+| ↳ **Also post this public reply when another rule sends the DM** | Off by default. Tick it only if this rule's public reply doesn't mention a DM. See [below](#how-keywords-match). |
 | **Which posts** | **All posts and reels** (which includes reels), or one post picked from the dropdown. A rule for one post also answers comments on its ad when you boost it. |
 | **DM** | Up to 1,000 characters. Put everything they need in this one message. `{username}` puts in their Instagram name. |
 | **Public reply** | Optional. Posted under their comment, and only once the DM has gone through. `{username}` works here too. Open **Add variations** to write it a few ways, and each comment gets one at random. |
@@ -62,7 +63,9 @@ The templates are plain text in `src/templates.ts`, so a better one is a pull re
 
 Exclusions are found the same way as the rule's keywords, and they belong to that rule alone. When a comment trips one, matching carries on to the next rule, so another rule without that exclusion can still reply. If no rule replies because of an exclusion, Home lists the comment as `Skipped: matched exclusion “how much”`, and the five-minute check leaves it alone from then on.
 
-When more than one rule could answer a comment, the first of these wins: a keyword rule for that post, then a keyword rule for all posts, then a rule that replies to every comment on that post. So a specific keyword on a giveaway reel still gets its own DM. Within each group the oldest rule wins, and one comment gets one DM. **Pause** on the Rules page turns a rule off without deleting it.
+When more than one rule could answer a comment, the first of these sends the DM: a keyword rule for that post, then a keyword rule for all posts, then a rule that replies to every comment on that post. So a specific keyword on a giveaway reel still gets its own DM. Within each group the oldest rule wins. **Pause** on the Rules page turns a rule off without deleting it.
+
+Instagram allows one DM per comment, but any number of public replies. The other matching rules' DMs aren't sent, so by default their public replies aren't posted either: a reply like "Prices are in your DMs" would be false. Tick **Also post this public reply when another rule sends the DM** on a rule whose reply stands on its own, like "Prices start at $20!". Then, after the first rule's own public reply, up to 2 such rules post theirs too, in the same order, once Instagram has confirmed the DM. A rule stopped by one of its exclusions doesn't count as matching. Under each send, Home lists the other rules that matched and what happened to each one's public reply: posted, failed, over the limit of 2, only posted with the rule's own DM, or the rule has none. The templates leave the box unticked.
 
 ### Replying to every comment
 
@@ -72,7 +75,7 @@ On an older post, the five-minute check also reads the post's 25 newest comments
 
 ## Test a rule
 
-**Test →** paste a sample comment. It shows which rule would fire, using the same rule choice as a real comment, and the comment as it was matched, with case, emoji and punctuation stripped out. Paused rules aren't tested. Nothing is sent to anyone.
+**Test →** paste a sample comment. It shows which rule would send the DM, using the same rule choice as a real comment, the other matching rules and which of them would post a public reply, and the comment as it was matched, with case, emoji and punctuation stripped out. Paused rules aren't tested. Nothing is sent to anyone.
 
 <Frame caption="Test: a sample comment and the rule it would fire.">
   <div className="shot" data-shot="admin-13-test.png">Screenshot coming</div>

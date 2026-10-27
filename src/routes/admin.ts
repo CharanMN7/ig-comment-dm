@@ -12,7 +12,7 @@ import {
   timingSafeEqualString,
   verifyPassword,
 } from '../crypto.ts';
-import { EMPTY_SNAPSHOT, ensureCommentSubscriptions, runCron, snapshotTotals } from '../cron.ts';
+import { EMPTY_SNAPSHOT, STALE_PENDING_SECONDS, ensureCommentSubscriptions, runCron, snapshotTotals } from '../cron.ts';
 import {
   HEALTH_FIRST_SEEN_KEY,
   NO_SENDS,
@@ -23,6 +23,7 @@ import {
   countSentByComment,
   countSentUpTo,
   deleteRule,
+  extraRepliesFor,
   getAccount,
   getRule,
   getSent,
@@ -31,6 +32,7 @@ import {
   latestSignedWebhookStatuses,
   listAccounts,
   listRules,
+  purgeAccount,
   readTotalsSnapshot,
   recentSent,
   recentWebhookEvents,
@@ -62,16 +64,25 @@ import {
   fillPlaceholders,
   worstCaseLength,
 } from '../placeholders.ts';
-import { chooseRule } from '../process.ts';
+import { EXTRA_PUBLIC_REPLY_CAP, chooseRule, otherRuleSkipReason, planOtherRules } from '../process.ts';
 import { parsePublicReplies, serializePublicReplies } from '../replies.ts';
 import { CRON_FIRST_RUN_SECONDS, jobState } from './health.ts';
-import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
+import {
+  type SessionBinding,
+  clearSessionCookie,
+  endAllSessions,
+  makeSession,
+  readSession,
+  readSessionBinding,
+  serializeSessionCookie,
+} from '../session.ts';
 import { LINK_MARKER, TEMPLATES, findTemplate, placeholderLinkIn, type RuleTemplate } from '../templates.ts';
 import { clearFailures, describeLock, lockRemaining, readThrottle, reserveAttempt } from '../throttle.ts';
-import type { Env, MatchMode, Rule, SessionData } from '../types.ts';
+import type { Env, ExtraReply, MatchMode, Rule, SessionData } from '../types.ts';
 
 type Vars = {
   adminBase: string;
+  binding: SessionBinding;
   session: SessionData;
   form: Record<string, string>;
 };
@@ -117,14 +128,15 @@ adminRoutes.use('*', async (c, next) => {
   c.set('adminBase', base);
   c.set('form', {});
 
-  let session = await readSession(c.env.SESSION_SIGNING_KEY, c.req.header('Cookie'));
+  const { binding, hasPassword } = await readSessionBinding(c.env.DB);
+  c.set('binding', binding);
+  let session = await readSession(c.env.SESSION_SIGNING_KEY, binding, c.req.header('Cookie'));
   const path = subPath(pathname);
   const isSetup = path === '/setup';
   const isLogin = path === '/login';
-  const hasPassword = await passwordConfigured(c.env);
 
   if (!session && c.req.method === 'GET') {
-    const made = await makeSession(c.env.SESSION_SIGNING_KEY, false);
+    const made = await makeSession(c.env.SESSION_SIGNING_KEY, binding, false);
     session = made.data;
     c.header('Set-Cookie', serializeSessionCookie(made.token, c.env.PUBLIC_BASE_URL, 60 * 60), { append: true });
   }
@@ -255,7 +267,7 @@ adminRoutes.post('/setup', async (c) => {
     await systemSet(c.env.DB, 'admin_password_hash', hash);
     await systemSet(c.env.DB, 'admin_password_salt', salt);
 
-    const made = await makeSession(c.env.SESSION_SIGNING_KEY, true);
+    const made = await makeSession(c.env.SESSION_SIGNING_KEY, { ...c.get('binding'), salt }, true);
     c.header('Set-Cookie', serializeSessionCookie(made.token, c.env.PUBLIC_BASE_URL, 30 * 24 * 60 * 60));
     return c.redirect(`${base}/`, 302);
   } catch (err) {
@@ -274,11 +286,12 @@ adminRoutes.post('/setup', async (c) => {
   }
 });
 
-function loginPage(opts: { base: string; csrf: string; error?: string; lockedFor?: number }) {
+function loginPage(opts: { base: string; csrf: string; error?: string; lockedFor?: number; loggedOut?: boolean }) {
   return layout({
     title: 'Log in',
     app: opts.base,
     body: html`
+      ${opts.loggedOut ? html`<div class="ok" role="status">Logged out on every browser and device.</div>` : html``}
       <h1>Log in</h1>
       ${opts.error ? html`<p class="err" role="alert">${opts.error}</p>` : html``}
       ${opts.lockedFor
@@ -313,6 +326,7 @@ adminRoutes.get('/login', async (c) => {
       csrf: c.get('session').csrf,
       error: c.req.query('e') ? 'Wrong password.' : undefined,
       lockedFor: remaining || undefined,
+      loggedOut: c.req.query('out') === '1',
     }),
   );
 });
@@ -353,14 +367,17 @@ adminRoutes.post('/login', async (c) => {
   }
 
   await clearFailures(c.env.DB);
-  const made = await makeSession(c.env.SESSION_SIGNING_KEY, true);
+  const made = await makeSession(c.env.SESSION_SIGNING_KEY, c.get('binding'), true);
   c.header('Set-Cookie', serializeSessionCookie(made.token, c.env.PUBLIC_BASE_URL, 30 * 24 * 60 * 60));
   return c.redirect(`${base}/`, 302);
 });
 
+// Logout ends every session, not just this browser's: a stateless cookie
+// can't be revoked on its own, and a copy of it would otherwise outlive this.
 adminRoutes.post('/logout', async (c) => {
+  await endAllSessions(c.env.DB);
   c.header('Set-Cookie', clearSessionCookie(c.env.PUBLIC_BASE_URL));
-  return c.redirect(`${c.get('adminBase')}/login`, 302);
+  return c.redirect(`${c.get('adminBase')}/login?out=1`, 302);
 });
 
 const DAY = 24 * 60 * 60;
@@ -454,6 +471,22 @@ function totalsTiles(totals: SendTotals[]) {
   `;
 }
 
+function extraReplyLine(e: ExtraReply & { rule_label: string | null }, now: number) {
+  const rule = html`Also matched <b>${e.rule_label ?? 'a deleted rule'}</b>:`;
+  if (e.status === 'ok') return html`<div class="muted">${rule} public reply posted.</div>`;
+  if (e.status === 'failed') {
+    return html`<div class="muted">${rule} <span class="err">public reply failed.</span></div>
+      <div class="muted detail">${e.error ?? ''}</div>`;
+  }
+  if (e.status === 'pending') {
+    // Never retried, like a stuck DM, so after the same wait it is reported the same way.
+    return now - e.sent_at > STALE_PENDING_SECONDS
+      ? html`<div class="muted">${rule} the Worker stopped before its public reply finished, so it was not tried again.</div>`
+      : html`<div class="muted">${rule} public reply still sending.</div>`;
+  }
+  return html`<div class="muted">${rule} ${e.error ?? 'public reply not posted'}.</div>`;
+}
+
 /** Until the first DM goes out, Home leads with the three steps that get there. */
 function gettingStarted(base: string, accounts: { username: string }[], ruleCount: number, anySent: boolean) {
   const done = html`<b>Done:</b>`;
@@ -492,6 +525,10 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   const accounts = await listAccounts(c.env.DB);
   c.executionCtx.waitUntil(ensureCommentSubscriptions(c.env));
   const sends = await recentSent(c.env.DB, 20);
+  const extras = new Map<string, Awaited<ReturnType<typeof extraRepliesFor>>>();
+  for (const e of await extraRepliesFor(c.env.DB, sends.map((s) => s.comment_id))) {
+    extras.set(e.comment_id, [...(extras.get(e.comment_id) ?? []), e]);
+  }
   let events: Awaited<ReturnType<typeof recentWebhookEvents>> = [];
   let latestSigned: string[] = [];
   try {
@@ -661,6 +698,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                         ${s.reply_status === 'skipped'
                           ? html`<div class="muted">Public reply not posted, because Instagram didn’t confirm the DM.</div>`
                           : html``}
+                        ${(extras.get(s.comment_id) ?? []).map((e) => extraReplyLine(e, now))}
                       </td>
                     </tr>`,
                   )}
@@ -785,6 +823,7 @@ type RuleFormValues = {
   match_mode: string;
   exclude_keywords: string;
   match_all: boolean;
+  reply_without_dm: boolean;
   media_id: string;
   dm_text: string;
   /** The main reply first, then the variations, in the fields they came from. */
@@ -799,6 +838,7 @@ function formValuesFromRule(rule: Rule): RuleFormValues {
     match_mode: rule.match_mode,
     exclude_keywords: parseKeywords(rule.exclude_keywords).join('\n'),
     match_all: rule.match_all === 1,
+    reply_without_dm: rule.reply_without_dm === 1,
     media_id: rule.media_id ?? '',
     dm_text: rule.dm_text,
     public_replies: parsePublicReplies(rule.public_reply_text),
@@ -814,6 +854,7 @@ function formValuesFromPost(f: Record<string, string>): RuleFormValues {
     match_mode: f.match_mode ?? 'word',
     exclude_keywords: f.exclude_keywords ?? '',
     match_all: f.match_all === '1',
+    reply_without_dm: f.reply_without_dm === '1',
     media_id: f.media_id ?? '',
     dm_text: f.dm_text ?? '',
     public_replies: replyFields(f),
@@ -828,6 +869,8 @@ function formValuesFromTemplate(t: RuleTemplate, igUserId: string): RuleFormValu
     match_mode: 'word',
     exclude_keywords: t.exclusions.join('\n'),
     match_all: t.matchAll,
+    // Every template's replies mention the DM, which another rule's DM would make false.
+    reply_without_dm: false,
     media_id: '',
     dm_text: t.dm,
     public_replies: [...t.publicReplies],
@@ -857,7 +900,7 @@ function ruleForm(opts: {
   const contains = v.match_mode === 'contains';
   // Folded away on a new rule, but a rule already using one of these opens
   // with it showing, so nobody edits a rule without seeing how it matches.
-  const fineTuned = contains || v.exclude_keywords.trim() !== '';
+  const fineTuned = contains || v.exclude_keywords.trim() !== '' || v.reply_without_dm;
   return html`
     ${opts.error ? html`<p class="err" role="alert">${opts.error}</p>` : html``}
     <form class="rule-form" method="post" action="${opts.action}">
@@ -924,6 +967,13 @@ function ruleForm(opts: {
             can still reply.
           </p>
           <p class="muted when-all">On a rule that replies to every comment, exclusions are found as whole words.</p>
+          <label class="choice">
+            <input type="checkbox" id="reply_without_dm" name="reply_without_dm" value="1" ${v.reply_without_dm ? 'checked' : ''} />
+            <span>
+              <b>Also post this public reply when another rule sends the DM</b>
+              <span class="muted">Only tick this if the reply doesn’t mention a DM.</span>
+            </span>
+          </label>
         </details>
       </fieldset>
 
@@ -1174,6 +1224,7 @@ export function readRuleFields(form: Record<string, string>) {
   const media = (form.media_id ?? '').trim();
   const replies = replyFields(form).map((r) => r.replace(/\r\n/g, '\n').trim());
   const matchAll = form.match_all === '1';
+  const replyWithoutDm = form.reply_without_dm === '1';
   if (!label) return { error: 'Give this rule a name.' };
   if (!ig) return { error: 'Pick an Instagram account.' };
   if (matchAll && !media) return { error: MATCH_ALL_NEEDS_POST_MESSAGE };
@@ -1223,6 +1274,7 @@ export function readRuleFields(form: Record<string, string>) {
       match_mode: matchMode,
       exclude_keywords: JSON.stringify(exclusions),
       match_all: matchAll ? 1 : 0,
+      reply_without_dm: replyWithoutDm ? 1 : 0,
       media_id: media || null,
       dm_text: dm,
       public_reply_text: serializePublicReplies(replies),
@@ -1410,14 +1462,14 @@ adminRoutes.post('/test', async (c) => {
   const ig = form.ig_user_id ?? '';
   const text = form.text ?? '';
   const media = form.media_id?.trim() || undefined;
-  const { match, excluded } = await chooseRule(c.env.DB, ig, text, media);
+  const { match, also, excluded } = await chooseRule(c.env.DB, ig, text, media);
   const base = c.get('adminBase');
   // Shown either way: when a test does not match, the cleaned-up text is
   // usually the explanation (the hashtag symbol is gone, the accent folded).
   const readAs = html`<tr><th>Comment, as matched</th><td>${normalizeCommentText(text) || '(nothing left)'}</td></tr>`;
   const exclusions = excluded.length
     ? html`
-        <h2>${match ? 'Passed over first' : 'Skipped because of an exclusion'}</h2>
+        <h2>${match ? 'Passed over because of an exclusion' : 'Skipped because of an exclusion'}</h2>
         <div class="table-wrap"><table>
           <thead><tr><th>Rule</th><th>Keyword found</th><th>Exclusion found</th></tr></thead>
           <tbody>
@@ -1428,12 +1480,47 @@ adminRoutes.post('/test', async (c) => {
           </tbody>
         </table></div>
         ${match
-          ? html`<p class="muted">An exclusion only stops its own rule, so the next matching rule replies instead.</p>`
+          ? html`<p class="muted">An exclusion only stops its own rule, so the other matching rules still reply.</p>`
           : html``}
       `
     : html``;
   const replies = parsePublicReplies(match?.rule.public_reply_text);
-  const usesName = match ? countUsernameTokens([match.rule.dm_text, ...replies].join('\n')) > 0 : false;
+  const others = planOtherRules(also);
+  const usesName = match
+    ? countUsernameTokens([match.rule.dm_text, ...replies, ...others.flatMap((o) => (o.posts ? o.replies : []))].join('\n')) > 0
+    : false;
+  const sample = (reply: string) => fillPlaceholders(reply, SAMPLE_USERNAME);
+  const otherRules = others.length
+    ? html`
+        <h2>Other matching rules</h2>
+        <p class="muted">
+          One comment gets one DM, from the rule above: Instagram allows one private reply per comment. Their
+          DMs are not sent. A rule set to <b>Also post this public reply when another rule sends the DM</b>
+          still posts its public reply, once the DM has gone through, up to ${String(EXTRA_PUBLIC_REPLY_CAP)}
+          of them per comment.
+        </p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Rule</th><th>Keyword found</th><th>Public reply</th></tr></thead>
+          <tbody>
+            ${others.map((o) => {
+              const skip = otherRuleSkipReason(o);
+              return html`<tr>
+                <td>${o.rule.label}</td>
+                <td>${o.keyword ?? EVERY_COMMENT_WORDS}</td>
+                <td>
+                  ${skip !== null
+                    ? html`<span class="muted">Not posted: ${skip}.</span>`
+                    : o.replies.length === 1
+                      ? html`<span class="message">${sample(o.replies[0] ?? '')}</span>`
+                      : html`One of these ${String(o.replies.length)}, at random:
+                          <ol>${o.replies.map((r) => html`<li class="message">${sample(r)}</li>`)}</ol>`}
+                </td>
+              </tr>`;
+            })}
+          </tbody>
+        </table></div>
+      `
+    : html``;
   return c.html(
     layout({
       title: 'Test',
@@ -1474,6 +1561,7 @@ adminRoutes.post('/test', async (c) => {
                       <ol>
                         ${replies.map((r) => html`<li class="message">${fillPlaceholders(r, SAMPLE_USERNAME)}</li>`)}
                       </ol>`}
+              ${otherRules}
               ${exclusions}
             `
           : excluded.length
@@ -1581,12 +1669,14 @@ adminRoutes.post('/accounts/:id/activate', async (c) => {
   return redirectDone(c, '/accounts', 'account-resumed');
 });
 
+const SELFTEST_IG_USER = 'selftest_ig_user';
+
 /** Unlisted. Used by scripts/selftest.ts against a deployed URL. */
 adminRoutes.post('/selftest/seed', async (c) => {
   const now = nowSeconds();
   const enc = await encryptAesGcm(c.env.TOKEN_ENCRYPTION_KEY, 'selftest-dummy-token');
   await upsertAccount(c.env.DB, {
-    ig_user_id: 'selftest_ig_user',
+    ig_user_id: SELFTEST_IG_USER,
     username: 'selftest',
     access_token_enc: enc.ciphertext,
     token_iv: enc.iv,
@@ -1594,7 +1684,17 @@ adminRoutes.post('/selftest/seed', async (c) => {
     connected_at: now,
     last_refreshed_at: now,
   });
-  return c.json({ ok: true, ig_user_id: 'selftest_ig_user' });
+  return c.json({ ok: true, ig_user_id: SELFTEST_IG_USER });
+});
+
+/**
+ * Unlisted. scripts/selftest.ts calls this when it's done, so a deployed
+ * Worker isn't left with a fake account on Accounts, its sends in the totals,
+ * or "Reached us" rows that look like Meta getting through when it wasn't.
+ */
+adminRoutes.post('/selftest/cleanup', async (c) => {
+  await purgeAccount(c.env.DB, SELFTEST_IG_USER);
+  return c.json({ ok: true });
 });
 
 adminRoutes.get('/selftest/status', async (c) => {
