@@ -95,7 +95,7 @@ jobs:
       - name: No real D1 database id committed
         run: |
           if grep -qE '^\s*database_id\s*=\s*"[0-9a-f]{8}-[0-9a-f]{4}' wrangler.toml; then
-            echo "::error file=wrangler.toml::A real database_id is committed. Restore the placeholder."
+            echo "::error file=wrangler.toml::A real database_id is committed. Remove it: Wrangler finds the database by its name."
             exit 1
           fi
-          echo "wrangler.toml still has the placeholder database_id."
+          echo "No real database_id in wrangler.toml."

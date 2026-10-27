@@ -12,7 +12,7 @@ Note the `run`: plain `npm update` is npm's own command, which upgrades dependen
 
 In order, it:
 
-1. Stops if you have edits that aren't saved in git, and says how to save or drop them. The D1 `database_id` line Wrangler may have written into `wrangler.toml` is the exception: it's kept as it is.
+1. Stops if you have edits that aren't saved in git, and says how to save or drop them. A D1 `database_id` line in `wrangler.toml` is the exception: it's kept as it is. Wrangler doesn't write one there (it finds the database by name), but older copies had it pasted in by hand.
 2. Adds a remote called `upstream` for `CharanMN7/ig-comment-dm` if you don't have one. It never touches `origin`.
 3. Fetches the latest version and lists what's new: how many changes, with their titles. New files in `migrations/` are called out, because they change your database.
 4. Asks before going further. `--yes` skips the question.

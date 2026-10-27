@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-plugin';
-import { unstable_readConfig } from 'wrangler';
+import { unstable_getVarsForDev, unstable_readConfig } from 'wrangler';
 import { defineConfig } from 'vitest/config';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -21,30 +21,51 @@ function migrationsFor(binding: string) {
   });
 }
 
-// The plugin still reads `.dev.vars` (and says so), but every key the Worker
-// uses is overridden here, so a contributor's real Meta credentials can't leak
-// into a run or make it pass only on their machine. Values are deliberately
-// low-entropy so the CI secret scan stays quiet.
+// Values are deliberately low-entropy so the CI secret scan stays quiet.
 const key32 = (fill: number) => Buffer.alloc(32, fill).toString('base64');
+
+// Every secret the Worker reads. A contributor's .dev.vars may hold real Meta
+// credentials for the same names, and these take their place.
+const BINDINGS: Record<string, string> = {
+  META_APP_ID: '1000000000000001',
+  META_APP_SECRET: 'instagram-app-key',
+  FACEBOOK_APP_SECRET: 'facebook-app-key',
+  WEBHOOK_VERIFY_TOKEN: 'verify-me',
+  TOKEN_ENCRYPTION_KEY: key32(1),
+  SESSION_SIGNING_KEY: key32(2),
+  ADMIN_URL_SECRET: 'admin'.padEnd(32, '0'),
+  PUBLIC_BASE_URL: 'https://ig-comment-dm.example.workers.dev',
+};
+
+/**
+ * The plugin hands the Worker everything in `.dev.vars` (or `.env`, when there
+ * is no .dev.vars), with no option to skip it, and the bindings above win only
+ * for the keys they name. Any other key would reach the tests with the
+ * contributor's own value, so a run could pass or fail on their machine alone.
+ * Stop before that happens. Only names are printed, never values.
+ */
+function refuseLocalVars(): void {
+  const local = Object.keys(unstable_getVarsForDev(wranglerConfig, undefined, {}, undefined, true));
+  const unset = local.filter((name) => !(name in BINDINGS));
+  if (unset.length === 0) return;
+  throw new Error(
+    `Your local .dev.vars or .env sets ${unset.join(', ')}, which vitest.config.ts doesn't, ` +
+      'so the integration tests would see your value. Give each one a fixed test value in ' +
+      'BINDINGS in vitest.config.ts, or remove it from the local file.',
+  );
+}
 
 export default defineConfig({
   plugins: [
-    cloudflareTest(async () => ({
-      wrangler: { configPath: wranglerConfig },
-      miniflare: {
-        bindings: {
-          META_APP_ID: '1000000000000001',
-          META_APP_SECRET: 'instagram-app-key',
-          FACEBOOK_APP_SECRET: 'facebook-app-key',
-          WEBHOOK_VERIFY_TOKEN: 'verify-me',
-          TOKEN_ENCRYPTION_KEY: key32(1),
-          SESSION_SIGNING_KEY: key32(2),
-          ADMIN_URL_SECRET: 'admin'.padEnd(32, '0'),
-          PUBLIC_BASE_URL: 'https://ig-comment-dm.example.workers.dev',
-          TEST_MIGRATIONS: await migrationsFor('DB'),
+    cloudflareTest(async () => {
+      refuseLocalVars();
+      return {
+        wrangler: { configPath: wranglerConfig },
+        miniflare: {
+          bindings: { ...BINDINGS, TEST_MIGRATIONS: await migrationsFor('DB') },
         },
-      },
-    })),
+      };
+    }),
   ],
   test: {
     include: ['test/**/*.test.ts'],

@@ -1,6 +1,6 @@
 import { exports } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
-import { request } from './support/worker.ts';
+import { adminPath, request } from './support/worker.ts';
 
 describe('public routes', () => {
   it('boots the Worker named in wrangler.toml and answers the deploy smoke check', async () => {
@@ -31,5 +31,32 @@ describe('public routes', () => {
 
   it('answers 404 for unknown paths', async () => {
     expect((await request('/wp-login.php')).status).toBe(404);
+  });
+});
+
+describe('the favicon', () => {
+  it('links one from every page, so a browser stops asking for /favicon.ico', async () => {
+    for (const path of ['/privacy', '/terms', '/data-deletion', '/connect', adminPath('/setup')]) {
+      const res = await request(path);
+      expect(res.text, path).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml" />');
+    }
+  });
+
+  it('serves the SVG and a PNG at /favicon.ico, publicly cacheable and outside the admin path', async () => {
+    for (const [path, type] of [
+      ['/favicon.svg', 'image/svg+xml'],
+      ['/favicon.ico', 'image/png'],
+    ]) {
+      const res = await request(path);
+      expect(res.status, path).toBe(200);
+      expect(res.headers.get('Content-Type'), path).toBe(type);
+      expect(res.headers.get('Cache-Control'), path).toBe('public, max-age=604800');
+      expect(res.headers.get('Content-Security-Policy'), path).toContain("default-src 'none'");
+      expect(res.setCookies, path).toEqual([]);
+    }
+    const svg = await request('/favicon.svg');
+    expect(svg.text).toMatch(/^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" viewBox="0 0 512 512">/);
+    const ico = await request('/favicon.ico');
+    expect([...ico.bytes.slice(0, 8)], 'PNG signature').toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   });
 });

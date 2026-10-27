@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it, vi } from 'vitest';
 import { insertWebhookEvent, tryClaimComment } from '../src/db.ts';
-import { POLL_BUDGET_MS } from '../src/reconcile.ts';
+import { POLL_BUDGET_MS, reconcileComments } from '../src/reconcile.ts';
 import { FAKE_EXPIRES_IN, type MetaCall, meta } from './support/meta.ts';
 import {
   ACCESS_TOKEN,
@@ -210,6 +210,29 @@ describe('the 5-minute comment poll', () => {
     meta.on('GET', '/:id/comments', commentsByMedia({ m1: Array.from({ length: 12 }, (_, i) => comment(`c${i}`, 'guide')) }));
     await runScheduled(POLL);
     expect(dmTargets()).toHaveLength(10);
+  });
+
+  it('counts only the comments it claims towards the 10, not ones the webhook claimed first', async () => {
+    await seedAccount();
+    await seedRule();
+    // The webhook claims c0 to c9 after the sweep has checked each one and
+    // before the sweep tries to claim it. The DB below stands in for that
+    // timing: its "already handled?" check always answers no.
+    for (let i = 0; i < 10; i++) {
+      await tryClaimComment(env.DB, { comment_id: `c${i}`, ig_user_id: IG_USER, commenter_id: null, dm_status: 'ok', error: null, sent_at: NOW });
+    }
+    const racing = {
+      prepare: (sql: string) =>
+        env.DB.prepare(sql.startsWith('SELECT COUNT(*) AS n FROM sent WHERE comment_id') ? 'SELECT 0 AS n, ? AS comment_id' : sql),
+      batch: (s: D1PreparedStatement[]) => env.DB.batch(s),
+      exec: (sql: string) => env.DB.exec(sql),
+    } as unknown as D1Database;
+    meta.on('GET', '/me/media', { json: { data: [{ id: 'm1' }] } });
+    meta.on('GET', '/:id/comments', commentsByMedia({ m1: Array.from({ length: 12 }, (_, i) => comment(`c${i}`, 'guide')) }));
+
+    await reconcileComments({ ...env, DB: racing });
+
+    expect(dmTargets()).toEqual(['c10', 'c11']);
   });
 
   it('stops starting sends once the sweep has used its time, and leaves the rest unclaimed for the next sweep', async () => {

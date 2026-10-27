@@ -4,9 +4,11 @@ compatibility_date = "2026-08-14"
 # Do not enable nodejs_compat. Web Crypto (crypto.subtle) only.
 # Do not set [limits] cpu_ms — that is paid Workers only and deploy fails on Free.
 
-# No database_id on purpose. Wrangler provisions a D1 database with this name on
-# the first `wrangler deploy` and writes the id back here locally, so a fresh
-# clone needs no edits before it can deploy. Do not commit the id it writes.
+# No database_id on purpose. The first `wrangler deploy` creates a D1 database
+# with this name (or reuses one that already has it), and later deploys and
+# `wrangler d1` commands look it up by name, so a fresh clone deploys with no
+# edits. Wrangler does not write the id back here: it skips that for any TOML
+# config with comments in it. If you add the id by hand, do not commit it.
 [[d1_databases]]
 binding = "DB"
 database_name = "ig-comment-dm"
