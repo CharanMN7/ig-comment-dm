@@ -51,6 +51,8 @@ describe('pages under the CSP', () => {
       ['wrong password', wrongPassword],
       ['expired form', expiredForm],
       ['home', await admin.get(adminPath('/'))],
+      ['logs', await admin.get(adminPath('/logs'))],
+      ['logs with a bad date', await admin.get(adminPath('/logs?from=2026-02-30&status=failed'))],
       ['rules', await admin.get(adminPath('/rules'))],
       ['new rule', await admin.get(adminPath('/rules/new'))],
       ['rule with an error', await admin.submit(adminPath('/rules'), { ig_user_id: IG_USER, label: '', keywords: 'guide', dm_text: 'hi' })],

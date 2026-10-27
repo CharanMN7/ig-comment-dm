@@ -20,12 +20,12 @@ header.top nav a:hover { text-decoration: underline; }
 header.top nav a[aria-current=page] { font-weight: 650; text-decoration: underline; text-underline-offset: 0.3em; }
 header.top .brand { font-weight: 650; margin-right: 0.5rem; }
 header.top form { margin-left: auto; }
-/* The name and five tap targets don't fit across a 375px phone. The name goes,
+/* The name and six tap targets don't fit across a 375px phone. The name goes,
    since the tab title and the installed app already say it, and anything still
    too wide (a larger text size) scrolls inside the nav rather than wrapping. */
 @media (max-width: 34rem) {
   header.top .brand { display: none; }
-  header.top nav { gap: 0.25rem; }
+  header.top nav { gap: 0.15rem; padding: 0.65rem 0.5rem; }
   header.top nav a { padding: 0 0.35rem; }
 }
 h1 { font-size: 1.35rem; margin: 0 0 0.75rem; }
@@ -44,10 +44,10 @@ table { width: 100%; border-collapse: collapse; background: #fff; border: 1px so
 th, td { text-align: left; padding: 0.4rem 0.55rem; border-bottom: 1px solid #eee; vertical-align: top; font-size: 0.9rem; }
 th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; color: #555; background: #fafafa; }
 label { display: block; font-weight: 650; margin: 0.85rem 0 0.25rem; }
-input[type=text], input[type=password], textarea, select {
+input[type=text], input[type=password], input[type=date], textarea, select {
   width: 100%; padding: 0.4rem 0.5rem; font: inherit; border: 1px solid #888; background: #fff;
 }
-input[type=text], input[type=password], select { min-height: 44px; }
+input[type=text], input[type=password], input[type=date], select { min-height: 44px; }
 /* Browser defaults go as pale as 2.3:1 on white, and Firefox fades any colour set here unless opacity is 1. */
 ::placeholder { color: #666; opacity: 1; }
 textarea { min-height: 6rem; }
@@ -102,6 +102,7 @@ export function csrfField(token: string) {
 
 const SECTIONS = [
   { id: 'home', path: '/', name: 'Home' },
+  { id: 'logs', path: '/logs', name: 'Logs' },
   { id: 'rules', path: '/rules', name: 'Rules' },
   { id: 'test', path: '/test', name: 'Test' },
   { id: 'accounts', path: '/accounts', name: 'Accounts' },

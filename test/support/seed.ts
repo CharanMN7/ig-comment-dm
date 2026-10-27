@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { decryptAesGcm, encryptAesGcm } from '../../src/crypto.ts';
-import { insertRule, insertSend, setAccountActive, toggleRule, tryClaimComment, upsertAccount } from '../../src/db.ts';
+import { insertRule, insertSend, setAccountActive, toggleRule, tryClaimComment, updateSent, upsertAccount } from '../../src/db.ts';
 import type { Account, ExtraReply, MatchMode, Rule, Sent } from '../../src/types.ts';
 
 export const FROZEN_NOW_MS = Date.UTC(2026, 9, 1, 12, 0, 0);
@@ -81,15 +81,29 @@ export async function seedSent(opts: {
   at: number;
   commenterId?: string | null;
   igUserId?: string;
+  ruleId?: number | null;
+  replyStatus?: string | null;
+  error?: string | null;
 }): Promise<void> {
   await tryClaimComment(env.DB, {
     comment_id: opts.commentId,
     ig_user_id: opts.igUserId ?? IG_USER,
     commenter_id: opts.commenterId === undefined ? '9100000000000001' : opts.commenterId,
     dm_status: opts.status,
-    error: null,
+    error: opts.error ?? null,
     sent_at: opts.at,
   });
+  // The claim can't record a rule or a reply outcome; the pipeline sets those
+  // when it settles the row, so this does too.
+  if (opts.ruleId != null || opts.replyStatus != null) {
+    await updateSent(env.DB, opts.commentId, {
+      rule_id: opts.ruleId ?? null,
+      dm_status: opts.status,
+      reply_status: opts.replyStatus ?? null,
+      error: opts.error ?? null,
+      sent_at: opts.at,
+    });
+  }
 }
 
 /** A matched comment waiting in the send queue, as the webhook or the poll leaves it. */

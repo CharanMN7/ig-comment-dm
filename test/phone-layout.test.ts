@@ -18,6 +18,7 @@ describe('admin pages at phone width', () => {
 
     const pages: Array<[string, string]> = [
       ['home with a secrets table', (await request(adminPath('/'), { headers: { Cookie: admin.cookieHeader }, env: { FACEBOOK_APP_SECRET: '' } })).text],
+      ['logs', (await admin.get(adminPath('/logs'))).text],
       ['rules', (await admin.get(adminPath('/rules'))).text],
       ['delete rule', (await admin.get(adminPath(`/rules/${rule}/delete`))).text],
       ['test match', (await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'guide', media_id: '' })).text],
@@ -32,7 +33,7 @@ describe('admin pages at phone width', () => {
       expect(wrapped.length, `${name}: tables outside a .table-wrap`).toBe(all.length);
       tables += all.length;
     }
-    expect(tables).toBeGreaterThanOrEqual(9);
+    expect(tables).toBeGreaterThanOrEqual(10);
   });
 
   it('drops the account column from the rules list when there is only one account', async () => {

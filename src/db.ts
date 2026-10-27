@@ -487,6 +487,92 @@ export async function recentSent(db: D1Database, limit: number): Promise<(Sent &
   return results ?? [];
 }
 
+export type SentLogFilters = {
+  status?: string;
+  ig_user_id?: string;
+  rule_id?: number;
+  /** Inclusive, unix seconds. */
+  from?: number;
+  /** Exclusive, unix seconds. */
+  to?: number;
+};
+
+/**
+ * Where a logs page starts: just past one send, going older or newer. The
+ * comment id breaks ties because sent_at is whole seconds, and a burst of
+ * comments shares one. Paging on sent_at alone skips the rest of that second.
+ */
+export type SentLogCursor = { dir: 'older' | 'newer'; sent_at: number; comment_id: string };
+
+export function sentLogQuery(
+  filters: SentLogFilters,
+  cursor: SentLogCursor | null,
+  limit: number,
+): { sql: string; bindings: (string | number)[] } {
+  const conditions: string[] = [];
+  const bindings: (string | number)[] = [];
+  if (filters.status) {
+    conditions.push('s.dm_status = ?');
+    bindings.push(filters.status);
+  }
+  if (filters.ig_user_id) {
+    conditions.push('s.ig_user_id = ?');
+    bindings.push(filters.ig_user_id);
+  }
+  if (filters.rule_id !== undefined) {
+    conditions.push('s.rule_id = ?');
+    bindings.push(filters.rule_id);
+  }
+  if (filters.from !== undefined) {
+    conditions.push('s.sent_at >= ?');
+    bindings.push(filters.from);
+  }
+  if (filters.to !== undefined) {
+    conditions.push('s.sent_at < ?');
+    bindings.push(filters.to);
+  }
+  if (cursor) {
+    const cmp = cursor.dir === 'older' ? '<' : '>';
+    // The plain range is implied by the OR, but D1's SQLite only seeks the
+    // index on a plain range. Without it, a page deep in the history reads
+    // every row in front of it, and D1 bills each one.
+    conditions.push(`s.sent_at ${cmp}= ?`, `(s.sent_at ${cmp} ? OR (s.sent_at = ? AND s.comment_id ${cmp} ?))`);
+    bindings.push(cursor.sent_at, cursor.sent_at, cursor.sent_at, cursor.comment_id);
+  }
+  // Newer pages read oldest first, so LIMIT keeps the rows next to the cursor
+  // rather than the newest rows in the table.
+  const order = cursor?.dir === 'newer' ? 'ASC' : 'DESC';
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  return {
+    sql: `SELECT s.comment_id, s.ig_user_id, s.rule_id, s.commenter_id, s.dm_status, s.reply_status,
+              s.error, s.sent_at, s.attempts, s.next_attempt_at, s.comment_at, s.username, r.label AS rule_label
+       FROM sent s
+       LEFT JOIN rules r ON r.id = s.rule_id
+       ${where}
+       ORDER BY s.sent_at ${order}, s.comment_id ${order}
+       LIMIT ?`,
+    bindings: [...bindings, limit],
+  };
+}
+
+/** One page of sends, newest first, and whether another page lies beyond it. */
+export async function paginatedSent(
+  db: D1Database,
+  filters: SentLogFilters,
+  cursor: SentLogCursor | null,
+  limit: number,
+): Promise<{ sends: (Sent & { rule_label: string | null })[]; more: boolean }> {
+  const { sql, bindings } = sentLogQuery(filters, cursor, limit + 1);
+  const { results } = await db
+    .prepare(sql)
+    .bind(...bindings)
+    .all<Sent & { rule_label: string | null }>();
+  const rows = results ?? [];
+  const sends = rows.slice(0, limit);
+  if (cursor?.dir === 'newer') sends.reverse();
+  return { sends, more: rows.length > limit };
+}
+
 export type SendTotals = { sent: number; skipped: number; failed: number; reached: number };
 
 export const NO_SENDS: SendTotals = { sent: 0, skipped: 0, failed: 0, reached: 0 };

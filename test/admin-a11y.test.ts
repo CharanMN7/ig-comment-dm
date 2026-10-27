@@ -81,6 +81,7 @@ async function everyAdminPage(): Promise<Array<[string, string]>> {
     ['home on a new install', firstHome],
     ['rules, none yet', emptyRules],
     ['home', (await admin.get(adminPath('/'))).text],
+    ['logs', (await admin.get(adminPath('/logs?from=2026-02-30'))).text],
     ['rules', (await admin.get(adminPath('/rules'))).text],
     ['new rule', (await admin.get(adminPath('/rules/new'))).text],
     ['new rule from a template', (await admin.get(adminPath('/rules/new?template=guide'))).text],
@@ -124,13 +125,14 @@ describe('admin pages for assistive technology', () => {
     // Firefox fades placeholders to 54% unless told otherwise.
     expect(placeholder).toContain('opacity: 1');
     const color = placeholder!.match(/color: (#[0-9a-f]{3,6});/i)![1]!;
-    const field = css.match(/input\[type=text\], input\[type=password\], textarea, select \{([^}]*)\}/)![1]!;
+    const field = css.match(/input\[type=text\], input\[type=password\],[^{]* textarea, select \{([^}]*)\}/)![1]!;
     const background = field.match(/background: (#[0-9a-f]{3,6});/i)![1]!;
     expect(contrast(color, background)).toBeGreaterThanOrEqual(4.5);
   });
 
   it.each([
     ['/', 'Home'],
+    ['/logs', 'Logs'],
     ['/rules', 'Rules'],
     ['/rules/new', 'Rules'],
     ['/test', 'Test'],

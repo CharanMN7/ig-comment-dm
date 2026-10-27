@@ -35,6 +35,7 @@ import {
   latestSignedWebhookStatuses,
   listAccounts,
   listRules,
+  paginatedSent,
   purgeAccount,
   readTotalsSnapshot,
   recentSent,
@@ -51,6 +52,7 @@ import {
 } from '../db.ts';
 import { findConfigProblems } from '../config.ts';
 import { type Section, csrfField, daysUntil, fmtWhen, layout, pageError, plural, statusWords } from '../html.ts';
+import { LOGS_PAGE_SIZE, LOG_STATUSES, logsHref, pageLinks, parseLogsQuery } from '../logs.ts';
 import {
   EXCLUSION_TOO_SHORT_MESSAGE,
   KEYWORD_TOO_SHORT_MESSAGE,
@@ -519,6 +521,37 @@ function sendDetail(s: Sent, base: string, csrf: string) {
   return s.error ? html`<span class="muted detail">${s.error}</span>` : html``;
 }
 
+/** The Status cell of a send, on Home and Logs alike. */
+function sendStatus(s: Sent): string {
+  return s.dm_status === 'skipped' && s.error === EXPIRED_ERROR ? 'Expired' : statusWords(s.dm_status);
+}
+
+/** The whole Detail cell of a send, on Home and Logs alike. */
+function sendDetailCell(
+  s: Sent,
+  extras: (ExtraReply & { rule_label: string | null })[],
+  base: string,
+  csrf: string,
+  now: number,
+) {
+  return html`
+    ${sendDetail(s, base, csrf)}
+    ${s.reply_status === 'skipped'
+      ? html`<div class="muted">Public reply not posted, because Instagram didn’t confirm the DM.</div>`
+      : html``}
+    ${extras.map((e) => extraReplyLine(e, now))}
+  `;
+}
+
+/** Each send's extra public replies, read in one lookup for the whole page. */
+async function extrasBySend(db: D1Database, sends: Sent[]) {
+  const extras = new Map<string, Awaited<ReturnType<typeof extraRepliesFor>>>();
+  for (const e of await extraRepliesFor(db, sends.map((s) => s.comment_id))) {
+    extras.set(e.comment_id, [...(extras.get(e.comment_id) ?? []), e]);
+  }
+  return extras;
+}
+
 /**
  * What's waiting to go out, per account, and how much of Instagram's hourly
  * limit the last hour used. Shown only while something waits, Instagram has
@@ -615,10 +648,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   c.executionCtx.waitUntil(ensureCommentSubscriptions(c.env));
   const sends = await recentSent(c.env.DB, 20);
   const queue = await queueOverview(c.env.DB, now);
-  const extras = new Map<string, Awaited<ReturnType<typeof extraRepliesFor>>>();
-  for (const e of await extraRepliesFor(c.env.DB, sends.map((s) => s.comment_id))) {
-    extras.set(e.comment_id, [...(extras.get(e.comment_id) ?? []), e]);
-  }
+  const extras = await extrasBySend(c.env.DB, sends);
   let events: Awaited<ReturnType<typeof recentWebhookEvents>> = [];
   let latestSigned: string[] = [];
   try {
@@ -765,6 +795,9 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
         ${sendingCard(queue, accounts, now)}
 
         <h2>Last 20 sends</h2>
+        <p>
+          <a class="btn secondary" href="${base}/logs">View all logs</a>
+        </p>
         ${sends.length === 0
           ? html`<p class="muted">
               Nothing sent yet. The Meta app must be <b>Live</b> (Publish in the left sidebar) for
@@ -789,14 +822,8 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                     (s) => html`<tr>
                       <td>${fmtWhen(s.sent_at)}</td>
                       <td>${s.rule_label ?? '—'}</td>
-                      <td>${s.dm_status === 'skipped' && s.error === EXPIRED_ERROR ? 'Expired' : statusWords(s.dm_status)}</td>
-                      <td>
-                        ${sendDetail(s, base, session.csrf)}
-                        ${s.reply_status === 'skipped'
-                          ? html`<div class="muted">Public reply not posted, because Instagram didn’t confirm the DM.</div>`
-                          : html``}
-                        ${(extras.get(s.comment_id) ?? []).map((e) => extraReplyLine(e, now))}
-                      </td>
+                      <td>${sendStatus(s)}</td>
+                      <td>${sendDetailCell(s, extras.get(s.comment_id) ?? [], base, session.csrf, now)}</td>
                     </tr>`,
                   )}
                 </tbody>
@@ -855,6 +882,112 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
           ${csrfField(session.csrf)}
           <button class="secondary" type="submit">Check connections now</button>
         </form>
+      `,
+    }),
+  );
+});
+
+adminRoutes.get('/logs', async (c) => {
+  const base = c.get('adminBase');
+  const query = parseLogsQuery(c.req.query());
+  const { form, cursor } = query;
+  const accounts = await listAccounts(c.env.DB);
+  const rules = await listRules(c.env.DB);
+  const session = c.get('session');
+  const now = nowSeconds();
+  const { sends, more } = await paginatedSent(c.env.DB, query.filters, cursor, LOGS_PAGE_SIZE);
+  const extras = await extrasBySend(c.env.DB, sends);
+  const links = pageLinks(base, query, sends, more);
+  const accountNames = new Map(accounts.map((a) => [a.ig_user_id, a.username]));
+  const filtered = Object.values(form).some(Boolean);
+  const knownRule = rules.some((r) => String(r.id) === form.rule_id);
+
+  return c.html(
+    layout({
+      title: 'Logs',
+      base,
+      section: 'logs',
+      csrf: session.csrf,
+      body: html`
+        <h1>Logs</h1>
+        ${query.notes.map((note) => html`<div class="note">${note}</div>`)}
+        <form method="get" action="${base}/logs">
+          <label for="status">Status</label>
+          <select id="status" name="status">
+            <option value="">All statuses</option>
+            ${LOG_STATUSES.map(
+              (s) => html`<option value="${s}" ${form.status === s ? 'selected' : ''}>${statusWords(s)}</option>`,
+            )}
+          </select>
+          <label for="ig_user_id">Account</label>
+          <select id="ig_user_id" name="ig_user_id">
+            <option value="">All accounts</option>
+            ${accounts.map(
+              (a) =>
+                html`<option value="${a.ig_user_id}" ${form.ig_user_id === a.ig_user_id ? 'selected' : ''}>
+                  @${a.username}
+                </option>`,
+            )}
+          </select>
+          <label for="rule_id">Rule</label>
+          <select id="rule_id" name="rule_id">
+            <option value="">All rules</option>
+            ${rules.map(
+              (r) =>
+                html`<option value="${String(r.id)}" ${form.rule_id === String(r.id) ? 'selected' : ''}>${r.label}</option>`,
+            )}
+            ${form.rule_id && !knownRule
+              ? html`<option value="${form.rule_id}" selected>Deleted rule #${form.rule_id}</option>`
+              : html``}
+          </select>
+          <label for="from">From</label>
+          <input id="from" name="from" type="date" value="${form.from}" />
+          <label for="to">To</label>
+          <input id="to" name="to" type="date" value="${form.to}" />
+          <p class="muted">Dates are in UTC, like the times below. To includes the whole of that day.</p>
+          <div class="row">
+            <button type="submit">Filter</button>
+            <a class="btn secondary" href="${base}/logs">Clear</a>
+          </div>
+        </form>
+
+        <h2>Send history</h2>
+        ${sends.length === 0
+          ? cursor
+            ? html`<p class="muted">Nothing on this page. <a href="${logsHref(base, form)}">Go to the newest sends</a>.</p>`
+            : filtered
+              ? html`<p class="muted">No sends match these filters. <a href="${base}/logs">Clear them</a> to see everything.</p>`
+              : html`<p class="muted">Nothing logged yet. A comment shows here once it matches a rule.</p>`
+          : html`
+              <div class="table-wrap"><table>
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Account</th>
+                    <th>Rule</th>
+                    <th>Status</th>
+                    <th>Detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${sends.map(
+                    (s) => html`<tr>
+                      <td>${fmtWhen(s.sent_at)}</td>
+                      <td>@${accountNames.get(s.ig_user_id) ?? s.ig_user_id}</td>
+                      <td>${s.rule_label ?? '—'}</td>
+                      <td>${sendStatus(s)}</td>
+                      <td>${sendDetailCell(s, extras.get(s.comment_id) ?? [], base, session.csrf, now)}</td>
+                    </tr>`,
+                  )}
+                </tbody>
+              </table></div>
+            `}
+        ${links.newer || links.older
+          ? html`<div class="row">
+              ${links.newer ? html`<a class="btn secondary" href="${links.newer}">← Newer</a>` : html``}
+              ${links.older ? html`<a class="btn secondary" href="${links.older}">Older →</a>` : html``}
+            </div>`
+          : html``}
       `,
     }),
   );
