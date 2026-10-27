@@ -148,11 +148,13 @@ describe('Connect (Instagram Business Login)', () => {
     expect(back.location).toBe(adminPath('/accounts'));
   });
 
-  it('still shows Instagram’s reason for any other refusal', async () => {
+  it('still shows Instagram’s reason for any other refusal, with a way back', async () => {
     const res = await request('/connect/callback?error=invalid_request&error_description=Invalid+scope');
     expect(res.status).toBe(200);
-    expect(res.text).toContain('You didn’t connect Instagram. Nothing was changed.');
+    expect(res.text).toContain('<h1>Not connected</h1>');
+    expect(res.text).not.toContain('Something went wrong');
     expect(res.text).toContain('Invalid scope');
+    expect(res.text).toContain('href="/connect/accounts"');
     expect(res.text).not.toContain(env.ADMIN_URL_SECRET);
   });
 

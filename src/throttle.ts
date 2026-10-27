@@ -84,7 +84,7 @@ export async function clearFailures(db: D1Database): Promise<void> {
 }
 
 export function describeLock(seconds: number): string {
-  if (seconds >= 120) return `${Math.ceil(seconds / 60)} minutes`;
-  if (seconds > 60) return 'a minute';
+  // Rounded up, so the page never promises a wait shorter than the real one.
+  if (seconds > 60) return `${Math.ceil(seconds / 60)} minutes`;
   return `${seconds} ${plural(seconds, 'second', 'seconds')}`;
 }

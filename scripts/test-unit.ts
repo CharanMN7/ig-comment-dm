@@ -1247,7 +1247,9 @@ describe('login throttle', () => {
   it('words the wait for the login page, one second included', () => {
     assert.equal(describeLock(1), '1 second');
     assert.equal(describeLock(45), '45 seconds');
-    assert.equal(describeLock(90), 'a minute');
+    assert.equal(describeLock(60), '60 seconds');
+    assert.equal(describeLock(61), '2 minutes');
+    assert.equal(describeLock(119), '2 minutes');
     assert.equal(describeLock(240), '4 minutes');
   });
 });

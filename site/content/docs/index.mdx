@@ -2,7 +2,7 @@
 description: Someone comments a keyword on your post or reel, and about two seconds later they have your link in their DMs. One Cloudflare Worker on your own account does it.
 ---
 
-Comment to DM is self-hosted Instagram automation: one Cloudflare Worker and one D1 database on your own Cloudflare account, on the free plan. You write keyword rules in its admin panel. When someone comments **guide** on your reel, the Worker answers with one private message carrying your link, and a public reply under the comment if you want one.
+Comment to DM is self-hosted Instagram automation: one Cloudflare Worker and one D1 database on your own Cloudflare account, on the free plan. You write keyword rules in its admin panel. When someone comments **guide** on your reel, the Worker answers with one DM carrying your link, and a public reply under the comment if you want one.
 
 It uses Meta's official Graph API through Instagram Login. There is no scraping and no browser automation, and the Worker never sees your Instagram password. The access token Instagram issues is encrypted with a key that lives in your Cloudflare account and nowhere else.
 
@@ -65,7 +65,7 @@ The admin panel lives at a secret URL on your Worker. You connect Instagram acco
 
 These are enforced by Meta, not by this project.
 
-- **One private message per comment, ever.** There's no follow-up unless the person replies to you first, so put everything they need in that one message.
+- **One DM per comment, ever.** There's no follow-up unless the person replies to you first, so put everything they need in that one message.
 - **Your own comments are ignored.** Meta notifies you about them, and acting on one would DM yourself and use up that comment's single reply.
 - **Comments older than 7 days** can't receive a private reply. They're logged as skipped.
 - **Tokens expire after 60 days.** A nightly job refreshes them. If it misses long enough, the account needs a 20-second reconnect.
