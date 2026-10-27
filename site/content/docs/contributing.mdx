@@ -97,6 +97,8 @@ ADMIN_URL_SECRET=... WEBHOOK_VERIFY_TOKEN=... META_APP_SECRET=... ADMIN_PASSWORD
   npm run selftest -- http://localhost:8787
 ```
 
+`ADMIN_PASSWORD` is required and is the admin panel's password. If the Worker has no password yet, selftest creates it on `localhost`, but against a deployed URL it stops and asks you to create the password in the browser first. Add `--allow-setup` to let it set `ADMIN_PASSWORD` as the password anyway. It adds a fake `selftest_ig_user` account for the webhook checks and deletes it, with its sends and webhook rows, before it finishes.
+
 ## Pull requests
 
 - **One change per PR.** A bug fix and a refactor in the same diff is two PRs.

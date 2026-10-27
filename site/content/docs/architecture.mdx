@@ -58,7 +58,7 @@ Follow-up DMs are out of scope. They need the person to reply first (a 24-hour w
 
 Admin pages, with a password and CSRF on every POST: `/` (dashboard), `/rules`, `/rules/:id/delete` (a confirmation page, then a POST), `/test` (a dry run that sends nothing, choosing the rule through the same `chooseRule` as the pipeline), `/accounts`, the first-run `/setup`, `/login`, `/logout` and `POST /run-cron`.
 
-Two unlisted, session-gated endpoints are used by `scripts/selftest.ts`: `POST /a/:secret/selftest/seed` and `GET /a/:secret/selftest/status`.
+Three unlisted, session-gated endpoints are used by `scripts/selftest.ts`: `POST /a/:secret/selftest/seed`, `GET /a/:secret/selftest/status` and `POST /a/:secret/selftest/cleanup`, which deletes the fake account with its sends and the webhook rows that name it.
 
 ## Processing pipeline
 
@@ -125,7 +125,7 @@ The panel is mounted at `/a/:secret`. The unguessable URL is one layer, not the 
 
 `scripts/test-unit.ts` covers the guard, matching and HMAC verification with no network. `test/*.test.ts` runs the real Worker in workerd against a fresh local D1 for each test, with every Meta host faked (`npm run test:integration`). `npm test` runs both.
 
-`scripts/selftest.ts` drives a deployed Worker or a `wrangler dev` URL. Its live checks: the handshake returns 200, a wrong verify token gets 403, a bad signature gets 401, a synthetic comment creates one `sent` row, a duplicate delivery still leaves one row, a self-comment creates no row, the admin login page loads and rejects a wrong password, and the cron writes `last_cron_ok_at`. [Contributing](/contributing#tests) has the commands.
+`scripts/selftest.ts` drives a deployed Worker or a `wrangler dev` URL. Its live checks: the handshake returns 200, a wrong verify token gets 403, a bad signature gets 401, a synthetic comment creates one `sent` row, a duplicate delivery still leaves one row, a self-comment creates no row, the admin login page loads and rejects a wrong password, the fake account is removed again, and the cron writes `last_cron_ok_at`. It needs `ADMIN_PASSWORD`, and on a Worker with no password yet it creates one only when the URL is `localhost` or `127.x`, or when you pass `--allow-setup`. [Contributing](/contributing#tests) has the commands.
 
 ## Reference
 
@@ -170,7 +170,7 @@ Read by `scripts/selftest.ts` only:
 | `WEBHOOK_VERIFY_TOKEN` | |
 | `META_APP_SECRET` | |
 | `ADMIN_URL_SECRET` | |
-| `ADMIN_PASSWORD` | Optional; defaults to `selftest-password-change-me` |
+| `ADMIN_PASSWORD` | Required. The admin password. On a Worker with no password yet, selftest sets it, but only on `localhost` unless `--allow-setup` is passed |
 
 ### Graph API version
 

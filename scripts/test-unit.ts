@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
   DM_TEXT_MAX,
   PUBLIC_REPLY_MAX,
@@ -26,6 +28,7 @@ import { STALE_PENDING_SECONDS } from '../src/cron.ts';
 import { isSelfComment } from '../src/guard.ts';
 import { WEBHOOK_SEND_BUDGET_MS, parseWebhookPayload } from '../src/process.ts';
 import { POLL_BUDGET_MS } from '../src/reconcile.ts';
+import { adminStep, isLocalTarget } from './selftest-lib.ts';
 import {
   EXCLUSION_TOO_SHORT_MESSAGE,
   KEYWORD_CACHE_MAX,
@@ -1300,5 +1303,40 @@ describe('login throttle', () => {
     assert.equal(describeLock(61), '2 minutes');
     assert.equal(describeLock(119), '2 minutes');
     assert.equal(describeLock(240), '4 minutes');
+  });
+});
+
+describe('selftest', () => {
+  it('treats only loopback addresses as local', () => {
+    for (const url of ['http://localhost:8787', 'http://127.0.0.1:8787', 'http://127.1.2.3', 'http://[::1]:8787']) {
+      assert.equal(isLocalTarget(url), true, url);
+    }
+    for (const url of ['https://ig.example.workers.dev', 'http://localhost.example.com', 'http://10.0.0.5', 'not a url']) {
+      assert.equal(isLocalTarget(url), false, url);
+    }
+  });
+
+  it('refuses to create the first password on a deployed Worker unless told to', () => {
+    const setup = '<h1>Create your password</h1><input name="password" />';
+    assert.equal(adminStep(setup, { local: false, allowSetup: false }), 'refuse-setup');
+    assert.equal(adminStep(setup, { local: false, allowSetup: true }), 'setup');
+    assert.equal(adminStep(setup, { local: true, allowSetup: false }), 'setup');
+  });
+
+  it('logs in when a password already exists, wherever the Worker is', () => {
+    const login = '<h1>Log in</h1><input name="password" />';
+    assert.equal(adminStep(login, { local: false, allowSetup: false }), 'login');
+    assert.equal(adminStep('<h1>Home</h1>', { local: false, allowSetup: false }), 'none');
+  });
+
+  it('stops before sending anything when ADMIN_PASSWORD is not set', () => {
+    const env: NodeJS.ProcessEnv = { ...process.env, WEBHOOK_VERIFY_TOKEN: 'v', META_APP_SECRET: 's', ADMIN_URL_SECRET: 'a' };
+    delete env.ADMIN_PASSWORD;
+    const script = fileURLToPath(new URL('./selftest.ts', import.meta.url));
+    // Port 9 refuses connections, so a run that went ahead would fail differently.
+    const res = spawnSync(process.execPath, ['--experimental-strip-types', script, 'http://127.0.0.1:9'], { env, encoding: 'utf8' });
+    assert.equal(res.status, 2, res.stderr);
+    assert.match(res.stderr, /ADMIN_PASSWORD/);
+    assert.doesNotMatch(res.stdout, /selftest →/);
   });
 });
