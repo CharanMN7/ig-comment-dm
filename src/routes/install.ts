@@ -41,7 +41,7 @@ function decode(base64: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(atob(base64), (ch) => ch.charCodeAt(0));
 }
 
-const PNGS = { 192: decode(ICON_192_PNG), 512: decode(ICON_512_PNG) };
+export const PNGS = { 192: decode(ICON_192_PNG), 512: decode(ICON_512_PNG) };
 
 function secretMatches(c: Context<{ Bindings: Env }>): boolean {
   return timingSafeEqualString(c.req.param('secret') ?? '', c.env.ADMIN_URL_SECRET ?? '');
