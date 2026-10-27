@@ -92,6 +92,8 @@ It's idempotent: running it five times a day is harmless.
 
 Before refreshing, the daily job marks `sent` rows that are still `pending` 15 minutes after their claim as `failed` ("The Worker stopped before this send finished…"). A send takes at most about 65 seconds (25 from a webhook), so such a row belongs to a Worker that was stopped mid-send. This runs daily rather than in the poll because it's a full scan of `sent`, which grows by a row per comment and has no index on `dm_status`.
 
+`sent` is never pruned, because it's the creator's history, and every Home visit scans all of it for the totals and again for the recent list: an account getting 1,000 comments a day has about 365,000 rows after a year, when five or so Home visits a day use up D1's free 5 million rows read, and D1 then refuses every query, sends included, until 00:00 UTC.
+
 **Comment poll, `*/5 * * * *`:** `src/reconcile.ts` lists a few recent media per active account, fetches the newest comments, and calls `processComment` for comments a rule matches or excludes that aren't already in `sent`. The caps are 3 media per account, the 25 newest comments per media, 10 processed comments per sweep (across all accounts) and a 72-hour lookback. CPU on the free plan is tight, so keep them. The poll runs in the scheduled handler, which Cloudflare allows 15 minutes rather than `waitUntil`'s 30 seconds, so its sends keep their full retries. It stops starting sends 4 minutes in, which ends a slow sweep before the next one begins and well inside those 15 minutes. Comments it doesn't reach stay unclaimed for the next sweep. A `match_all` rule added to an older post therefore also answers that post's unhandled comments from the last 72 hours, 10 per sweep; the rule form says so.
 
 ## Crypto
