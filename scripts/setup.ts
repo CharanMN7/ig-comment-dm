@@ -12,11 +12,15 @@
  *
  * It is safe to re-run. Deploys are idempotent, migrations the database has
  * already recorded are skipped, and existing secrets are left alone unless
- * --rotate is passed.
+ * --rotate is passed, or an earlier run stopped before it finished (see
+ * UNFINISHED below).
  */
 import { webcrypto } from 'node:crypto';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
+import { fileURLToPath } from 'node:url';
 import { runWrangler, runWranglerWithInput, wranglerBin } from './wrangler.ts';
 
 const RESET = '\x1b[0m';
@@ -29,6 +33,16 @@ const CYAN = '\x1b[36m';
 
 const rotate = process.argv.includes('--rotate');
 const WRANGLER = wranglerBin();
+
+// The two generated values the operator has to copy somewhere, and that
+// Cloudflare will never show again. A run writes their names here before it
+// saves them and deletes the file once it has printed its final summary, so a
+// re-run that finds the file knows an earlier run saved them and then stopped,
+// perhaps before the operator ever saw them, and makes a new pair. The file is
+// local and .wrangler/ is git-ignored, so a copy set up somewhere else, or
+// before this file existed, keeps its values as before.
+const SHOWN_ONCE = ['ADMIN_URL_SECRET', 'WEBHOOK_VERIFY_TOKEN'];
+const UNFINISHED = resolve(fileURLToPath(new URL('..', import.meta.url)), '.wrangler', 'setup-unfinished');
 
 function say(msg = ''): void {
   console.log(msg);
@@ -107,6 +121,25 @@ function existingSecretNames(): Set<string> {
   } catch {
     return new Set();
   }
+}
+
+function unfinishedNames(): Set<string> {
+  try {
+    const lines = readFileSync(UNFINISHED, 'utf8').split('\n').map((line) => line.trim());
+    return new Set(lines.filter((line) => SHOWN_ONCE.includes(line)));
+  } catch {
+    return new Set();
+  }
+}
+
+function markUnfinished(names: string[]): void {
+  mkdirSync(dirname(UNFINISHED), { recursive: true });
+  writeFileSync(
+    UNFINISHED,
+    '# npm run setup writes this before saving the values below, and deletes it when it finishes.\n' +
+      '# If it is here, a run stopped early, and the next one replaces these values and shows them.\n' +
+      `${names.join('\n')}\n`,
+  );
 }
 
 function workerUrlFrom(deployOutput: string): string | null {
@@ -239,14 +272,25 @@ async function main(): Promise<void> {
 
   // The admin URL and the verify token both have to be shown to the operator
   // later, so a re-run must reuse whatever is already deployed rather than
-  // silently rotating it and printing a URL that no longer works.
+  // silently rotating it and printing a URL that no longer works. The exception
+  // is a pair an unfinished run saved: nothing depends on them until the
+  // operator pastes them in, and they may never have seen them.
+  const unfinished = unfinishedNames();
   const reused: string[] = [];
   for (const name of Object.keys(generated)) {
-    if (existing.has(name) && !rotate) {
+    if (existing.has(name) && !rotate && !unfinished.has(name)) {
       reused.push(name);
       delete generated[name];
     }
   }
+
+  const shown = SHOWN_ONCE.filter((name) => name in generated);
+  const replaced = shown.filter((name) => unfinished.has(name));
+  if (replaced.length) {
+    warn(`Your last setup stopped before the end, so this run replaces its ${replaced.join(' and ')}.`);
+    say(`    ${DIM}Anything it printed for ${replaced.length === 1 ? 'that' : 'those'} no longer works.${RESET}`);
+  }
+  if (shown.length) markUnfinished(shown);
 
   for (const [name, value] of Object.entries(generated)) {
     if (!(await putSecret(name, value))) {
@@ -254,6 +298,16 @@ async function main(): Promise<void> {
       die(`Could not save ${name} to Cloudflare.`);
     }
     ok(`${name} generated and saved`);
+  }
+
+  // Printed now rather than only at the end, so a later step failing, or
+  // Ctrl-C, can't leave the operator without them.
+  if (shown.length) {
+    const one = shown.length === 1;
+    say(`\n  ${BOLD}${YELLOW}Save ${one ? 'this' : 'these'} now.${RESET} Cloudflare keeps secrets hidden, so ${one ? 'it' : 'they'} can't be read back later.`);
+    if (generated.ADMIN_URL_SECRET) say(`    Admin link     ${GREEN}${url}/a/${generated.ADMIN_URL_SECRET}${RESET}`);
+    if (generated.WEBHOOK_VERIFY_TOKEN) say(`    Verify token   ${CYAN}${generated.WEBHOOK_VERIFY_TOKEN}${RESET}`);
+    say(`  ${DIM}If setup stops before the end, run it again: it replaces ${one ? 'it' : 'both'} and shows the new ${one ? 'one' : 'ones'}.${RESET}\n`);
   }
   if (!(await putSecret('PUBLIC_BASE_URL', url))) {
     rl.close();
@@ -311,13 +365,14 @@ async function main(): Promise<void> {
   say(`${BOLD}Then open your admin page and create a password:${RESET}`);
   if (adminSecret) {
     say(`   ${GREEN}${url}/a/${adminSecret}${RESET}`);
-    say(`   ${DIM}Bookmark it. This link is shown once and is not recoverable from here.`);
+    say(`   ${DIM}Bookmark it. Cloudflare keeps it hidden, so it can't be shown again from here.`);
     say(`   Anyone with it still needs your password, but do not paste it anywhere.${RESET}\n`);
   } else {
     say(`   ${DIM}Unchanged — use the admin link from your first setup.${RESET}\n`);
   }
 
   say(`${DIM}Stuck? Run  npm run doctor  to check what is missing.${RESET}\n`);
+  rmSync(UNFINISHED, { force: true });
 }
 
 main().catch((err: unknown) => {

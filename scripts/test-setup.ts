@@ -17,7 +17,8 @@ const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 
 // Stands in for Wrangler: answers the commands setup and doctor run from a
 // JSON state file, records every argv it was given, and keeps secrets put on
-// stdin so a test can see what reached Cloudflare.
+// stdin so a test can see what reached Cloudflare. It can fail the Nth deploy,
+// or press Ctrl-C on setup once a given command has done its work.
 const FAKE_WRANGLER = `
 const fs = require('node:fs');
 const file = process.env.FAKE_WRANGLER_STATE;
@@ -57,6 +58,7 @@ if (a === 'whoami') {
   code = 2;
 }
 fs.writeFileSync(file, JSON.stringify(state));
+if (state.interrupt === args.join(' ')) process.kill(process.ppid, 'SIGINT');
 process.exit(code);
 `;
 
@@ -64,6 +66,7 @@ interface FakeState {
   calls: string[][];
   deploys: number;
   failDeploy: number;
+  interrupt?: string;
   secrets: Record<string, string>;
 }
 
@@ -136,9 +139,11 @@ describe('npm run setup and npm run doctor, with a fake Wrangler and no npx on P
   let stateFile = '';
 
   const state = (): FakeState => JSON.parse(readFileSync(stateFile, 'utf8')) as FakeState;
-  const reset = (secrets: string[]): void => {
+  const save = (next: FakeState): void => writeFileSync(stateFile, JSON.stringify(next));
+  const reset = (secrets: string[], more: Partial<FakeState> = {}): void => {
     const values = Object.fromEntries(secrets.map((name) => [name, `existing-${name}`]));
-    writeFileSync(stateFile, JSON.stringify({ calls: [], deploys: 0, failDeploy: 0, secrets: values }));
+    save({ calls: [], deploys: 0, failDeploy: 0, secrets: values, ...more });
+    rmSync(join(root, '.wrangler'), { recursive: true, force: true });
   };
 
   const run = (root: string, script: string, args: string[] = []): { code: number; out: string } => {
@@ -208,5 +213,73 @@ describe('npm run setup and npm run doctor, with a fake Wrangler and no npx on P
     const setup = run(bare, 'setup.ts');
     assert.equal(setup.code, 1);
     assert.match(setup.out, /Wrangler is not installed in this folder yet\.\s+Run {2}npm install {2}here/);
+  });
+  const META = ['META_APP_ID', 'META_APP_SECRET', 'FACEBOOK_APP_SECRET'];
+  const URL_BASE = 'https://ig-comment-dm.someone.workers.dev';
+
+  // Only the admin link and the verify token are for the operator's eyes.
+  const assertNoOtherSecret = (out: string, secrets: Record<string, string>): void => {
+    for (const [name, value] of Object.entries(secrets)) {
+      if (name === 'ADMIN_URL_SECRET' || name === 'WEBHOOK_VERIFY_TOKEN' || name === 'PUBLIC_BASE_URL') continue;
+      assert.ok(!out.includes(value), `${name} was printed`);
+    }
+  };
+
+  it('setup shows the admin link and verify token before a late failure, and the next run replaces them', () => {
+    reset(META, { failDeploy: 2 });
+    const first = run(root, 'setup.ts');
+    assert.equal(first.code, 1, first.out);
+    assert.match(first.out, /The final deploy failed/);
+    const lost = state().secrets;
+    assert.match(first.out, /Save these now\./);
+    assert.ok(first.out.includes(`Admin link     ${URL_BASE}/a/${lost.ADMIN_URL_SECRET}`), first.out);
+    assert.ok(first.out.includes(`Verify token   ${lost.WEBHOOK_VERIFY_TOKEN}`), first.out);
+    assertNoOtherSecret(first.out, lost);
+
+    save({ ...state(), failDeploy: 0 });
+    const second = run(root, 'setup.ts');
+    assert.equal(second.code, 0, second.out);
+    const now = state().secrets;
+    assert.match(second.out, /Your last setup stopped before the end, so this run replaces its ADMIN_URL_SECRET and WEBHOOK_VERIFY_TOKEN\./);
+    assert.notEqual(now.ADMIN_URL_SECRET, lost.ADMIN_URL_SECRET);
+    assert.notEqual(now.WEBHOOK_VERIFY_TOKEN, lost.WEBHOOK_VERIFY_TOKEN);
+    // Rotating the encryption key would orphan every stored token.
+    assert.equal(now.TOKEN_ENCRYPTION_KEY, lost.TOKEN_ENCRYPTION_KEY);
+    assert.equal(now.SESSION_SIGNING_KEY, lost.SESSION_SIGNING_KEY);
+    assert.ok(second.out.includes(`${URL_BASE}/a/${now.ADMIN_URL_SECRET}`));
+    assert.ok(second.out.includes(`Verify token: ${now.WEBHOOK_VERIFY_TOKEN}`));
+    assertNoOtherSecret(second.out, now);
+    assert.ok(!existsSync(join(root, '.wrangler', 'setup-unfinished')));
+
+    const third = run(root, 'setup.ts');
+    assert.equal(third.code, 0, third.out);
+    assert.deepEqual(state().secrets, now);
+    assert.match(third.out, /Unchanged — use the admin link from your first setup/);
+    assert.ok(!third.out.includes(now.ADMIN_URL_SECRET));
+  });
+
+  it('setup replaces a pair that Ctrl-C stopped it from ever showing', () => {
+    reset(META, { interrupt: 'secret put WEBHOOK_VERIFY_TOKEN' });
+    const first = run(root, 'setup.ts');
+    assert.notEqual(first.code, 0);
+    const lost = state().secrets;
+    assert.ok(lost.ADMIN_URL_SECRET && lost.WEBHOOK_VERIFY_TOKEN, 'both reached Cloudflare');
+    assert.ok(!first.out.includes(lost.ADMIN_URL_SECRET));
+
+    save({ ...state(), interrupt: '' });
+    const second = run(root, 'setup.ts');
+    assert.equal(second.code, 0, second.out);
+    const now = state().secrets;
+    assert.notEqual(now.ADMIN_URL_SECRET, lost.ADMIN_URL_SECRET);
+    assert.notEqual(now.WEBHOOK_VERIFY_TOKEN, lost.WEBHOOK_VERIFY_TOKEN);
+    assert.ok(second.out.includes(`${URL_BASE}/a/${now.ADMIN_URL_SECRET}`));
+  });
+
+  it('setup keeps values a copy set up elsewhere already has', () => {
+    reset(ALL_SECRETS);
+    const res = run(root, 'setup.ts');
+    assert.equal(res.code, 0, res.out);
+    assert.equal(state().secrets.ADMIN_URL_SECRET, 'existing-ADMIN_URL_SECRET');
+    assert.doesNotMatch(res.out, /Save these now/);
   });
 });
