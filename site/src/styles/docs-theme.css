@@ -58,17 +58,14 @@ html.dark {
 }
 
 /* Sentence-case labels, matching the rest of the type. */
-.fw-toc-title {
-  font-size: 0.8125rem;
-  letter-spacing: normal;
-  text-transform: none;
+:root {
+  --fw-label-transform: none;
+  --fw-label-letter-spacing: normal;
+  --fw-label-font-size: 0.8125rem;
 }
 
 .fw-sidebar-group-label {
-  font-size: 0.8125rem;
   font-weight: 650;
-  letter-spacing: normal;
-  text-transform: none;
   color: var(--fw-fg);
 }
 
@@ -86,15 +83,9 @@ html.dark {
 }
 
 /*
- * Screenshot slots. @inkform/astro doesn't let a site register its own MDX
- * components, so a slot is the kit's <Frame> around a plain element:
- *
- *   <Frame caption="…">
- *     <div className="shot" data-shot="meta-01-create-app.png">Screenshot coming</div>
- *   </Frame>
- *
- * Swapping in the real image means replacing the div with
- * <img src="/screenshots/meta-01-create-app.png" alt="…" />.
+ * Screenshot slots, rendered by <Screenshot> in src/mdx-components.tsx. Until
+ * a screenshot is recorded, its slot shows "Screenshot coming" and the file
+ * name it expects.
  */
 .fw-frame {
   box-shadow: none;
@@ -136,18 +127,6 @@ html.dark {
 
 /* Phones: the drawer already lists the header links, and there's no
    keyboard to press ⌘K on, so the header keeps only what fits at 375px. */
-@media (max-width: 40rem) {
-  .fw-shell-header-inner {
-    gap: 0.5rem;
-  }
-  .fw-shell-topnav {
-    display: none;
-  }
-  .fw-search-trigger kbd {
-    display: none;
-  }
-}
-
 /* Bare URLs used as link text (instagram.com/accounts/manage_access) can be
    wider than a phone. */
 .fw-prose a {

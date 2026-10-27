@@ -39,9 +39,7 @@ The form asks for the essentials first: a name, the keywords, and the message. E
 
 The post dropdown lists your recent posts and reels after you connect. A post's ID is a long number, not the share link `instagram.com/reel/…`.
 
-<Frame caption="Rules → New rule.">
-  <div className="shot" data-shot="admin-12-new-rule.png">Screenshot coming</div>
-</Frame>
+<Screenshot file="admin-12-new-rule.png" caption="Rules → New rule." />
 
 ### Start from a template
 
@@ -81,9 +79,7 @@ Every 5 minutes the Worker also reads recent comments itself, for the ones the w
 
 **Test →** paste a sample comment. It shows which rule would send the DM, using the same rule choice as a real comment, the other matching rules and which of them would post a public reply, and the comment as it was matched, with case, emoji and punctuation stripped out. Paused rules aren't tested, and for a paused account it says so before naming the rule. Nothing is sent to anyone.
 
-<Frame caption="Test: a sample comment and the rule it would fire.">
-  <div className="shot" data-shot="admin-13-test.png">Screenshot coming</div>
-</Frame>
+<Screenshot file="admin-13-test.png" caption="Test: a sample comment and the rule it would fire." />
 
 Then try it for real: comment on your post from a **different** Instagram account; a friend's phone works. Your own comments on your own posts are ignored on purpose, and the friend doesn't need to be a tester. The DM lands in their inbox, or in **Message requests** if they don't follow you.
 
@@ -100,9 +96,7 @@ While you test, turn off Instagram's Hidden Words filter on the creator account.
 | **Last 20 sends** | Every DM, skip and failure, with the reason and the exact error from Meta. **Queued** waits its turn under Instagram's hourly limit (below), **Retrying** was turned down for now and says when it's tried next, and **May have been delivered** has a **Send again** button for when you've checked it didn't arrive. **View all logs** opens the full history, filtered by status, account, rule or UTC date. |
 | **Red banners** | An account needs reconnecting, the nightly job has stalled, or a secret is misconfigured. |
 
-<Frame caption="Home: Did Instagram reach us? and Last 20 sends.">
-  <div className="shot" data-shot="admin-14-home.png">Screenshot coming</div>
-</Frame>
+<Screenshot file="admin-14-home.png" caption="Home: Did Instagram reach us? and Last 20 sends." />
 
 **Check connections now** on Home runs the nightly job on demand: it refreshes tokens and re-registers the webhook subscription. It's harmless to run as often as you like.
 

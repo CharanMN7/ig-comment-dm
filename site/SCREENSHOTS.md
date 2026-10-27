@@ -7,17 +7,14 @@ below, and swap each placeholder for the image.
 
 ## Swapping one in
 
-Replace the placeholder `<div>` inside the `<Frame>` and keep the caption:
+Then add an `alt` to that slot's `<Screenshot>` tag and keep the rest:
 
 ```mdx
-<Frame caption="Create app: use case Other, app type Business.">
-  <img src="/screenshots/meta-01-create-app.png" alt="Meta's Create app dialog with Other and Business selected." />
-</Frame>
+<Screenshot file="meta-01-create-app.png" caption="Create app: use case Other, app type Business." alt="Meta's Create app dialog with Other and Business selected." />
 ```
 
-Write the `src` from the site root as above; the build adds the base path
-(`/ig-comment-dm/`). Give every image real alt text that says what the reader
-should notice.
+The component adds the base path (`/ig-comment-dm/`) to the image's address.
+Give every image real alt text that says what the reader should notice.
 
 ## Recording
 
