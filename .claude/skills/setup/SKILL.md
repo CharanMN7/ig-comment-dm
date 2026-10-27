@@ -52,8 +52,8 @@ instagram.com and dash.cloudflare.com one at a time, because they touch real acc
 
 - Confirm you're in the repo root (`package.json` has `"name": "ig-comment-dm"`). If not,
   clone `https://github.com/CharanMN7/ig-comment-dm.git` and work in it.
-- Check `node --version` is 22.6 or newer. The docs say 20, but `npm run setup` and
-  `npm run doctor` use `--experimental-strip-types`, which Node 20 doesn't have.
+- Check `node --version` is 22.13 or newer. Anything older and `npm ci` stops with
+  "Unsupported engine": the human upgrades Node.js first (22 or 24 LTS).
 - Run `npm ci`.
 - Ask the human to confirm they have an Instagram **professional** account (Creator or
   Business), a free Cloudflare account and a Meta for Developers account. If one is missing,

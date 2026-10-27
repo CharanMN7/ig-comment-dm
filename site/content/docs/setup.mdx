@@ -21,7 +21,7 @@ Already deployed and something's broken? Go to [Troubleshooting](/troubleshootin
 | An Instagram **professional** account (Creator or Business) | A personal account can't use the Instagram API. In the Instagram app: Settings → Account type and tools → Switch to professional account. |
 | A free [Cloudflare](https://dash.cloudflare.com/sign-up) account | The Worker runs on your account, at your cost. The free plan is enough. |
 | A free [Meta for Developers](https://developers.facebook.com/) account | Signed in with the Facebook login that can manage the Instagram account you're automating. |
-| [Node.js](https://nodejs.org/) 20 or newer | Runs the setup script, `wrangler` and the tests. |
+| [Node.js](https://nodejs.org/) 22.13 or newer | Runs the setup script, `wrangler` and the tests. `npm install` refuses anything older. |
 
 Keep a password manager or a private note open. `npm run setup` prints your admin URL and webhook verify token once, and you'll copy secrets out of Meta's dashboard. Don't post any of them anywhere public.
 

@@ -57,7 +57,7 @@ whole map.
 
 ## Commands
 
-Node.js 22.6 or newer: the scripts run TypeScript with `--experimental-strip-types`.
+Node.js 22.13 or newer. `.npmrc` sets `engine-strict`, so `npm ci` refuses anything older.
 
 ```bash
 npm ci

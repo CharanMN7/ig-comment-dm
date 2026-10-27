@@ -42,6 +42,6 @@
   },
   "homepage": "https://github.com/CharanMN7/ig-comment-dm#readme",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   }
 }
