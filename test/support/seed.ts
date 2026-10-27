@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { decryptAesGcm, encryptAesGcm } from '../../src/crypto.ts';
-import { insertRule, setAccountActive, toggleRule, tryClaimComment, upsertAccount } from '../../src/db.ts';
+import { insertRule, insertSend, setAccountActive, toggleRule, tryClaimComment, upsertAccount } from '../../src/db.ts';
 import type { Account, ExtraReply, MatchMode, Rule, Sent } from '../../src/types.ts';
 
 export const FROZEN_NOW_MS = Date.UTC(2026, 9, 1, 12, 0, 0);
@@ -89,6 +89,28 @@ export async function seedSent(opts: {
     dm_status: opts.status,
     error: null,
     sent_at: opts.at,
+  });
+}
+
+/** A matched comment waiting in the send queue, as the webhook or the poll leaves it. */
+export async function seedQueued(opts: {
+  commentId: string;
+  ruleId: number;
+  commentAt?: number;
+  username?: string | null;
+  commenterId?: string;
+  igUserId?: string;
+}): Promise<void> {
+  await insertSend(env.DB, {
+    comment_id: opts.commentId,
+    ig_user_id: opts.igUserId ?? IG_USER,
+    commenter_id: opts.commenterId ?? '9100000000000001',
+    rule_id: opts.ruleId,
+    username: opts.username === undefined ? 'a_fan' : opts.username,
+    comment_at: opts.commentAt ?? NOW - 60,
+    dm_status: 'queued',
+    now: NOW,
+    leaseUntil: NOW,
   });
 }
 

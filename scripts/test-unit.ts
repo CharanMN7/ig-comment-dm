@@ -4,8 +4,12 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  COMMENT_MAX_AGE_SECONDS,
   DM_TEXT_MAX,
   PUBLIC_REPLY_MAX,
+  QUEUE_EXPIRY_SECONDS,
+  SENDS_PER_MINUTE,
+  SEND_LEASE_SECONDS,
   hmacSha256Hex,
   randomIndex,
   timingSafeEqualString,
@@ -32,11 +36,11 @@ import {
   EXTRA_REPLY_NONE,
   EXTRA_REPLY_OVER_CAP,
   EXTRA_REPLY_OWN_DM_ONLY,
-  WEBHOOK_SEND_BUDGET_MS,
   otherRuleSkipReason,
-  parseWebhookPayload,
   planOtherRules,
-} from '../src/process.ts';
+} from '../src/other-replies.ts';
+import { WEBHOOK_SEND_BUDGET_MS, parseWebhookPayload } from '../src/process.ts';
+import { DRAIN_BUDGET_MS, drainRatePerMinute, minuteOf } from '../src/queue.ts';
 import { POLL_BUDGET_MS } from '../src/reconcile.ts';
 import { adminStep, isLocalTarget } from './selftest-lib.ts';
 import {
@@ -1186,6 +1190,43 @@ describe('stale pending sends', () => {
   it('waits far longer than the slowest possible send before calling a pending row abandoned', () => {
     const slowestSendMs = 2 * META_SEND_MAX_MS;
     assert.ok(STALE_PENDING_SECONDS * 1000 >= 10 * slowestSendMs, `${STALE_PENDING_SECONDS}s vs ${slowestSendMs}ms`);
+  });
+});
+
+describe('the send queue', () => {
+  it('keeps every rolling hour under Instagram’s 750 private replies, counting the 62 minutes an hour of calls can touch', () => {
+    // 61 windows an hour, and one more because a slot is taken up to
+    // DRAIN_BUDGET_MS before its call.
+    assert.ok(DRAIN_BUDGET_MS < 60_000);
+    assert.ok(SENDS_PER_MINUTE * 62 < 750, `${SENDS_PER_MINUTE * 62}`);
+  });
+
+  it('shares a minute’s sends between the accounts with DMs waiting', () => {
+    assert.equal(drainRatePerMinute(1), SENDS_PER_MINUTE);
+    assert.equal(drainRatePerMinute(2), 7);
+    assert.equal(drainRatePerMinute(3), 4);
+    assert.ok(drainRatePerMinute(2) * 2 >= 13);
+  });
+
+  it('never gives up on a send while the minute job that claimed it can still be sending', () => {
+    assert.ok(SEND_LEASE_SECONDS * 1000 >= 2 * (DRAIN_BUDGET_MS + META_SEND_MAX_MS), `${SEND_LEASE_SECONDS}s`);
+    assert.ok(SEND_LEASE_SECONDS * 1000 >= 2 * (WEBHOOK_SEND_BUDGET_MS + META_SEND_MAX_MS), `${SEND_LEASE_SECONDS}s`);
+  });
+
+  it('ends a minute’s sends before the next minute starts', () => {
+    assert.ok(DRAIN_BUDGET_MS + META_SEND_MAX_MS < 60_000, `${DRAIN_BUDGET_MS}ms`);
+  });
+
+  it('gives up on a queued DM before Instagram’s 7 days run out', () => {
+    assert.ok(QUEUE_EXPIRY_SECONDS < COMMENT_MAX_AGE_SECONDS);
+    assert.ok(QUEUE_EXPIRY_SECONDS >= COMMENT_MAX_AGE_SECONDS - 2 * 60 * 60);
+  });
+
+  it('counts minutes from the epoch', () => {
+    assert.equal(minuteOf(0), 0);
+    assert.equal(minuteOf(59), 0);
+    assert.equal(minuteOf(60), 1);
+    assert.equal(minuteOf(Date.UTC(2026, 9, 1, 12, 5) / 1000) % 5, 0);
   });
 });
 

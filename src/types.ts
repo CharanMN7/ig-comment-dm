@@ -59,10 +59,18 @@ export type Sent = {
   ig_user_id: string;
   rule_id: number | null;
   commenter_id: string | null;
+  /** `queued` or `retry`, waiting; `pending`, being sent; then `ok`, `failed` or `skipped`. */
   dm_status: string;
   reply_status: string | null;
   error: string | null;
+  /** When the row was written, then when it reached ok, failed or skipped. */
   sent_at: number;
+  /** DM calls made, counting one Instagram never answered. */
+  attempts: number;
+  /** Queued or retrying: when it may be sent. Pending: when its lease runs out. */
+  next_attempt_at: number | null;
+  comment_at: number | null;
+  username: string | null;
 };
 
 /** A rule that matched a comment besides the one that sent its DM, and what became of its public reply. */

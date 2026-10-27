@@ -16,5 +16,8 @@ database_name = "ig-comment-dm"
 # records it in the d1_migrations table. The integration tests read this too.
 migrations_dir = "migrations"
 
+# The daily job (token refresh, totals), and the minute job, which sends the
+# queue and polls for missed comments every fifth minute. Two of the free
+# plan's five cron triggers per account.
 [triggers]
-crons = ["0 3 * * *", "*/5 * * * *"]
+crons = ["0 3 * * *", "* * * * *"]

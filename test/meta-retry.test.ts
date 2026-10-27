@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NO_TIME_FOR_PUBLIC_REPLY_ERROR, WEBHOOK_SEND_BUDGET_MS } from '../src/process.ts';
+import { WEBHOOK_SEND_BUDGET_MS } from '../src/process.ts';
+import { NO_TIME_FOR_PUBLIC_REPLY_ERROR } from '../src/queue.ts';
 import { FAKE_EXPIRES_IN, FAKE_ME, meta, type MetaReply } from './support/meta.ts';
 import {
   DAY,
@@ -18,6 +19,7 @@ import {
   commentValue,
   postWebhook,
   returnFromInstagram,
+  runMinutes,
   runScheduled,
   signedInAdmin,
   startConnect,
@@ -270,7 +272,7 @@ describe('the time a webhook delivery is allowed', () => {
     expect(await extraReplyRows()).toMatchObject([{ rule_id: other, status: 'failed', error: NO_TIME_FOR_PUBLIC_REPLY_ERROR }]);
   });
 
-  it('shares the time across a batched delivery and claims no comment it has no time to send', async () => {
+  it('shares the time across a batched delivery and queues a comment it has no time to send', async () => {
     const attempts = trackAttempts([0, 1, 2]);
     await seedAccount();
     await seedRule();
@@ -285,8 +287,12 @@ describe('the time a webhook delivery is allowed', () => {
       expect(row!.sent_at * 1000).toBeLessThanOrEqual(deadline);
     }
     expect((await sentRow('batch-3'))?.error).toMatch(/^DM: Instagram didn't answer within 5 seconds, so it may have been delivered\./);
-    // Left unclaimed rather than failed, so the 5-minute poll can still send it.
-    expect(await sentRow('batch-4')).toBeNull();
+    // Queued rather than failed, so the minute job sends it.
+    expect(await sentRow('batch-4')).toMatchObject({ dm_status: 'queued', attempts: 0 });
+    vi.restoreAllMocks();
+    await runMinutes();
+    expect(meta.callsTo('POST', '/:id/messages').map((c) => (c.body as { recipient: { comment_id: string } }).recipient.comment_id)).toEqual(['batch-4']);
+    expect(await sentRow('batch-4')).toMatchObject({ dm_status: 'ok', attempts: 1 });
   });
 });
 

@@ -64,7 +64,8 @@ import {
   fillPlaceholders,
   worstCaseLength,
 } from '../placeholders.ts';
-import { EXTRA_PUBLIC_REPLY_CAP, chooseRule, otherRuleSkipReason, planOtherRules } from '../process.ts';
+import { EXTRA_PUBLIC_REPLY_CAP, otherRuleSkipReason, planOtherRules } from '../other-replies.ts';
+import { chooseRule } from '../process.ts';
 import { parsePublicReplies, serializePublicReplies } from '../replies.ts';
 import { CRON_FIRST_RUN_SECONDS, jobState } from './health.ts';
 import {
@@ -478,6 +479,7 @@ function extraReplyLine(e: ExtraReply & { rule_label: string | null }, now: numb
     return html`<div class="muted">${rule} <span class="err">public reply failed.</span></div>
       <div class="muted detail">${e.error ?? ''}</div>`;
   }
+  if (e.status === 'queued') return html`<div class="muted">${rule} public reply waits for the DM.</div>`;
   if (e.status === 'pending') {
     // Never retried, like a stuck DM, so after the same wait it is reported the same way.
     return now - e.sent_at > STALE_PENDING_SECONDS
@@ -1698,6 +1700,24 @@ adminRoutes.post('/selftest/seed', async (c) => {
     connected_at: now,
     last_refreshed_at: now,
   });
+  // A comment no rule matches gets no row, so selftest's "hello there" needs
+  // a rule that matches it. The exclusion skips it at once: a send would
+  // call Instagram with the dummy token.
+  if ((await listRules(c.env.DB, SELFTEST_IG_USER)).length === 0) {
+    await insertRule(c.env.DB, {
+      ig_user_id: SELFTEST_IG_USER,
+      label: 'Selftest',
+      keywords: JSON.stringify(['hello']),
+      match_mode: 'word',
+      exclude_keywords: JSON.stringify(['there']),
+      match_all: 0,
+      reply_without_dm: 0,
+      media_id: null,
+      dm_text: 'selftest',
+      public_reply_text: null,
+      created_at: now,
+    });
+  }
   return c.json({ ok: true, ig_user_id: SELFTEST_IG_USER });
 });
 

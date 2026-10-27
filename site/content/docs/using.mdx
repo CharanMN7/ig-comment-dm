@@ -12,7 +12,7 @@ You can connect several Instagram accounts to one deployment. Each one has to be
 
 Connect uses whichever Instagram account that browser is logged into. If one profile connects and another doesn't, that's usually why: open a private window, log in to your admin page there, and click Connect from that window.
 
-Connecting needs you to be logged in to the admin panel; the Connect page refuses anyone who isn't. **Pause** on the Accounts page stops DMs for an account without disconnecting it, and the nightly job keeps its token fresh while it's paused. Comments Instagram delivers while it's paused are logged as skipped, so resuming doesn't answer them late.
+Connecting needs you to be logged in to the admin panel; the Connect page refuses anyone who isn't. **Pause** on the Accounts page stops DMs for an account without disconnecting it, and the nightly job keeps its token fresh while it's paused. Comments Instagram delivers while it's paused, and DMs still queued when you pause it, are logged as skipped, so resuming doesn't answer them late.
 
 ## Write a rule
 
@@ -61,7 +61,7 @@ The templates are plain text in `src/templates.ts`, so a better one is a pull re
 - Keywords work in any script, including Cyrillic, Arabic, Chinese and Japanese. Chinese, Japanese, Thai and other scripts written without spaces have no word edges to check, so there a keyword also matches inside a longer word: `ガイド` matches `ガイドライン`.
 - A keyword written entirely in Chinese or Japanese characters needs 2 characters rather than 3, so `指南` can be saved but `指` can't. Thai, Lao, Khmer and Myanmar still need 3, because their vowel and tone marks count as characters, so two are often a single syllable. A keyword that mixes in Latin letters or digits, like `a指`, needs 3. A keyword that's only emoji or punctuation (`🔥🔥🔥`) is refused too, because it could never match anything.
 
-Exclusions are found the same way as the rule's keywords, and they belong to that rule alone. When a comment trips one, matching carries on to the next rule, so another rule without that exclusion can still reply. If no rule replies because of an exclusion, Home lists the comment as `Skipped: matched exclusion “how much”`, and the five-minute check leaves it alone from then on.
+Exclusions are found the same way as the rule's keywords, and they belong to that rule alone. When a comment trips one, matching carries on to the next rule, so another rule without that exclusion can still reply. If no rule replies because of an exclusion, Home lists the comment as `Skipped: matched exclusion “how much”`, and the five-minute check leaves it alone from then on. A comment that matches no rule at all isn't listed: writing a row for each would use up the database's free daily allowance on a busy account. The Test page shows what any comment would do.
 
 When more than one rule could answer a comment, the first of these sends the DM: a keyword rule for that post, then a keyword rule for all posts, then a rule that replies to every comment on that post. So a specific keyword on a giveaway reel still gets its own DM. Within each group the oldest rule wins. **Pause** on the Rules page turns a rule off without deleting it.
 
@@ -71,7 +71,7 @@ Instagram allows one DM per comment, but any number of public replies. The other
 
 A rule with **Reply to every comment on this post** ticked has no keywords: every comment on its post matches. Each comment gets its own DM, so someone who comments three times gets it three times. Exclusions still apply, matched as whole words.
 
-On an older post, the five-minute check also reads the post's 25 newest comments from the last 72 hours and answers any it hasn't handled, up to 10 per check. Comments it already skipped stay skipped. On the Test page, pick the post under "Which posts" to see such a rule match.
+On an older post, the five-minute check also reads the post's 25 newest comments from the last 72 hours and answers any it hasn't handled, up to 10 per check, within the same minute. Comments it already skipped stay skipped. On the Test page, pick the post under "Which posts" to see such a rule match.
 
 ## Test a rule
 
@@ -92,7 +92,7 @@ While you test, turn off Instagram's Hidden Words filter on the creator account.
 | **Get started** | Shown until your first DM goes out: connect an account, write a rule, test it. Each step says **Done** once it's happened. |
 | **Totals** | People reached, DMs sent, skipped and failed, for today, the last 7 and 30 days, and all time. Days start at midnight UTC, and the 7- and 30-day totals include today. People reached counts each person once, and only if a DM actually went out. With more than one account, each also gets its own. |
 | **Did Instagram reach us?** | Whether Meta is POSTing to your webhook at all. Empty means the problem is on Meta's side, usually an app still in Development. `Wrong secret` means a request's signature matched neither app secret. It's logged at most once a minute, and only repeats with nothing valid between them raise the red banner, since a stranger can send one too. Requests with no signature aren't listed. |
-| **Last 20 sends** | Every DM, skip and failure, with the reason and the exact error from Meta. |
+| **Last 20 sends** | Every DM, skip and failure, with the reason and the exact error from Meta. **Queued** means the DM is waiting its turn under Instagram's hourly limit (below). |
 | **Red banners** | An account needs reconnecting, the nightly job has stalled, or a secret is misconfigured. |
 
 <Frame caption="Home: Did Instagram reach us? and Last 20 sends.">
@@ -104,6 +104,14 @@ While you test, turn off Instagram's Hidden Words filter on the creator account.
 After you save, pause, resume or delete a rule, or pause an account, a green line at the top of the page confirms it.
 
 Tokens last 60 days and the nightly job refreshes them. If an account shows **Reconnect**, click it: it takes about 20 seconds and keeps your rules and history.
+
+### When a post takes off
+
+Instagram lets an account send about 750 private replies an hour. The Worker sends at most 12 a minute per account, which keeps every hour under that, and a comment past that is **Queued** rather than refused. Every minute, the Worker sends the oldest queued comments first, with the rule's text as it is then: edit a rule and its queued DMs go out with the new text, and turning a rule off or deleting it skips them. Pausing an account skips its queued DMs.
+
+A backlog drains at about 700 an hour, so 5,000 waiting comments take about 7 hours. That's for one account: the Worker sends about 12 queued DMs a minute in all, so two accounts with backlogs get about 7 a minute each, and three about 4. Instagram refuses a private reply to a comment more than 7 days old, so a queued comment still waiting an hour before that is skipped as **Expired**.
+
+The free database allows about 6,000 to 7,500 DMs a day (it counts rows written, and each DM writes about a dozen). Past that, it refuses everything until midnight UTC, comments included, so a reel that draws more matching comments than that in a day loses some. Cloudflare's paid Workers plan raises the limit to 50 million rows written a month.
 
 ## Get told when it stops working
 

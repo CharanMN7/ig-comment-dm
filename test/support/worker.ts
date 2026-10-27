@@ -1,5 +1,6 @@
 import { createExecutionContext, createScheduledController, waitOnExecutionContext } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
+import { vi } from 'vitest';
 import worker from '../../src/index.ts';
 import type { Env } from '../../src/types.ts';
 import { IG_USER, NOW } from './seed.ts';
@@ -41,6 +42,20 @@ export async function runScheduled(cron: string): Promise<void> {
   // both have, so the cast mirrors what production actually receives.
   await worker.scheduled(controller as unknown as ScheduledEvent, env, ctx);
   await waitOnExecutionContext(ctx);
+}
+
+export const MINUTE_CRON = '* * * * *';
+
+/**
+ * Runs the minute job `count` times, a minute apart, starting at the current
+ * fake time, and leaves the clock at the last run. Each run is a fresh
+ * minute for the send budget.
+ */
+export async function runMinutes(count = 1): Promise<void> {
+  for (let i = 0; i < count; i++) {
+    if (i > 0) vi.setSystemTime(Date.now() + 60_000);
+    await runScheduled(MINUTE_CRON);
+  }
 }
 
 export type DbCall = { sql: string; binds: unknown[]; rowsRead: number };
