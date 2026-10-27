@@ -69,6 +69,11 @@ button.danger, a.btn.danger { background: #a11; }
 .kpi b { display: block; font-size: 1.35rem; }
 .kpi div { margin-top: 0.3rem; }
 .note { background: #fff; border: 1px solid #ccc; padding: 0.7rem 0.85rem; margin: 0 0 1rem; }
+.templates { list-style: none; margin: 0; padding: 0; background: #fff; border: 1px solid #e4e4e0; }
+.templates li + li { border-top: 1px solid #eee; }
+.templates a { display: block; min-height: 44px; padding: 0.55rem 0.75rem; color: #111; text-decoration: none; }
+.templates a:hover b, .templates a:focus b { text-decoration: underline; }
+.templates .muted { display: block; }
 pre.raw { background: #111; color: #eee; padding: 0.6rem 0.7rem; overflow: auto; font-size: 0.78rem; }
 .actions form { display: inline; }
 .actions .btn, .actions button { margin: 0.15rem 0; }
