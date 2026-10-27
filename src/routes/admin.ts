@@ -28,7 +28,7 @@ import {
   getSent,
   healthSnapshot,
   insertRule,
-  latestSignedWebhookStatus,
+  latestSignedWebhookStatuses,
   listAccounts,
   listRules,
   readTotalsSnapshot,
@@ -476,6 +476,11 @@ function gettingStarted(base: string, accounts: { username: string }[], ruleCoun
   `;
 }
 
+// Wrong signatures are logged at most once a minute, so this many in a row
+// spans minutes with nothing getting through: Meta retrying with a secret we
+// don't have. A few forged requests, or a burst of them, can't add up to it.
+const WRONG_SECRET_AFTER = 3;
+
 adminRoutes.on('GET', ['/', ''], async (c) => {
   const base = c.get('adminBase');
   const session = c.get('session');
@@ -484,10 +489,10 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   c.executionCtx.waitUntil(ensureCommentSubscriptions(c.env));
   const sends = await recentSent(c.env.DB, 20);
   let events: Awaited<ReturnType<typeof recentWebhookEvents>> = [];
-  let latestSigned: string | null = null;
+  let latestSigned: string[] = [];
   try {
     events = await recentWebhookEvents(c.env.DB, 8);
-    latestSigned = await latestSignedWebhookStatus(c.env.DB);
+    latestSigned = await latestSignedWebhookStatuses(c.env.DB, WRONG_SECRET_AFTER);
   } catch {
     events = [];
   }
@@ -553,7 +558,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
       </div>
     `);
   }
-  if (latestSigned === 'bad_sig') {
+  if (latestSigned.length === WRONG_SECRET_AFTER && latestSigned.every((s) => s === 'bad_sig')) {
     banners.push(html`
       <div class="banner">
         Instagram reached this program but the signing secret did not match. Add

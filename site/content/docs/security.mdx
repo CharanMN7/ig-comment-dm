@@ -33,6 +33,8 @@ The Worker never sees your Instagram password. Accounts connect through Instagra
 
 Every POST to `/webhook` is checked against its `X-Hub-Signature-256` HMAC before the body is parsed. Meta signs Instagram Login webhooks with the Instagram App Secret in some flows and the Facebook App Secret in others, so either is accepted. Both are yours, so accepting either isn't a downgrade.
 
+A body over 256 KB is refused before it's read. A rejected request writes nothing to D1, except one `Wrong secret` row a minute so a misconfigured secret still shows up on Home.
+
 ## The health endpoint
 
 `/health` is public on purpose, so an uptime monitor can reach it without a login. It returns account counts, the time each scheduled job last ran, and whether the database answered. It never includes a username, an account ID or a secret.
