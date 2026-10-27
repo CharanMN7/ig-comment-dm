@@ -96,6 +96,15 @@ https://ig-comment-dm.YOURNAME.workers.dev/health
 
 It answers `200` while the database responds and both scheduled jobs are running, and `503` when either has stalled, so you hear about a dead nightly refresh before tokens start expiring. It needs no login and shows no usernames, IDs or secrets: only account counts and the time each job last ran. [What a 503 means](/troubleshooting#health-answers-503).
 
+## Put it on your phone
+
+Open your admin URL on the phone, log in, then:
+
+- **Android, Chrome:** menu → **Install app** (or **Add to Home screen**).
+- **iPhone, Safari:** **Share** → **Add to Home Screen**.
+
+It opens full screen, like an app. An iPhone keeps a home-screen app's cookies apart from Safari's, so you log in once more inside it. Installing on Android shares your admin URL with Google; [Security](/security#installing-on-a-phone) explains why that's acceptable.
+
 ## Logs
 
 **Live Worker logs.** Leave this running, reproduce the problem, and watch:

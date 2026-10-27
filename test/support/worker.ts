@@ -10,6 +10,7 @@ export type Reply = {
   status: number;
   headers: Headers;
   text: string;
+  bytes: Uint8Array;
   location: string | null;
   setCookies: string[];
 };
@@ -26,9 +27,10 @@ export async function request(
   const { env: overrides, ...rest } = init;
   const ctx = createExecutionContext();
   const res = await worker.fetch(new Request(new URL(path, ORIGIN), rest), overrides ? { ...env, ...overrides } : env, ctx);
-  const text = await res.text();
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const text = new TextDecoder().decode(bytes);
   await waitOnExecutionContext(ctx);
-  return { status: res.status, headers: res.headers, text, location: res.headers.get('Location'), setCookies: res.headers.getSetCookie() };
+  return { status: res.status, headers: res.headers, text, bytes, location: res.headers.get('Location'), setCookies: res.headers.getSetCookie() };
 }
 
 export async function runScheduled(cron: string): Promise<void> {

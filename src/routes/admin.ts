@@ -166,6 +166,7 @@ adminRoutes.get('/setup', async (c) => {
   return c.html(
     layout({
       title: 'Create password',
+      app: base,
       body: html`
         <h1>Create your password</h1>
         <p>This page is only shown once. Pick a password you will remember — there is no email reset.</p>
@@ -192,7 +193,7 @@ adminRoutes.post('/setup', async (c) => {
     return c.html(
       layout({
         title: 'Create password',
-        body: html`<p class="err">Use at least 8 characters.</p><p><a href="${base}/setup">Back</a></p>`,
+        body: html`<p class="err">Use at least 8 characters.</p><p><a class="btn secondary" href="${base}/setup">Back</a></p>`,
       }),
       400,
     );
@@ -201,7 +202,7 @@ adminRoutes.post('/setup', async (c) => {
     return c.html(
       layout({
         title: 'Create password',
-        body: html`<p class="err">Those two passwords did not match.</p><p><a href="${base}/setup">Back</a></p>`,
+        body: html`<p class="err">Those two passwords did not match.</p><p><a class="btn secondary" href="${base}/setup">Back</a></p>`,
       }),
       400,
     );
@@ -233,6 +234,7 @@ adminRoutes.post('/setup', async (c) => {
 function loginPage(opts: { base: string; csrf: string; error?: string; lockedFor?: number }) {
   return layout({
     title: 'Log in',
+    app: opts.base,
     body: html`
       <h1>Log in</h1>
       ${opts.error ? html`<p class="err">${opts.error}</p>` : html``}
@@ -409,7 +411,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
       <div class="banner">
         <b>${configProblems.length === 1 ? 'A Worker secret needs attention.' : `${String(configProblems.length)} Worker secrets need attention.`}</b>
         Whoever set this up should fix these and deploy again.
-        <table style="margin-top:0.55rem">
+        <div class="table-wrap"><table style="margin-top:0.55rem">
           <tr><th>Secret</th><th>What is wrong</th><th>Command that fixes it</th></tr>
           ${configProblems.map(
             (p) => html`
@@ -420,7 +422,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
               </tr>
             `,
           )}
-        </table>
+        </table></div>
       </div>
     `);
   }
@@ -460,7 +462,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
         ${accounts.length === 0
           ? html`<p>No Instagram account connected yet. <a href="/connect">Connect one</a> — takes about 20 seconds.</p>`
           : html`
-              <table>
+              <div class="table-wrap"><table>
                 <thead>
                   <tr>
                     <th>Account</th>
@@ -481,7 +483,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                     </tr>`;
                   })}
                 </tbody>
-              </table>
+              </table></div>
             `}
 
         <h2>Last 20 sends</h2>
@@ -495,7 +497,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
               comments or Instagram may hide them from this program.
             </p>`
           : html`
-              <table>
+              <div class="table-wrap"><table>
                 <thead>
                   <tr>
                     <th>When</th>
@@ -513,9 +515,9 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                       <td>
                         ${s.dm_status === 'failed' && s.error
                           ? html`<span class="err">Send failed.</span>
-                              <div class="muted">${s.error}</div>`
+                              <div class="muted detail">${s.error}</div>`
                           : s.error
-                            ? html`<span class="muted">${s.error}</span>`
+                            ? html`<span class="muted detail">${s.error}</span>`
                             : html``}
                         ${s.reply_status === 'skipped'
                           ? html`<div class="muted">Public reply not posted, because no DM went out.</div>`
@@ -524,7 +526,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                     </tr>`,
                   )}
                 </tbody>
-              </table>
+              </table></div>
             `}
 
         <h2>Did Instagram reach us?</h2>
@@ -536,7 +538,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
               URL is correct.
             </p>`
           : html`
-              <table>
+              <div class="table-wrap"><table>
                 <thead>
                   <tr>
                     <th>When</th>
@@ -555,11 +557,11 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                           : e.status === 'unsigned'
                             ? 'Not signed'
                             : e.status}</td>
-                      <td class="muted">${e.error ?? e.object ?? ''}</td>
+                      <td class="muted detail">${e.error ?? e.object ?? ''}</td>
                     </tr>`,
                   )}
                 </tbody>
-              </table>
+              </table></div>
             `}
 
         <h2>Daily check</h2>
@@ -834,6 +836,9 @@ adminRoutes.get('/rules', async (c) => {
   const session = c.get('session');
   const accounts = await listAccounts(c.env.DB);
   const accountMap = new Map(accounts.map((a) => [a.ig_user_id, a.username]));
+  // With one account the column says the same thing on every row, and dropping
+  // it is what lets the action buttons fit on a phone without scrolling.
+  const showAccount = accounts.length > 1;
   const rules = await listRules(c.env.DB);
   return c.html(
     layout({
@@ -847,11 +852,11 @@ adminRoutes.get('/rules', async (c) => {
         ${rules.length === 0
           ? html`<p>No rules yet.</p>`
           : html`
-              <table>
+              <div class="table-wrap"><table>
                 <thead>
                   <tr>
                     <th>Name</th>
-                    <th>Account</th>
+                    ${showAccount ? html`<th>Account</th>` : html``}
                     <th>Keywords</th>
                     <th>On</th>
                     <th></th>
@@ -863,7 +868,7 @@ adminRoutes.get('/rules', async (c) => {
                     const exclusions = parseKeywords(r.exclude_keywords);
                     return html`<tr>
                       <td>${r.label}</td>
-                      <td>@${accountMap.get(r.ig_user_id) ?? r.ig_user_id}</td>
+                      ${showAccount ? html`<td>@${accountMap.get(r.ig_user_id) ?? r.ig_user_id}</td>` : html``}
                       <td>
                         ${kws}
                         ${r.match_mode === 'contains'
@@ -875,7 +880,7 @@ adminRoutes.get('/rules', async (c) => {
                       </td>
                       <td>${r.active ? 'Yes' : 'Paused'}</td>
                       <td class="actions">
-                        <a href="${base}/rules/${String(r.id)}/edit">Edit</a>
+                        <a class="btn secondary" href="${base}/rules/${String(r.id)}/edit">Edit</a>
                         <form method="post" action="${base}/rules/${String(r.id)}/toggle">
                           ${csrfField(session.csrf)}
                           <button class="secondary" type="submit">${r.active ? 'Pause' : 'Resume'}</button>
@@ -885,7 +890,7 @@ adminRoutes.get('/rules', async (c) => {
                     </tr>`;
                   })}
                 </tbody>
-              </table>
+              </table></div>
             `}
       `,
     }),
@@ -1111,14 +1116,14 @@ adminRoutes.get('/rules/:id/delete', async (c) => {
       csrf: session.csrf,
       body: html`
         <h1>Delete this rule?</h1>
-        <table>
+        <div class="table-wrap"><table>
           <tr><th>Name</th><td>${rule.label}</td></tr>
           <tr><th>Account</th><td>@${account?.username ?? rule.ig_user_id}</td></tr>
           <tr>
             <th>Keywords</th>
             <td>${rule.match_all === 1 ? EVERY_COMMENT_WORDS : parseKeywords(rule.keywords).join(', ')}</td>
           </tr>
-        </table>
+        </table></div>
         <p>
           Matching comments will stop getting a private message. This cannot be undone. To stop it for now
           and keep it, pause it instead.
@@ -1193,7 +1198,7 @@ adminRoutes.post('/test', async (c) => {
   const exclusions = excluded.length
     ? html`
         <h2>${match ? 'Passed over first' : 'Skipped because of an exclusion'}</h2>
-        <table>
+        <div class="table-wrap"><table>
           <thead><tr><th>Rule</th><th>Keyword found</th><th>Exclusion found</th></tr></thead>
           <tbody>
             ${excluded.map(
@@ -1201,7 +1206,7 @@ adminRoutes.post('/test', async (c) => {
                 html`<tr><td>${e.rule.label}</td><td>${e.keyword ?? EVERY_COMMENT_WORDS}</td><td>${e.exclusion}</td></tr>`,
             )}
           </tbody>
-        </table>
+        </table></div>
         ${match
           ? html`<p class="muted">An exclusion only stops its own rule, so the next matching rule replies instead.</p>`
           : html``}
@@ -1221,7 +1226,7 @@ adminRoutes.post('/test', async (c) => {
               <div class="ok">
                 This would match the rule <b>${match.rule.label}</b>.
               </div>
-              <table>
+              <div class="table-wrap"><table>
                 ${match.keyword === null
                   ? html`<tr><th>Matched because</th><td>This rule replies to every comment on this post.</td></tr>`
                   : html`
@@ -1229,7 +1234,7 @@ adminRoutes.post('/test', async (c) => {
                       <tr><th>Matching</th><td>${MATCH_MODE_WORDS[match.rule.match_mode]}</td></tr>
                     `}
                 ${readAs}
-              </table>
+              </table></div>
               ${usesName
                 ? html`<p class="muted">
                     <code>{username}</code> is filled in with <b>${SAMPLE_USERNAME}</b>, a sample name. Real
@@ -1257,18 +1262,18 @@ adminRoutes.post('/test', async (c) => {
                   exclusions, so it would be skipped.
                 </p>
                 ${exclusions}
-                <table>${readAs}</table>
+                <div class="table-wrap"><table>${readAs}</table></div>
               `
             : html`
                 <p>No rule would match this comment. Nothing would be sent.</p>
-                <table>${readAs}</table>
+                <div class="table-wrap"><table>${readAs}</table></div>
                 <p class="muted">
                   Rules set to <b>${MATCH_MODE_WORDS.word}</b> skip keywords inside longer words and hashtags: “guide”
                   does not match “guides” or “#guide2026”. Paused rules are not tested, and a rule that replies to
                   every comment is only tested on its own post.
                 </p>
               `}
-        <p><a href="${base}/test">Test another</a></p>
+        <p><a class="btn secondary" href="${base}/test">Test another</a></p>
       `,
     }),
   );
@@ -1300,7 +1305,7 @@ ${callback}/</pre>
         ${accounts.length === 0
           ? html`<p class="muted">None connected yet.</p>`
           : html`
-              <table>
+              <div class="table-wrap"><table>
                 <thead>
                   <tr>
                     <th>Account</th>
@@ -1333,7 +1338,7 @@ ${callback}/</pre>
                     </tr>`;
                   })}
                 </tbody>
-              </table>
+              </table></div>
             `}
       `,
     }),
