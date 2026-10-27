@@ -143,6 +143,35 @@ describe('the admin home page', () => {
   });
 });
 
+describe('getting started on Home', () => {
+  it('lists the three steps on a new install, and ticks each off as it happens', async () => {
+    const admin = await signedInAdmin();
+    let page = textOf((await admin.get(adminPath('/'))).text);
+    expect(page).toContain('Get started');
+    expect(page).toContain('Connect your Instagram account . It takes about 20 seconds.');
+    expect(page).toContain('Write your first rule , or start from a template.');
+    expect(page).toContain('Test your rule with a sample comment.');
+
+    await seedAccount();
+    await seedRule({ keywords: ['guide'] });
+    page = textOf((await admin.get(adminPath('/'))).text);
+    expect(page).toContain('Done: connected @creator.');
+    expect(page).toContain('Done: one rule written.');
+    expect(page).toContain('Test your rule with a sample comment.');
+
+    await postWebhook(commentPayload({ text: 'guide' }));
+    expect((await admin.get(adminPath('/'))).text).not.toContain('Get started');
+  });
+
+  it('says the connections were checked after the button is pressed', async () => {
+    const admin = await signedInAdmin();
+    await admin.get(adminPath('/'));
+    const res = await admin.submit(adminPath('/run-cron'));
+    expect(res.location).toBe(adminPath('/?done=checked'));
+    expect((await admin.get(res.location!)).text).toContain('<div class="ok" role="status">Connections checked.');
+  });
+});
+
 describe('the admin error page', () => {
   it('says the tables are missing when one is', async () => {
     const admin = await signedInAdmin();

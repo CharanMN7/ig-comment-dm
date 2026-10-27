@@ -1,5 +1,6 @@
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { html } from 'hono/html';
+import type { HtmlEscapedString } from 'hono/utils/html';
 import {
   CRON_STALE_SECONDS,
   DM_TEXT_MAX,
@@ -37,7 +38,7 @@ import {
   upsertAccount,
 } from '../db.ts';
 import { findConfigProblems } from '../config.ts';
-import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
+import { type Section, csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
 import {
   EXCLUSION_TOO_SHORT_MESSAGE,
   KEYWORD_TOO_SHORT_MESSAGE,
@@ -160,28 +161,84 @@ function formOf(c: { get: (key: 'form') => Record<string, string> }): Record<str
   return c.get('form') ?? {};
 }
 
-adminRoutes.get('/setup', async (c) => {
-  if (await passwordConfigured(c.env)) return c.redirect(`${c.get('adminBase')}/login`, 302);
+type AdminContext = Context<{ Bindings: Env; Variables: Vars }>;
+
+/**
+ * What a page says after one of its forms posts and redirects back. Only the
+ * code travels in the URL, so a crafted link can show one of these lines and
+ * nothing else.
+ */
+const DONE = new Map<string, (base: string) => HtmlEscapedString | Promise<HtmlEscapedString>>([
+  ['rule-saved', (base) => html`Rule saved. <a href="${base}/test">Try it with a sample comment</a>.`],
+  ['rule-paused', () => html`Rule paused. It won’t reply to anyone until you resume it.`],
+  ['rule-resumed', () => html`Rule resumed. It replies to new comments again.`],
+  ['rule-deleted', () => html`Rule deleted.`],
+  ['account-paused', () => html`Account paused. None of its rules reply until you resume it.`],
+  ['account-resumed', () => html`Account resumed. Its rules reply to new comments again.`],
+  ['checked', () => html`Connections checked. Anything that needs you is listed at the top.`],
+]);
+
+function redirectDone(c: AdminContext, path: string, done: string) {
+  return c.redirect(`${c.get('adminBase')}${path}?done=${done}`, 302);
+}
+
+function doneNote(c: AdminContext) {
+  const message = DONE.get(c.req.query('done') ?? '');
+  return message ? html`<div class="ok" role="status">${message(c.get('adminBase'))}</div>` : html``;
+}
+
+/** A 404 inside the panel, with the nav and a way back, for someone already logged in. */
+function notFoundPage(c: AdminContext, opts: { section?: Section; message: string; back: string; backLabel: string }) {
   const base = c.get('adminBase');
-  const session = c.get('session');
   return c.html(
     layout({
-      title: 'Create password',
-      app: base,
+      title: 'Not found',
+      base,
+      section: opts.section,
+      csrf: c.get('session').csrf,
       body: html`
-        <h1>Create your password</h1>
-        <p>This page is only shown once. Pick a password you will remember — there is no email reset.</p>
-        <form method="post" action="${base}/setup">
-          ${csrfField(session.csrf)}
-          <label for="password">Password</label>
-          <input id="password" name="password" type="password" required minlength="8" autocomplete="new-password" />
-          <label for="confirm">Type it again</label>
-          <input id="confirm" name="confirm" type="password" required minlength="8" autocomplete="new-password" />
-          <div class="row"><button type="submit">Save password</button></div>
-        </form>
+        <h1>Not found</h1>
+        <p>${opts.message}</p>
+        <p><a class="btn secondary" href="${base}${opts.back}">${opts.backLabel}</a></p>
       `,
     }),
+    404,
   );
+}
+
+function ruleNotFound(c: AdminContext) {
+  return notFoundPage(c, {
+    section: 'rules',
+    message: 'That rule doesn’t exist. It may have been deleted.',
+    back: '/rules',
+    backLabel: 'Back to rules',
+  });
+}
+
+function setupPage(opts: { base: string; csrf: string; error?: string }) {
+  return layout({
+    title: 'Create password',
+    app: opts.base,
+    body: html`
+      <h1>Create your password</h1>
+      ${opts.error ? html`<p class="err" role="alert">${opts.error}</p>` : html``}
+      <p>This page is only shown once. Pick a password you will remember — there is no email reset.</p>
+      <form method="post" action="${opts.base}/setup">
+        ${csrfField(opts.csrf)}
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" required minlength="8" autocomplete="new-password" />
+        <p class="muted">At least 8 characters.</p>
+        <label for="confirm">Type it again</label>
+        <input id="confirm" name="confirm" type="password" required minlength="8" autocomplete="new-password" />
+        <div class="row"><button type="submit">Save password</button></div>
+      </form>
+    `,
+  });
+}
+
+adminRoutes.get('/setup', async (c) => {
+  if (await passwordConfigured(c.env)) return c.redirect(`${c.get('adminBase')}/login`, 302);
+  return c.html(setupPage({ base: c.get('adminBase'), csrf: c.get('session').csrf }));
 });
 
 adminRoutes.post('/setup', async (c) => {
@@ -190,24 +247,9 @@ adminRoutes.post('/setup', async (c) => {
   const password = form.password ?? '';
   const confirm = form.confirm ?? '';
   const base = c.get('adminBase');
-  if (password.length < 8) {
-    return c.html(
-      layout({
-        title: 'Create password',
-        body: html`<p class="err">Use at least 8 characters.</p><p><a class="btn secondary" href="${base}/setup">Back</a></p>`,
-      }),
-      400,
-    );
-  }
-  if (password !== confirm) {
-    return c.html(
-      layout({
-        title: 'Create password',
-        body: html`<p class="err">Those two passwords did not match.</p><p><a class="btn secondary" href="${base}/setup">Back</a></p>`,
-      }),
-      400,
-    );
-  }
+  const problem =
+    password.length < 8 ? 'Use at least 8 characters.' : password !== confirm ? 'Those two passwords did not match.' : null;
+  if (problem) return c.html(setupPage({ base, csrf: c.get('session').csrf, error: problem }), 400);
   try {
     const { hash, salt } = await hashPassword(password);
     await systemSet(c.env.DB, 'admin_password_hash', hash);
@@ -238,7 +280,7 @@ function loginPage(opts: { base: string; csrf: string; error?: string; lockedFor
     app: opts.base,
     body: html`
       <h1>Log in</h1>
-      ${opts.error ? html`<p class="err">${opts.error}</p>` : html``}
+      ${opts.error ? html`<p class="err" role="alert">${opts.error}</p>` : html``}
       ${opts.lockedFor
         ? html`<p class="muted">
             Too many wrong passwords. Try again in ${describeLock(opts.lockedFor)}. Each further
@@ -351,6 +393,32 @@ function totalsTiles(totals: SendTotals[]) {
   `;
 }
 
+/** Until the first DM goes out, Home leads with the three steps that get there. */
+function gettingStarted(base: string, accounts: { username: string }[], ruleCount: number, anySent: boolean) {
+  const done = html`<b>Done:</b>`;
+  return html`
+    <h2>Get started</h2>
+    <ol class="steps">
+      <li>
+        ${accounts.length
+          ? html`${done} connected ${accounts.map((a) => `@${a.username}`).join(', ')}.`
+          : html`<a href="/connect">Connect your Instagram account</a>. It takes about 20 seconds.`}
+      </li>
+      <li>
+        ${ruleCount
+          ? html`${done} ${ruleCount === 1 ? 'one rule' : `${String(ruleCount)} rules`} written.`
+          : html`<a href="${base}/rules">Write your first rule</a>, or start from a template.`}
+      </li>
+      <li>
+        ${anySent
+          ? html`${done} your first DM went out.`
+          : html`<a href="${base}/test">Test your rule</a> with a sample comment. Then ask a friend to comment
+              from their own account: their DM shows up under Last 20 sends.`}
+      </li>
+    </ol>
+  `;
+}
+
 adminRoutes.on('GET', ['/', ''], async (c) => {
   const base = c.get('adminBase');
   const session = c.get('session');
@@ -377,6 +445,9 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   const cron = jobState(health.lastCronOkAt, CRON_STALE_SECONDS, CRON_FIRST_RUN_SECONDS, health.firstSeenAt ?? now, now);
   const reconnect = accounts.filter((a) => a.needs_reconnect === 1 || a.token_expires_at <= now);
   const configProblems = findConfigProblems(c.env);
+  const anySent = (totals.at(-1)?.sent ?? 0) > 0;
+  // Gone for good once a DM has gone out, which also spares Home the rules query.
+  const steps = anySent && accounts.length ? html`` : gettingStarted(base, accounts, (await listRules(c.env.DB)).length, anySent);
 
   const banners = [];
   if (reconnect.length) {
@@ -440,10 +511,13 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
     layout({
       title: 'Home',
       base,
+      section: 'home',
       csrf: c.get('session').csrf,
       body: html`
+        ${doneNote(c)}
         ${banners}
         <h1>Home</h1>
+        ${steps}
         ${totalsTiles(totals)}
         <p class="muted">
           Days start at 00:00 UTC, and the 7- and 30-day totals include today. People reached counts each
@@ -583,7 +657,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
 
 adminRoutes.post('/run-cron', async (c) => {
   await runCron(c.env);
-  return c.redirect(`${c.get('adminBase')}/`, 302);
+  return redirectDone(c, '/', 'checked');
 });
 
 function looksLikePostUrl(s: string): boolean {
@@ -874,8 +948,10 @@ adminRoutes.get('/rules', async (c) => {
     layout({
       title: 'Rules',
       base,
+      section: 'rules',
       csrf: c.get('session').csrf,
       body: html`
+        ${doneNote(c)}
         <h1>Rules</h1>
         <p class="muted">When a comment matches a keyword, we send that person one private message.</p>
         <div class="row">
@@ -891,7 +967,7 @@ adminRoutes.get('/rules', async (c) => {
                     <th>Name</th>
                     ${showAccount ? html`<th>Account</th>` : html``}
                     <th>Keywords</th>
-                    <th>On</th>
+                    <th>Status</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -911,7 +987,7 @@ adminRoutes.get('/rules', async (c) => {
                           ? html`<div class="muted">Exclusions: ${exclusions.join(', ')}</div>`
                           : html``}
                       </td>
-                      <td>${r.active ? 'Yes' : 'Paused'}</td>
+                      <td>${r.active ? 'On' : 'Paused'}</td>
                       <td class="actions">
                         <a class="btn secondary" href="${base}/rules/${String(r.id)}/edit">Edit</a>
                         <form method="post" action="${base}/rules/${String(r.id)}/toggle">
@@ -939,6 +1015,7 @@ adminRoutes.get('/rules/new', async (c) => {
       layout({
         title: 'New rule',
         base,
+        section: 'rules',
         csrf: c.get('session').csrf,
         body: html`<h1>New rule</h1><p>Connect an Instagram account first on the <a href="${base}/accounts">Accounts</a> page.</p>`,
       }),
@@ -960,6 +1037,7 @@ adminRoutes.get('/rules/new', async (c) => {
     layout({
       title: 'New rule',
       base,
+      section: 'rules',
       csrf: c.get('session').csrf,
       body: html`<h1>New rule</h1>${intro}${ruleForm({
         base,
@@ -1089,6 +1167,7 @@ adminRoutes.post('/rules', async (c) => {
       layout({
         title: 'New rule',
         base,
+        section: 'rules',
         csrf: c.get('session').csrf,
         body: html`<h1>New rule</h1>${ruleForm({
           base,
@@ -1104,19 +1183,20 @@ adminRoutes.post('/rules', async (c) => {
     );
   }
   await insertRule(c.env.DB, { ...fields.row, created_at: nowSeconds() });
-  return c.redirect(`${base}/rules`, 302);
+  return redirectDone(c, '/rules', 'rule-saved');
 });
 
 adminRoutes.get('/rules/:id/edit', async (c) => {
   const id = Number(c.req.param('id'));
   const rule = await getRule(c.env.DB, id);
   const base = c.get('adminBase');
-  if (!rule) return c.notFound();
+  if (!rule) return ruleNotFound(c);
   const accounts = await listAccounts(c.env.DB);
   return c.html(
     layout({
       title: 'Edit rule',
       base,
+      section: 'rules',
       csrf: c.get('session').csrf,
       body: html`<h1>Edit rule</h1>${ruleForm({
         base,
@@ -1133,7 +1213,7 @@ adminRoutes.get('/rules/:id/edit', async (c) => {
 adminRoutes.post('/rules/:id', async (c) => {
   const id = Number(c.req.param('id'));
   const existing = await getRule(c.env.DB, id);
-  if (!existing) return c.notFound();
+  if (!existing) return ruleNotFound(c);
   const fields = readRuleFields(formOf(c));
   const base = c.get('adminBase');
   if ('error' in fields) {
@@ -1142,6 +1222,7 @@ adminRoutes.post('/rules/:id', async (c) => {
       layout({
         title: 'Edit rule',
         base,
+        section: 'rules',
         csrf: c.get('session').csrf,
         body: html`<h1>Edit rule</h1>${ruleForm({
           base,
@@ -1157,17 +1238,20 @@ adminRoutes.post('/rules/:id', async (c) => {
     );
   }
   await updateRule(c.env.DB, id, fields.row);
-  return c.redirect(`${base}/rules`, 302);
+  return redirectDone(c, '/rules', 'rule-saved');
 });
 
 adminRoutes.post('/rules/:id/toggle', async (c) => {
-  await toggleRule(c.env.DB, Number(c.req.param('id')));
-  return c.redirect(`${c.get('adminBase')}/rules`, 302);
+  const id = Number(c.req.param('id'));
+  await toggleRule(c.env.DB, id);
+  const rule = await getRule(c.env.DB, id);
+  if (!rule) return c.redirect(`${c.get('adminBase')}/rules`, 302);
+  return redirectDone(c, '/rules', rule.active ? 'rule-resumed' : 'rule-paused');
 });
 
 adminRoutes.get('/rules/:id/delete', async (c) => {
   const rule = await getRule(c.env.DB, Number(c.req.param('id')));
-  if (!rule) return c.notFound();
+  if (!rule) return ruleNotFound(c);
   const base = c.get('adminBase');
   const session = c.get('session');
   const account = await getAccount(c.env.DB, rule.ig_user_id);
@@ -1175,6 +1259,7 @@ adminRoutes.get('/rules/:id/delete', async (c) => {
     layout({
       title: 'Delete rule',
       base,
+      section: 'rules',
       csrf: session.csrf,
       body: html`
         <h1>Delete this rule?</h1>
@@ -1204,7 +1289,7 @@ adminRoutes.get('/rules/:id/delete', async (c) => {
 
 adminRoutes.post('/rules/:id/delete', async (c) => {
   await deleteRule(c.env.DB, Number(c.req.param('id')));
-  return c.redirect(`${c.get('adminBase')}/rules`, 302);
+  return redirectDone(c, '/rules', 'rule-deleted');
 });
 
 adminRoutes.get('/test', async (c) => {
@@ -1215,6 +1300,7 @@ adminRoutes.get('/test', async (c) => {
     layout({
       title: 'Test',
       base,
+      section: 'test',
       csrf: c.get('session').csrf,
       body: html`
         <h1>Test a comment</h1>
@@ -1236,7 +1322,7 @@ adminRoutes.get('/test', async (c) => {
                   ${posts.map((p) => html`<option value="${p.id}">${p.label}</option>`)}
                 </select>
                 <p class="muted">
-                  Leave on all posts unless you limited a rule to one reel. A rule that replies to every comment
+                  Leave on all posts unless you limited a rule to one post. A rule that replies to every comment
                   only shows up when you pick its post here.
                 </p>
                 <div class="row"><button type="submit">See what would happen</button></div>
@@ -1280,6 +1366,7 @@ adminRoutes.post('/test', async (c) => {
     layout({
       title: 'Test',
       base,
+      section: 'test',
       csrf: c.get('session').csrf,
       body: html`
         <h1>Test result</h1>
@@ -1351,19 +1438,24 @@ adminRoutes.get('/accounts', async (c) => {
     layout({
       title: 'Accounts',
       base,
+      section: 'accounts',
       csrf: c.get('session').csrf,
       body: html`
+        ${doneNote(c)}
         <h1>Accounts</h1>
         <p>Connect the Instagram account you post from. You can connect more than one if they are all yours.</p>
-        <p class="muted">
-          In Meta: Instagram → API setup with Instagram login → click <b>Set up</b> under
-          “3. Set up Instagram business login”. Paste the first line as <b>Redirect URL</b>. Then
-          Business login settings → OAuth redirect URIs (add both lines). Use the Instagram App ID
-          from that same page, not the Facebook app id at the top of the dashboard.
-        </p>
-        <pre class="raw">${callback}
-${callback}/</pre>
         <p><a class="btn" href="/connect">Connect a new account</a></p>
+        <details ${accounts.length ? '' : 'open'}>
+          <summary>Addresses to save in Meta first</summary>
+          <p class="muted">
+            In Meta: Instagram → API setup with Instagram login → click <b>Set up</b> under
+            “3. Set up Instagram business login”. Paste the first line as <b>Redirect URL</b>. Then
+            Business login settings → OAuth redirect URIs (add both lines). Use the Instagram App ID
+            from that same page, not the Facebook app id at the top of the dashboard.
+          </p>
+          <pre class="raw">${callback}
+${callback}/</pre>
+        </details>
         ${accounts.length === 0
           ? html`<p class="muted">None connected yet.</p>`
           : html`
@@ -1382,11 +1474,11 @@ ${callback}/</pre>
                     return html`<tr>
                       <td>@${a.username}</td>
                       <td>
-                        ${a.active ? 'Active' : 'Paused'}
+                        ${a.active ? 'Watching comments' : 'Paused'}
                         · ${expired ? html`<span class="err">needs reconnect</span>` : `${days} days left`}
                       </td>
                       <td class="actions">
-                        <a class="btn" href="/connect?reconnect=1">Reconnect</a>
+                        <a class="btn${expired ? '' : ' secondary'}" href="/connect?reconnect=1">Reconnect</a>
                         ${a.active
                           ? html`<form method="post" action="${base}/accounts/${a.ig_user_id}/deactivate">
                               ${csrfField(session.csrf)}
@@ -1409,12 +1501,12 @@ ${callback}/</pre>
 
 adminRoutes.post('/accounts/:id/deactivate', async (c) => {
   await setAccountActive(c.env.DB, c.req.param('id'), 0);
-  return c.redirect(`${c.get('adminBase')}/accounts`, 302);
+  return redirectDone(c, '/accounts', 'account-paused');
 });
 
 adminRoutes.post('/accounts/:id/activate', async (c) => {
   await setAccountActive(c.env.DB, c.req.param('id'), 1);
-  return c.redirect(`${c.get('adminBase')}/accounts`, 302);
+  return redirectDone(c, '/accounts', 'account-resumed');
 });
 
 /** Unlisted. Used by scripts/selftest.ts against a deployed URL. */
@@ -1440,3 +1532,10 @@ adminRoutes.get('/selftest/status', async (c) => {
   const row = commentId ? await getSent(c.env.DB, commentId) : null;
   return c.json({ last_cron_ok_at: lastCron, count, row });
 });
+
+// Last, so it only answers paths nothing above did. The login middleware has
+// already run, so only a logged-in operator sees this; a wrong secret still
+// gets the bare 404.
+adminRoutes.get('*', (c) =>
+  notFoundPage(c, { message: 'There’s no page at this address.', back: '/', backLabel: 'Go to Home' }),
+);
