@@ -20,6 +20,8 @@ updates:
     open-pull-requests-limit: 5
     labels: [dependencies]
 
+  # Workflows pin each action to a commit SHA, with its version in a comment.
+  # This keeps both current.
   - package-ecosystem: github-actions
     directory: /
     schedule:

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync, readdirSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
@@ -1367,6 +1368,26 @@ describe('login throttle', () => {
     assert.equal(describeLock(61), '2 minutes');
     assert.equal(describeLock(119), '2 minutes');
     assert.equal(describeLock(240), '4 minutes');
+  });
+});
+
+describe('GitHub Actions workflows', () => {
+  it('pin every action to a full commit SHA, with the version in a comment', () => {
+    // A tag like @v7 can be moved to other code after review; a SHA can't.
+    // Dependabot reads the comment to keep the pin current.
+    const dir = new URL('../.github/workflows/', import.meta.url);
+    const uses = readdirSync(dir)
+      .filter((f) => /\.ya?ml$/.test(f))
+      .flatMap((f) =>
+        readFileSync(new URL(f, dir), 'utf8')
+          .split('\n')
+          .filter((line) => /^\s*(-\s+)?uses:/.test(line))
+          .map((line) => `${f}: ${line.trim()}`),
+      );
+    assert.ok(uses.length > 0, 'no workflow steps found');
+    for (const line of uses) {
+      assert.match(line, /uses: [\w.-]+\/[\w./-]+@[0-9a-f]{40} # v\d+(\.\d+)*$/, line);
+    }
   });
 });
 
