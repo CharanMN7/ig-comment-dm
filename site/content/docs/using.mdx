@@ -39,6 +39,16 @@ The post dropdown lists your recent posts and reels after you connect. A post's 
   <div className="shot" data-shot="admin-12-new-rule.png">Screenshot coming</div>
 </Frame>
 
+### Start from a template
+
+The Rules page lists eight starting points: a free guide, a product link, a price list, a booking page, a waitlist, an event RSVP, a menu and a giveaway entry. Picking one opens the new-rule form with the keywords, the DM and three public replies already written. Nothing is saved until you press **Save rule**, and you can change every field first.
+
+Each template has `PASTE-YOUR-LINK-HERE` where your link goes. The form won't save while that's still in the DM or a reply, or while either points at a sample address such as `example.com` or `calendly.com/example`, so a follower is never sent a page that isn't yours.
+
+The free guide answers `guía` and `गाइड` as well as `guide`, for followers who comment in Spanish, Portuguese or Hindi. Delete the ones your audience won't type. The giveaway entry replies to every comment, so it needs its post picked under **Which posts**.
+
+The templates are plain text in `src/templates.ts`, so a better one is a pull request away.
+
 ### How keywords match
 
 - Matching ignores case, emoji and punctuation, on both the keyword and the comment: `guide` matches `Guide!` and `guide 🙏`.

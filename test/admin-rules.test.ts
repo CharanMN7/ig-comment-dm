@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { EXCLUSION_TOO_SHORT_MESSAGE, KEYWORD_TOO_SHORT_MESSAGE } from '../src/match.ts';
+import { MATCH_ALL_NEEDS_POST_MESSAGE } from '../src/routes/admin.ts';
+import { LINK_MARKER, TEMPLATES, findTemplate } from '../src/templates.ts';
 import { meta } from './support/meta.ts';
 import { ACCESS_TOKEN, IG_USER, NOW, accountRow, ruleRows, seedAccount, seedRule, sentRows } from './support/seed.ts';
 import { adminPath, commentPayload, postWebhook, signedInAdmin } from './support/worker.ts';
@@ -16,7 +18,7 @@ const validRule = {
   match_mode: 'word',
   exclude_keywords: '',
   media_id: '',
-  dm_text: 'Here it is: https://example.com/guide',
+  dm_text: 'Here it is: https://ana.studio/guide',
   public_reply_text: '',
 };
 
@@ -123,6 +125,21 @@ describe('creating a rule from the admin form', () => {
       'The public reply must be 1,000 characters or fewer. This one is 991, and each {username} can add up to 20 characters for a long name, so it could reach 1,031.',
     ],
     ['a public reply that is only {username}', { public_reply_text: '@{username}' }, 'The public reply needs more than {username}.'],
+    [
+      'the template link marker still in the DM',
+      { dm_text: `Here it is: ${LINK_MARKER}` },
+      `The private message still says ${LINK_MARKER}. Replace it with your own link, or delete it, before saving.`,
+    ],
+    [
+      'a sample link in the DM',
+      { dm_text: 'Book here: calendly.com/example' },
+      'The private message links to “calendly.com/example”, a sample address that isn’t yours.',
+    ],
+    [
+      'a sample link in the public reply',
+      { public_reply_text: 'Also on https://example.org/guide' },
+      'The public reply links to “https://example.org/guide”, a sample address that isn’t yours.',
+    ],
   ])('rejects a rule with %s and keeps what was typed', async (_, fields, message) => {
     const admin = await adminWithAccount();
     await admin.get(adminPath('/rules/new'));
@@ -428,6 +445,145 @@ describe('public reply variations on the rule form', () => {
     expect(res.status).toBe(400);
     expect(res.text).toContain('Reply 5 needs more than {username}.');
     expect(await ruleRows()).toMatchObject([{ public_reply_text: 'Sent!' }]);
+  });
+});
+
+/** Unescapes what hono/html escaped, so a value read off the page is what a browser would submit. */
+function unescaped(s: string): string {
+  return s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
+/** The rule form's fields as a browser would submit them: an unticked checkbox is left out. */
+function formFields(page: string): Record<string, string> {
+  const field = (re: RegExp) => unescaped(page.match(re)?.[1] ?? '');
+  const textarea = (name: string) => field(new RegExp(`<textarea id="${name}" name="${name}"[^>]*>([\\s\\S]*?)</textarea>`));
+  const selected = (name: string) => field(new RegExp(`<select id="${name}" name="${name}"[^>]*>[\\s\\S]*?<option value="([^"]*)" selected>`));
+  const fields: Record<string, string> = {
+    ig_user_id: selected('ig_user_id'),
+    label: field(/<input id="label" name="label" type="text" required value="([^"]*)"/),
+    media_id: selected('media_id'),
+    keywords: textarea('keywords'),
+    match_mode: field(/name="match_mode" value="(\w+)"\s+checked/),
+    exclude_keywords: textarea('exclude_keywords'),
+    dm_text: textarea('dm_text'),
+    public_reply_text: textarea('public_reply_text'),
+  };
+  for (const n of [2, 3, 4, 5]) fields[`public_reply_text_${n}`] = textarea(`public_reply_text_${n}`);
+  if (/name="match_all" value="1"\s+checked/.test(page)) fields.match_all = '1';
+  return fields;
+}
+
+describe('starting a rule from a template', () => {
+  const LINK = 'https://ana.studio/start';
+  const withLink = (fields: Record<string, string>) =>
+    Object.fromEntries(Object.entries(fields).map(([k, v]) => [k, v.replaceAll(LINK_MARKER, LINK)]));
+
+  it('shows the gallery on an empty Rules page, with a link to each template', async () => {
+    const admin = await adminWithAccount();
+    const page = (await admin.get(adminPath('/rules'))).text;
+    expect(page).toContain('No rules yet. Start from a template below, or press New rule for a blank form.');
+    expect(page).toContain('<h2 id="templates">Start from a template</h2>');
+    expect(page).not.toContain('<table>');
+    for (const t of TEMPLATES) {
+      expect(page).toContain(`<a href="${adminPath(`/rules/new?template=${t.id}`)}"><b>${t.name}</b><span class="muted">${escaped(t.forWhom)}</span></a>`);
+    }
+  });
+
+  it('keeps the gallery under the rules once there are some, with a link to it at the top', async () => {
+    const admin = await adminWithAccount();
+    await seedRule({ label: 'My guide rule' });
+    const page = (await admin.get(adminPath('/rules'))).text;
+    expect(page).toContain('<a class="btn secondary" href="#templates">Start from a template</a>');
+    expect(page).toContain('My guide rule');
+    expect(page).not.toContain('No rules yet');
+    expect(page.indexOf('</table>')).toBeLessThan(page.indexOf('<h2 id="templates">'));
+    for (const t of TEMPLATES) expect(page).toContain(`href="${adminPath(`/rules/new?template=${t.id}`)}"`);
+  });
+
+  it('links to the gallery from a blank new-rule page', async () => {
+    const admin = await adminWithAccount();
+    const page = (await admin.get(adminPath('/rules/new'))).text;
+    expect(page).toContain(`<a href="${adminPath('/rules')}#templates">start from a template</a>`);
+    expect(page).not.toContain('Filled in from');
+  });
+
+  it('fills in every field from a template, says what to change, and saves nothing', async () => {
+    const admin = await adminWithAccount();
+    const t = findTemplate('guide')!;
+    const page = await admin.get(adminPath('/rules/new?template=guide'));
+    expect(page.status).toBe(200);
+    expect(formFields(page.text)).toEqual({
+      ig_user_id: IG_USER,
+      label: 'Free guide',
+      media_id: '',
+      keywords: 'guide\nguía\nगाइड',
+      match_mode: 'word',
+      exclude_keywords: '',
+      dm_text: t.dm,
+      public_reply_text: t.publicReplies[0],
+      public_reply_text_2: t.publicReplies[1],
+      public_reply_text_3: t.publicReplies[2],
+      public_reply_text_4: '',
+      public_reply_text_5: '',
+    });
+    expect(page.text).toContain('<details open>');
+    expect(page.text).toContain('Filled in from <b>Free guide</b>. Nothing is saved until you press Save rule.');
+    expect(page.text).toContain(`Replace <code>${LINK_MARKER}</code> with your own link.`);
+    expect(page.text).toContain(`<a href="${adminPath('/rules')}#templates">Pick a different template</a>`);
+    expect(await ruleRows()).toEqual([]);
+  });
+
+  it.each(TEMPLATES.map((t) => [t.id, t] as const))('saves %s as filled in, once the link is put in', async (_, t) => {
+    meta.on('GET', '/me/media', {
+      json: { data: [{ id: '18000000000000777', caption: 'Win a set', permalink: 'https://www.instagram.com/p/xyz/', media_product_type: 'FEED' }] },
+    });
+    const admin = await adminWithAccount();
+    const fields = withLink(formFields((await admin.get(adminPath(`/rules/new?template=${t.id}`))).text));
+    const res = await admin.submit(adminPath('/rules'), t.matchAll ? { ...fields, media_id: '18000000000000777' } : fields);
+    expect(res.status).toBe(302);
+    expect(await ruleRows()).toMatchObject([
+      {
+        label: t.name,
+        keywords: JSON.stringify(t.keywords),
+        match_mode: 'word',
+        exclude_keywords: JSON.stringify(t.exclusions),
+        match_all: t.matchAll ? 1 : 0,
+        media_id: t.matchAll ? '18000000000000777' : null,
+        dm_text: t.dm.replaceAll(LINK_MARKER, LINK),
+        public_reply_text: JSON.stringify(t.publicReplies),
+      },
+    ]);
+  });
+
+  it('refuses to save a template with the link marker still in it, and keeps the form filled in', async () => {
+    const admin = await adminWithAccount();
+    const fields = formFields((await admin.get(adminPath('/rules/new?template=prices'))).text);
+    const res = await admin.submit(adminPath('/rules'), fields);
+    expect(res.status).toBe(400);
+    expect(res.text).toContain(`The private message still says ${LINK_MARKER}. Replace it with your own link, or delete it, before saving.`);
+    expect(formFields(res.text)).toEqual(fields);
+    expect(await ruleRows()).toEqual([]);
+  });
+
+  it('opens the giveaway with every comment ticked, asks for its post, and will not save without one', async () => {
+    const admin = await adminWithAccount();
+    const page = (await admin.get(adminPath('/rules/new?template=giveaway'))).text;
+    const fields = formFields(page);
+    expect(fields).toMatchObject({ match_all: '1', media_id: '', keywords: '' });
+    expect(page).toContain(escaped(findTemplate('giveaway')!.note!));
+
+    const res = await admin.submit(adminPath('/rules'), withLink(fields));
+    expect(res.status).toBe(400);
+    expect(res.text).toContain(escaped(MATCH_ALL_NEEDS_POST_MESSAGE));
+    expect(await ruleRows()).toEqual([]);
+  });
+
+  it('shows a blank form for a template that does not exist', async () => {
+    const admin = await adminWithAccount();
+    const page = await admin.get(adminPath('/rules/new?template=nope'));
+    expect(page.status).toBe(200);
+    expect(page.text).not.toContain('Filled in from');
+    expect(formFields(page.text)).toMatchObject({ label: '', keywords: '', dm_text: '' });
   });
 });
 

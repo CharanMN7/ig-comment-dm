@@ -194,7 +194,7 @@ You can connect several Instagram accounts to one deployment. Each one needs to 
 
 ### Write a rule
 
-**Rules → New rule.**
+**Rules → New rule**, or pick a template on the Rules page: free guide, product link, price list, booking page, waitlist, event RSVP, menu or giveaway entry. A template fills in the keywords, the DM and three public replies for you to edit. Nothing saves while its `PASTE-YOUR-LINK-HERE` marker, or a sample address like `example.com`, is still in the text.
 
 | Field | What to put |
 |---|---|
@@ -285,6 +285,7 @@ Instagram's rules, not ours. Each of these is enforced by Meta and cost someone 
 - [x] 7-day comment age guard, matching Meta's private-reply window
 - [x] Dry-run rule tester that sends nothing to real people
 - [x] Home totals for today, 7 days, 30 days and all time, with people reached and a per-account breakdown
+- [x] Eight rule templates, so the first rule starts from written copy instead of a blank form
 
 </details>
 
@@ -341,7 +342,6 @@ Everything below is [an open issue](https://github.com/CharanMN7/ig-comment-dm/i
 | [#35](https://github.com/CharanMN7/ig-comment-dm/issues/35) | **Per-account rate limiting** | Stay under Meta's 750 private replies per hour |
 | [#36](https://github.com/CharanMN7/ig-comment-dm/issues/36) | **Send every matching rule's public reply** | Today the second matching rule is silently dropped |
 | [#37](https://github.com/CharanMN7/ig-comment-dm/issues/37) | **Bulk rule import from CSV** | Set up thirty posts without thirty forms |
-| [#38](https://github.com/CharanMN7/ig-comment-dm/issues/38) | **Rule templates** | Working starting points per niche |
 
 </details>
 

@@ -59,6 +59,7 @@ import { chooseRule } from '../process.ts';
 import { parsePublicReplies, serializePublicReplies } from '../replies.ts';
 import { CRON_FIRST_RUN_SECONDS, jobState } from './health.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
+import { LINK_MARKER, TEMPLATES, findTemplate, placeholderLinkIn, type RuleTemplate } from '../templates.ts';
 import {
   clearFailures,
   describeLock,
@@ -681,6 +682,20 @@ function formValuesFromPost(f: Record<string, string>): RuleFormValues {
   };
 }
 
+function formValuesFromTemplate(t: RuleTemplate, igUserId: string): RuleFormValues {
+  return {
+    ig_user_id: igUserId,
+    label: t.name,
+    keywords: t.keywords.join('\n'),
+    match_mode: 'word',
+    exclude_keywords: t.exclusions.join('\n'),
+    match_all: t.matchAll,
+    media_id: '',
+    dm_text: t.dm,
+    public_replies: [...t.publicReplies],
+  };
+}
+
 const EVERY_COMMENT_WORDS = 'Every comment on its post';
 
 const MATCH_MODE_WORDS: Record<MatchMode, string> = {
@@ -832,6 +847,20 @@ function ruleForm(opts: {
   `;
 }
 
+function templateGallery(base: string) {
+  return html`
+    <h2 id="templates">Start from a template</h2>
+    <p class="muted">Each one fills in the new-rule form with keywords and a message, ready for you to change.</p>
+    <ul class="templates">
+      ${TEMPLATES.map(
+        (t) => html`<li>
+          <a href="${base}/rules/new?template=${t.id}"><b>${t.name}</b><span class="muted">${t.forWhom}</span></a>
+        </li>`,
+      )}
+    </ul>
+  `;
+}
+
 adminRoutes.get('/rules', async (c) => {
   const base = c.get('adminBase');
   const session = c.get('session');
@@ -849,9 +878,12 @@ adminRoutes.get('/rules', async (c) => {
       body: html`
         <h1>Rules</h1>
         <p class="muted">When a comment matches a keyword, we send that person one private message.</p>
-        <p><a class="btn" href="${base}/rules/new">New rule</a></p>
+        <div class="row">
+          <a class="btn" href="${base}/rules/new">New rule</a>
+          ${rules.length ? html`<a class="btn secondary" href="#templates">Start from a template</a>` : html``}
+        </div>
         ${rules.length === 0
-          ? html`<p>No rules yet.</p>`
+          ? html`<p>No rules yet. Start from a template below, or press New rule for a blank form.</p>`
           : html`
               <div class="table-wrap"><table>
                 <thead>
@@ -893,6 +925,7 @@ adminRoutes.get('/rules', async (c) => {
                 </tbody>
               </table></div>
             `}
+        ${templateGallery(base)}
       `,
     }),
   );
@@ -911,17 +944,29 @@ adminRoutes.get('/rules/new', async (c) => {
       }),
     );
   }
+  const igUserId = accounts[0]!.ig_user_id;
+  const template = findTemplate(c.req.query('template'));
+  const intro = template
+    ? html`<div class="note">
+        <p>Filled in from <b>${template.name}</b>. Nothing is saved until you press Save rule.</p>
+        <p>Replace <code>${LINK_MARKER}</code> with your own link.</p>
+        ${template.note ? html`<p>${template.note}</p>` : html``}
+        <p><a href="${base}/rules#templates">Pick a different template</a></p>
+      </div>`
+    : html`<p class="muted">
+        Or <a href="${base}/rules#templates">start from a template</a>, with keywords and a message already written.
+      </p>`;
   return c.html(
     layout({
       title: 'New rule',
       base,
       csrf: c.get('session').csrf,
-      body: html`<h1>New rule</h1>${ruleForm({
+      body: html`<h1>New rule</h1>${intro}${ruleForm({
         base,
         csrf: c.get('session').csrf,
         accounts,
         action: `${base}/rules`,
-        values: { ...formValuesFromPost({}), ig_user_id: accounts[0]!.ig_user_id },
+        values: template ? formValuesFromTemplate(template, igUserId) : { ...formValuesFromPost({}), ig_user_id: igUserId },
         posts: await recentMediaOptions(c.env),
       })}`,
     }),
@@ -943,6 +988,20 @@ function messageProblem(what: string, text: string, max: number): string | null 
   const limit = `${what} must be ${count(max)} characters or fewer.`;
   if (!countUsernameTokens(text)) return `${limit} This one is ${count(text.length)}.`;
   return `${limit} This one is ${count(text.length)}, and each {username} can add up to ${USERNAME_GROWTH} characters for a long name, so it could reach ${count(longest)}.`;
+}
+
+/**
+ * Templates put LINK_MARKER where the creator's link goes. That, or a sample
+ * address like example.com, would reach real followers as typed, so neither
+ * can be saved.
+ */
+function placeholderLinkProblem(what: string, text: string): string | null {
+  const found = placeholderLinkIn(text);
+  if (!found) return null;
+  if (found === LINK_MARKER) {
+    return `${what} still says ${LINK_MARKER}. Replace it with your own link, or delete it, before saving.`;
+  }
+  return `${what} links to “${found}”, a sample address that isn’t yours. Replace it with your own link before saving.`;
 }
 
 export const MATCH_ALL_NEEDS_POST_MESSAGE =
@@ -992,10 +1051,12 @@ export function readRuleFields(form: Record<string, string>) {
     };
   }
   if (!dm) return { error: 'Write the private message to send.' };
-  const dmProblem = messageProblem('The private message', dm, DM_TEXT_MAX);
+  const dmProblem =
+    messageProblem('The private message', dm, DM_TEXT_MAX) ?? placeholderLinkProblem('The private message', dm);
   if (dmProblem) return { error: dmProblem };
   for (const [i, reply] of replies.entries()) {
-    const problem = reply ? messageProblem(i === 0 ? 'The public reply' : `Reply ${String(i + 1)}`, reply, PUBLIC_REPLY_MAX) : null;
+    const what = i === 0 ? 'The public reply' : `Reply ${String(i + 1)}`;
+    const problem = reply ? (messageProblem(what, reply, PUBLIC_REPLY_MAX) ?? placeholderLinkProblem(what, reply)) : null;
     if (problem) return { error: problem };
   }
   if (media && looksLikePostUrl(media)) {
