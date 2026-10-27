@@ -134,10 +134,13 @@ connectRoutes.get('/callback', async (c) => {
     return c.html(
       layout({
         title: 'Not connected',
-        body: pageError(
-          'You didn’t connect Instagram. Nothing was changed.',
-          c.req.query('error_description') ?? denied,
-        ),
+        body: html`
+          <h1>Not connected</h1>
+          <p>Instagram stopped the connection before it finished, so nothing changed. Try again from Accounts.</p>
+          <p class="muted">Instagram’s reason:</p>
+          <pre class="raw">${c.req.query('error_description') ?? denied}</pre>
+          <p><a class="btn" href="/connect/accounts">Back to Accounts</a></p>
+        `,
       }),
     );
   }
