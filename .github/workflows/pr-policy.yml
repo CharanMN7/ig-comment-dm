@@ -1,63 +1,63 @@
 name: PR policy
 
-# A pull request has to come from someone assigned to an issue it closes
-# (CONTRIBUTING.md, "Working on an issue"). Everything else is closed with a
-# note pointing there.
+# A pull request is reviewed only when its description links, with a closing
+# keyword, an issue a maintainer assigned to its author (CONTRIBUTING.md,
+# "Claim before you code"). Anything else is closed with a note pointing there.
 #
 # pull_request_target runs with a token that can close the PR, so this
-# workflow never checks out or runs anything from the pull request. The only
-# PR data it touches is the number and the author's login, passed through env.
+# workflow never checks out or runs anything from the pull request. It reads
+# the PR's number, author and description from the event, through env rather
+# than inside the script, and asks the GitHub API about the issues named there.
 on:
   pull_request_target:
-    types: [opened, reopened]
+    types: [opened, reopened, edited]
 
 permissions:
-  pull-requests: write
-  issues: read
+  pull-requests: write # comment on and close the PR
+  issues: read # read the linked issue's assignees
 
 jobs:
   assigned:
     name: Author is assigned to the issue
-    # Maintainers, collaborators and bots (Dependabot) are exempt, and a
-    # maintainer can exempt one PR by adding the policy-exempt label before
-    # reopening it.
+    # Owners, members, collaborators and bots are exempt. An edit to a PR that
+    # is already closed changes nothing, so it isn't checked again. A maintainer
+    # can wave one PR through by adding the policy-exempt label before reopening.
     if: >-
+      github.event.pull_request.state == 'open' &&
       github.event.pull_request.user.type != 'Bot' &&
       !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association) &&
       !contains(github.event.pull_request.labels.*.name, 'policy-exempt')
     runs-on: ubuntu-latest
     steps:
-      - name: Close unless the author is assigned to an issue this PR closes
+      - name: Close unless the description links an issue assigned to the author
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
+          BODY: ${{ github.event.pull_request.body }}
         run: |
-          gh api graphql \
-            -f owner="${REPO%/*}" -f name="${REPO#*/}" -F pr="$PR" \
-            -f query='
-              query($owner: String!, $name: String!, $pr: Int!) {
-                repository(owner: $owner, name: $name) {
-                  pullRequest(number: $pr) {
-                    closingIssuesReferences(first: 10) {
-                      nodes { number assignees(first: 20) { nodes { login } } }
-                    }
-                  }
-                }
-              }' > linked.json
+          # The forms GitHub itself links: "Closes #12", "fixes owner/repo#12" and
+          # "Resolves https://github.com/owner/repo/issues/12", in any case, with an
+          # optional colon. References to other repositories don't count.
+          repo_re=$(printf '%s' "$REPO" | sed 's/[.]/\\./g')
+          refs=$(printf '%s' "${BODY:-}" \
+            | grep -oiE "\b(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+(#|${repo_re}#|https://github\.com/${repo_re}/issues/)[0-9]+\b" \
+            | grep -oE '[0-9]+$' | sort -un || true)
 
-          assigned=$(jq -r --arg author "$AUTHOR" '
-            [.data.repository.pullRequest.closingIssuesReferences.nodes[]
-              | select(any(.assignees.nodes[]; .login == $author))
-              | "#\(.number)"] | join(" ")' linked.json)
+          for n in $refs; do
+            # The issues API also answers for pull requests, and those don't count.
+            if gh api "repos/$REPO/issues/$n" > issue.json 2> /dev/null &&
+              jq -e --arg author "$AUTHOR" '
+                .pull_request == null and
+                any(.assignees[]?; (.login | ascii_downcase) == ($author | ascii_downcase))
+              ' issue.json > /dev/null; then
+              echo "@$AUTHOR is assigned to #$n, which this PR closes. Leaving it open."
+              exit 0
+            fi
+          done
 
-          if [ -n "$assigned" ]; then
-            echo "@$AUTHOR is assigned to $assigned. Leaving the PR open."
-            exit 0
-          fi
+          gh pr close "$PR" --repo "$REPO" --comment "Thanks for the pull request! This project only reviews PRs that link an issue a maintainer has assigned to you, so I'm closing this one for now. [Claim before you code](https://github.com/$REPO/blob/master/CONTRIBUTING.md#claim-before-you-code) explains how it works.
 
-          gh pr close "$PR" --repo "$REPO" --comment "Closing per [CONTRIBUTING](https://github.com/$REPO/blob/master/CONTRIBUTING.md#working-on-an-issue). Claim an issue and wait for assignment, and I'll happily review.
-
-          Already assigned? Put \`Closes #<issue>\` in the description and comment here, and a maintainer will reopen it."
-          echo "::notice::Closed #$PR: @$AUTHOR is not assigned to an issue it closes."
+          Already assigned? Add \`Closes #<issue>\` to the description, then leave a comment here and a maintainer will reopen it."
+          echo "::notice::Closed #$PR: its description links no issue assigned to @$AUTHOR."
