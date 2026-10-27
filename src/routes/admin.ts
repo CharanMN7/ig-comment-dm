@@ -766,7 +766,8 @@ function ruleForm(opts: {
           <textarea id="keywords" name="keywords" placeholder="guide&#10;freebie">${v.keywords}</textarea>
           <p class="muted">
             One per line. A comment with any of these gets your message. Capitals, accents, emoji and
-            punctuation don’t matter, so “GUIDE!!” counts as “guide”. Each keyword needs at least 3 letters.
+            punctuation don’t matter, so “GUIDE!!” counts as “guide”. Each keyword needs at least 3 letters,
+            or 2 in Chinese and Japanese.
           </p>
           <fieldset class="choices">
             <legend>How to look for them</legend>

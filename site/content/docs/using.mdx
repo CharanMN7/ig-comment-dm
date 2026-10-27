@@ -21,7 +21,7 @@ Connecting needs you to be logged in to the admin panel; the Connect page refuse
 | Field | What to put |
 |---|---|
 | **Name** | For you only, e.g. `Free guide`. |
-| **Keywords** | One per line, **at least 3 characters** each, counted after emoji and punctuation are dropped. `AI` would fire on "again" and "email", so the form rejects it. |
+| **Keywords** | One per line, **at least 3 characters** each, counted after emoji and punctuation are dropped. `AI` would fire on "again" and "email", so the form rejects it. Chinese and Japanese need 2, so `指南` works. |
 | **How to look for them** | **Whole words only** (the default): `guide` matches "Guide please!" but not "guides". **Anywhere in the comment**: also catches `#launch2026` and "guides", but `art` would match "start". |
 | **Exclusions** | Optional, one per line. A comment containing any of them is skipped by this rule even when a keyword matches: `how much`, `already have it`, `not interested`. |
 | **The DM** | Up to 1,000 characters. Put everything they need in this one message. `{username}` puts in their Instagram name. |
@@ -45,7 +45,7 @@ The post dropdown lists your recent posts and reels after you connect. A post's 
 - Accents on Latin letters don't matter: `cafe` matches `café`, `preco` matches `PREÇO`, `dien` matches `điện` and `lodz` matches `łódź`. Marks in other scripts are part of the word, so type a non-Latin keyword with the same marks the comment uses.
 - With **Whole words only**, the keyword has to stand on its own: `guide` doesn't match `guides` or `#guide2026`. Switch the rule to **Anywhere in the comment** for hashtag and brand campaigns.
 - Keywords work in any script, including Cyrillic, Arabic, Chinese and Japanese. Chinese, Japanese, Thai and other scripts written without spaces have no word edges to check, so there a keyword also matches inside a longer word: `ガイド` matches `ガイドライン`.
-- The 3-character minimum counts characters in every script, so a two-character keyword like `指南` can't be saved. A keyword that's only emoji or punctuation (`🔥🔥🔥`) is refused too, because it could never match anything.
+- A keyword written entirely in Chinese or Japanese characters needs 2 characters rather than 3, so `指南` can be saved but `指` can't. Thai, Lao, Khmer and Myanmar still need 3, because their vowel and tone marks count as characters, so two are often a single syllable. A keyword that mixes in Latin letters or digits, like `a指`, needs 3. A keyword that's only emoji or punctuation (`🔥🔥🔥`) is refused too, because it could never match anything.
 
 Exclusions are found the same way as the rule's keywords, and they belong to that rule alone. When a comment trips one, matching carries on to the next rule, so another rule without that exclusion can still reply. If no rule replies because of an exclusion, Home lists the comment as `Skipped: matched exclusion “how much”`, and the five-minute check leaves it alone from then on.
 

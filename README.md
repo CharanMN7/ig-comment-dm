@@ -199,7 +199,7 @@ You can connect several Instagram accounts to one deployment. Each one needs to 
 | Field | What to put |
 |---|---|
 | **Name** | For you only. `Free guide`. |
-| **Keywords** | One per line. **At least 3 characters**, counted after emoji and punctuation are dropped — `AI` would fire on "again" and "email". |
+| **Keywords** | One per line. **At least 3 characters**, counted after emoji and punctuation are dropped — `AI` would fire on "again" and "email". Chinese and Japanese need 2, so `指南` works. |
 | **How to look for them** | **Whole words only** (the default): `guide` matches "Guide please!" but not "guides". **Anywhere in the comment**: also catches `#launch2026` and "guides", but `art` would match "start". |
 | **Exclusions** | Optional, one per line. A comment containing any of them is skipped by this rule even when a keyword matches: `how much`, `already have it`, `not interested`. |
 | **The DM** | Under 1,000 characters. Put everything they need here. `{username}` puts in their Instagram name. |

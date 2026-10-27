@@ -221,11 +221,30 @@ export function keywordSwallowedBy(
 
 export const KEYWORD_MIN_LENGTH = 3;
 
+/**
+ * Chinese and Japanese write most words in two characters (`指南` is "guide",
+ * `链接` is "link"), and the 3-character floor refused them. The floor is there
+ * so a short keyword doesn't fire inside longer words, but these scripts have
+ * no word edges, so a keyword fires inside longer words at any length (see
+ * SEPARATORLESS_CLASS). Each of their characters is a whole syllable or
+ * morpheme, so two already make a word; a lone one turns up inside far too
+ * many words to mean anything.
+ *
+ * Thai, Lao, Khmer and Myanmar have no word edges either, but keep the floor:
+ * their vowels and tone marks are code points of their own, so two code points
+ * are often a single syllable. `ดี` ("good") would fire inside `สวัสดี`
+ * ("hello"). A mixed keyword like `a指` keeps it too: the exemption is for
+ * words in these scripts, not for a Latin letter attached to one.
+ */
+export const CJK_KEYWORD_MIN_LENGTH = 2;
+
+const ALL_CJK = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]+$/u;
+
 export const KEYWORD_TOO_SHORT_MESSAGE =
-  "Keywords under 3 characters match inside other words — 'AI' would fire on 'again' and 'email'.";
+  "Keywords need at least 3 characters, or 2 in Chinese and Japanese. Shorter ones match inside other words — 'AI' would fire on 'again' and 'email'.";
 
 export const EXCLUSION_TOO_SHORT_MESSAGE =
-  'Exclusions need at least 3 characters too, the same as keywords. Try a short phrase instead, like “no thanks”.';
+  'Exclusions have the same minimum length as keywords: 3 characters, or 2 in Chinese and Japanese. Try a short phrase instead, like “no thanks”.';
 
 const HAS_LETTER_OR_NUMBER = /[\p{L}\p{N}]/u;
 
@@ -244,6 +263,7 @@ export function keywordProblem(keyword: string, tooShortMessage = KEYWORD_TOO_SH
   if (!HAS_LETTER_OR_NUMBER.test(normalized)) {
     return `“${keyword}” has no letters or numbers. Emoji and punctuation are ignored when matching, so it could never match. Use a word instead.`;
   }
-  if ([...normalized].length < KEYWORD_MIN_LENGTH) return tooShortMessage;
+  const min = ALL_CJK.test(normalized) ? CJK_KEYWORD_MIN_LENGTH : KEYWORD_MIN_LENGTH;
+  if ([...normalized].length < min) return tooShortMessage;
   return null;
 }
