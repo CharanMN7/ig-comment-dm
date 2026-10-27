@@ -638,6 +638,22 @@ export async function latestSignedWebhookStatuses(db: D1Database, limit: number)
   return (results ?? []).map((r) => r.status);
 }
 
+/**
+ * Deletes an account with its rules, its sends, and the logged webhooks that
+ * name it. Only selftest's fake account is ever removed this way: a real one
+ * keeps its history when it's paused.
+ */
+export async function purgeAccount(db: D1Database, igUserId: string): Promise<void> {
+  await db.batch([
+    db.prepare('DELETE FROM sent WHERE ig_user_id = ?').bind(igUserId),
+    db.prepare('DELETE FROM rules WHERE ig_user_id = ?').bind(igUserId),
+    db.prepare('DELETE FROM accounts WHERE ig_user_id = ?').bind(igUserId),
+    // The preview is the body's first 200 characters, and entry[0].id falls
+    // well inside them.
+    db.prepare('DELETE FROM webhook_events WHERE instr(preview, ?) > 0').bind(`"id":"${igUserId}"`),
+  ]);
+}
+
 export async function pruneWebhookEvents(db: D1Database, olderThan: number): Promise<void> {
   await db.prepare('DELETE FROM webhook_events WHERE received_at < ?').bind(olderThan).run();
 }

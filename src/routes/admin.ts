@@ -32,6 +32,7 @@ import {
   latestSignedWebhookStatuses,
   listAccounts,
   listRules,
+  purgeAccount,
   readTotalsSnapshot,
   recentSent,
   recentWebhookEvents,
@@ -1668,12 +1669,14 @@ adminRoutes.post('/accounts/:id/activate', async (c) => {
   return redirectDone(c, '/accounts', 'account-resumed');
 });
 
+const SELFTEST_IG_USER = 'selftest_ig_user';
+
 /** Unlisted. Used by scripts/selftest.ts against a deployed URL. */
 adminRoutes.post('/selftest/seed', async (c) => {
   const now = nowSeconds();
   const enc = await encryptAesGcm(c.env.TOKEN_ENCRYPTION_KEY, 'selftest-dummy-token');
   await upsertAccount(c.env.DB, {
-    ig_user_id: 'selftest_ig_user',
+    ig_user_id: SELFTEST_IG_USER,
     username: 'selftest',
     access_token_enc: enc.ciphertext,
     token_iv: enc.iv,
@@ -1681,7 +1684,17 @@ adminRoutes.post('/selftest/seed', async (c) => {
     connected_at: now,
     last_refreshed_at: now,
   });
-  return c.json({ ok: true, ig_user_id: 'selftest_ig_user' });
+  return c.json({ ok: true, ig_user_id: SELFTEST_IG_USER });
+});
+
+/**
+ * Unlisted. scripts/selftest.ts calls this when it's done, so a deployed
+ * Worker isn't left with a fake account on Accounts, its sends in the totals,
+ * or "Reached us" rows that look like Meta getting through when it wasn't.
+ */
+adminRoutes.post('/selftest/cleanup', async (c) => {
+  await purgeAccount(c.env.DB, SELFTEST_IG_USER);
+  return c.json({ ok: true });
 });
 
 adminRoutes.get('/selftest/status', async (c) => {
