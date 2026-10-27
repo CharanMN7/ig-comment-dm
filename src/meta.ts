@@ -21,20 +21,24 @@ const BACKOFF_BASE_MS = 500;
 
 // Without a timeout a request Meta never answers holds the send until the
 // runtime kills the Worker, and the claimed row is left `pending`. Each
-// attempt gets its own budget; a timeout is retried like any network failure.
+// attempt gets its own budget. A read that times out is retried like any
+// network failure; a send never is (see sendOnce).
 export const META_TIMEOUT_MS = 10_000;
 
 /**
- * The longest one Meta call can take: every attempt timing out, plus the
- * backoffs between them, each under 1.5x its doubling base. About 32 s.
+ * The longest one retried Meta call can take: every attempt timing out, plus
+ * the backoffs between them, each under 1.5x its doubling base. About 32 s.
  */
 export const META_CALL_MAX_MS = ATTEMPTS * META_TIMEOUT_MS + 1.5 * BACKOFF_BASE_MS * (2 ** (ATTEMPTS - 1) - 1);
+
+/** The longest one DM or public reply can take: it gets a single attempt. */
+export const META_SEND_MAX_MS = META_TIMEOUT_MS;
 
 /**
  * The least time worth giving an attempt that has to end by a deadline. Meta
  * usually answers well inside it. An attempt given less is likely to be cut
  * off, and a DM cut off on our side may still have been delivered on Meta's,
- * so it would be recorded as failed when it wasn't.
+ * so it could only be recorded as "may have been delivered".
  */
 export const META_MIN_ATTEMPT_MS = 2_000;
 
@@ -55,30 +59,17 @@ export function hasTimeForCall(deadline: number): boolean {
   return attemptTimeoutMs(deadline, Date.now()) > 0;
 }
 
-async function fetchWithRetry(url: string, init: RequestInit, deadline?: number): Promise<Response> {
+/**
+ * For reads and the other calls that are safe to repeat. Never for a DM or a
+ * public reply: those go through sendOnce.
+ */
+async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
   let lastRes: Response | undefined;
   let lastErr: unknown;
-  let tries = 0;
-  let outOfTime = false;
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-    if (attempt > 0) {
-      const backoff = jitteredDelayMs(BACKOFF_BASE_MS * 2 ** (attempt - 1));
-      // Checked before sleeping: a retry the deadline would cut short is not
-      // worth the wait, and the caller needs the time to record the outcome.
-      if (attemptTimeoutMs(deadline, Date.now() + backoff) === 0) {
-        outOfTime = true;
-        break;
-      }
-      await sleep(backoff);
-    }
-    const timeoutMs = attemptTimeoutMs(deadline, Date.now());
-    if (timeoutMs === 0) {
-      outOfTime = true;
-      break;
-    }
-    tries++;
+    if (attempt > 0) await sleep(jitteredDelayMs(BACKOFF_BASE_MS * 2 ** (attempt - 1)));
     try {
-      const res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+      const res = await fetch(url, { ...init, signal: AbortSignal.timeout(META_TIMEOUT_MS) });
       if (res.status === 429 || res.status >= 500) {
         lastRes = res;
         continue;
@@ -89,18 +80,72 @@ async function fetchWithRetry(url: string, init: RequestInit, deadline?: number)
     }
   }
   if (lastRes) return lastRes;
-  // This message ends up in the send log on Home, so it says what happened in
-  // words an operator can act on; the runtime's own text follows for whoever debugs.
-  if (tries === 0) throw new Error('there was no time left to contact Instagram');
   const detail = lastErr instanceof Error ? lastErr.message : String(lastErr);
-  const after = `after ${tries} ${tries === 1 ? 'try' : 'tries'}`;
-  const why = outOfTime ? ', and there was no time left to try again' : '';
-  throw new Error(`could not reach Instagram ${after}${why} (${detail})`);
+  throw new Error(`could not reach Instagram after ${ATTEMPTS} tries (${detail})`);
 }
 
 async function readResult(res: Response): Promise<MetaCallResult> {
   const body = await res.text();
   return { ok: res.ok, status: res.status, body };
+}
+
+/**
+ * What one DM or public reply learned. `sent`: Instagram confirmed it.
+ * `refused`: Instagram answered and turned it down, so nothing went out.
+ * `unknown`: nothing proves Instagram didn't act, so it may have gone out.
+ * `not_started`: there was no time left to make the call at all.
+ */
+export type SendResult = AnsweredSend | UnansweredSend;
+type AnsweredSend = { outcome: 'sent' | 'refused'; status: number; body: string };
+type UnansweredSend = {
+  outcome: 'unknown' | 'not_started';
+  status: number;
+  body: string;
+  /** What happened, in words for the send log; `body` is the detail. */
+  cause: string;
+};
+
+function seconds(ms: number): string {
+  const s = Math.round(ms / 1000);
+  return `${s} ${s === 1 ? 'second' : 'seconds'}`;
+}
+
+/**
+ * A DM or public reply gets exactly one attempt. Instagram's private-reply and
+ * comment-reply endpoints take no idempotency key, so a request that timed
+ * out, got a 5xx, lost its connection or had its answer cut off may already
+ * have been carried out, and sending it again can reach the commenter twice or
+ * post the same reply twice under their comment. Only an answer that proves
+ * Instagram didn't act (a 4xx it wrote) is `refused`. Never throws, so the
+ * caller always gets to record the outcome.
+ */
+async function sendOnce(url: string, init: RequestInit, deadline?: number): Promise<SendResult> {
+  const timeoutMs = attemptTimeoutMs(deadline, Date.now());
+  if (timeoutMs === 0) {
+    return { outcome: 'not_started', status: 0, body: '', cause: 'there was no time left to contact Instagram' };
+  }
+  let res: Response;
+  try {
+    res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+    const cause = timedOut ? `Instagram didn't answer within ${seconds(timeoutMs)}` : 'the connection to Instagram failed';
+    return { outcome: 'unknown', status: 0, body: detail, cause };
+  }
+  let body: string;
+  try {
+    // The timeout covers reading the body too, so a stalled answer ends here.
+    body = await res.text();
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { outcome: 'unknown', status: res.status, body: detail, cause: "Instagram's answer was cut off before it could be read" };
+  }
+  if (res.ok) return { outcome: 'sent', status: res.status, body };
+  if (res.status >= 500) {
+    return { outcome: 'unknown', status: res.status, body, cause: `Instagram answered with a server error (${res.status})` };
+  }
+  return { outcome: 'refused', status: res.status, body };
 }
 
 export async function sendPrivateReply(
@@ -109,9 +154,9 @@ export async function sendPrivateReply(
   commentId: string,
   text: string,
   deadline?: number,
-): Promise<MetaCallResult> {
+): Promise<SendResult> {
   const url = `${GRAPH}/${encodeURIComponent(igUserId)}/messages`;
-  const res = await fetchWithRetry(url, {
+  return sendOnce(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -122,7 +167,6 @@ export async function sendPrivateReply(
       message: { text },
     }),
   }, deadline);
-  return readResult(res);
 }
 
 /**
@@ -195,9 +239,9 @@ export async function sendPublicReply(
   token: string,
   message: string,
   deadline?: number,
-): Promise<MetaCallResult> {
+): Promise<SendResult> {
   const url = `${GRAPH}/${encodeURIComponent(commentId)}/replies`;
-  const res = await fetchWithRetry(url, {
+  return sendOnce(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -205,7 +249,6 @@ export async function sendPublicReply(
     },
     body: JSON.stringify({ message }),
   }, deadline);
-  return readResult(res);
 }
 
 export async function exchangeCodeForShortLived(opts: {

@@ -654,7 +654,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                             ? html`<span class="muted detail">${s.error}</span>`
                             : html``}
                         ${s.reply_status === 'skipped'
-                          ? html`<div class="muted">Public reply not posted, because no DM went out.</div>`
+                          ? html`<div class="muted">Public reply not posted, because Instagram didn’t confirm the DM.</div>`
                           : html``}
                       </td>
                     </tr>`,

@@ -46,33 +46,26 @@ function gapsBetween(calls: { at: number }[]): number[] {
   return calls.slice(1).map((c, i) => c.at - calls[i]!.at);
 }
 
-describe('Meta retry policy', () => {
-  it('retries a 5xx with growing jittered backoff and records the eventual success', async () => {
-    meta.on('POST', '/:id/messages', replies({ status: 500, json: {} }, { status: 503, json: {} }, { json: { message_id: 'm1' } }));
-    const row = await deliverMatchingComment();
-    const attempts = meta.callsTo('POST', '/:id/messages');
-    expect(attempts).toHaveLength(3);
-    expect(row).toMatchObject({ dm_status: 'ok', error: null });
-    const [first, second] = gapsBetween(attempts);
-    expect(first).toBeGreaterThanOrEqual(250);
-    expect(first).toBeLessThan(750);
-    expect(second).toBeGreaterThanOrEqual(500);
-    expect(second).toBeLessThan(1500);
-  });
-
-  it('gives up after three attempts and records the last 5xx body', async () => {
+// Nothing tells Meta a request is a repeat, so a second attempt after an
+// answer that never came can deliver the same DM, or post the same public
+// reply, twice. These cases must each reach Instagram at most once.
+describe('a DM or public reply gets one attempt', () => {
+  it('records a 5xx as may have been delivered, without sending again', async () => {
     meta.on('POST', '/:id/messages', { status: 500, json: { error: { message: 'An unknown error occurred', code: 1 } } });
     const row = await deliverMatchingComment();
-    expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(3);
+    expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
     expect(row).toMatchObject({ dm_status: 'failed' });
-    expect(row?.error).toContain('An unknown error occurred');
+    expect(row?.error).toMatch(
+      /^DM: Instagram answered with a server error \(500\), so it may have been delivered\. It wasn't sent again, so it can't arrive twice\. \(.*An unknown error occurred.*\)$/,
+    );
   });
 
-  it('treats 429 like a 5xx', async () => {
-    meta.on('POST', '/:id/messages', replies({ status: 429, json: {} }, { json: { message_id: 'm1' } }));
+  it('records a 429 as Instagram turning the DM down, without sending again', async () => {
+    meta.on('POST', '/:id/messages', { status: 429, json: { error: { message: 'Application request limit reached', code: 4 } } });
     const row = await deliverMatchingComment();
-    expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(2);
-    expect(row).toMatchObject({ dm_status: 'ok' });
+    expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
+    expect(row).toMatchObject({ dm_status: 'failed' });
+    expect(row?.error).toMatch(/^DM: \{.*Application request limit reached/);
   });
 
   it('never retries other 4xx responses', async () => {
@@ -80,52 +73,117 @@ describe('Meta retry policy', () => {
     const row = await deliverMatchingComment();
     expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
     expect(row).toMatchObject({ dm_status: 'failed' });
+    expect(row?.error).toMatch(/^DM: \{.*Invalid parameter/);
   });
 
   // A pending row is never retried: dedupe and the 5-minute poll both treat it
   // as handled, and Home shows "In progress" for good.
-  it('records a send that never reaches Meta as failed rather than leaving it pending', async () => {
+  it('records a dropped connection as may have been delivered rather than leaving it pending', async () => {
     meta.on('POST', '/:id/messages', { networkError: true });
     const row = await deliverMatchingComment();
-    expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(3);
+    expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
     expect(row).toMatchObject({ dm_status: 'failed' });
-    expect(row?.error).toMatch(/^DM: could not reach Instagram after 3 tries \(.+\)$/);
+    expect(row?.error).toMatch(/^DM: the connection to Instagram failed, so it may have been delivered\. .+ \(.+\)$/);
   });
 
-  describe('with a hung request', () => {
-    // AbortSignal.timeout runs on workerd's own clock, which fake timers don't
-    // move, so a real hang would cost the suite 30 seconds. An already-expired
-    // signal is what fetch sees once the 10 seconds are up.
-    const expired = () => AbortSignal.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
-    afterEach(() => {
-      vi.restoreAllMocks();
-    });
-
-    it('gives every attempt its own 10-second timeout and records three timeouts as a failed send', async () => {
-      const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(expired);
-      const row = await deliverMatchingComment();
-      expect(timeout.mock.calls).toEqual([[10_000], [10_000], [10_000]]);
-      expect(row).toMatchObject({ dm_status: 'failed' });
-      expect(row?.error).toBe('DM: could not reach Instagram after 3 tries (The operation was aborted due to timeout)');
-    });
-
-    it('retries after a timeout like any other network failure', async () => {
-      vi.spyOn(AbortSignal, 'timeout').mockImplementationOnce(expired);
-      const row = await deliverMatchingComment();
-      expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
-      expect(row).toMatchObject({ dm_status: 'ok', error: null });
-    });
+  it('records an answer cut off partway as may have been delivered, even when it began with 200', async () => {
+    meta.on('POST', '/:id/messages', { cutOff: true });
+    const row = await deliverMatchingComment();
+    expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
+    expect(row).toMatchObject({ dm_status: 'failed' });
+    expect(row?.error).toMatch(/^DM: Instagram's answer was cut off before it could be read, so it may have been delivered\./);
   });
 
   it('records a public reply that never reaches Meta as failed, keeping the DM as sent', async () => {
     meta.on('POST', '/:id/replies', { networkError: true });
     await seedAccount();
     await seedRule({ publicReply: 'Sent you a DM!' });
-    await withBackoffSkipped(postWebhook(commentPayload()));
+    await postWebhook(commentPayload());
     const row = await sentRow('17900000000000001');
-    expect(meta.callsTo('POST', '/:id/replies')).toHaveLength(3);
+    expect(meta.callsTo('POST', '/:id/replies')).toHaveLength(1);
     expect(row).toMatchObject({ dm_status: 'ok', reply_status: 'failed' });
-    expect(row?.error).toMatch(/^public reply: could not reach Instagram after 3 tries/);
+    expect(row?.error).toMatch(/^public reply: the connection to Instagram failed, so it may have been posted\. It wasn't posted again, so it can't appear twice\./);
+  });
+
+  it('posts a public reply after a 5xx exactly once', async () => {
+    meta.on('POST', '/:id/replies', { status: 503, json: {} });
+    await seedAccount();
+    await seedRule({ publicReply: 'Sent you a DM!' });
+    await postWebhook(commentPayload());
+    expect(meta.callsTo('POST', '/:id/replies')).toHaveLength(1);
+    expect(await sentRow('17900000000000001')).toMatchObject({ dm_status: 'ok', reply_status: 'failed' });
+  });
+
+  describe('with a hung request', () => {
+    const timedOut = () => new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    // AbortSignal.timeout runs on workerd's own clock, which fake timers don't
+    // move, so a real hang would cost the suite 10 seconds. An already-expired
+    // signal is what fetch sees once the time is up.
+    it('gives the DM one 10-second attempt and records the timeout as may have been delivered', async () => {
+      const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => AbortSignal.abort(timedOut()));
+      const row = await deliverMatchingComment();
+      expect(timeout.mock.calls).toEqual([[10_000]]);
+      expect(row).toMatchObject({ dm_status: 'failed' });
+      expect(row?.error).toBe(
+        "DM: Instagram didn't answer within 10 seconds, so it may have been delivered. It wasn't sent again, so it can't arrive twice. (The operation was aborted due to timeout)",
+      );
+    });
+
+    // The request reaches Instagram, which may act on it, and only then does
+    // the attempt run out of time. Before single attempts this posted three
+    // replies under the comment.
+    it('posts a public reply that times out exactly once', async () => {
+      const signals: AbortController[] = [];
+      vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => {
+        const controller = new AbortController();
+        signals.push(controller);
+        return controller.signal;
+      });
+      meta.on('POST', '/:id/replies', () => {
+        signals.at(-1)!.abort(timedOut());
+        return { json: { id: '18000000000000001' } };
+      });
+      await seedAccount();
+      await seedRule({ publicReply: 'Sent you a DM!' });
+
+      await withBackoffSkipped(postWebhook(commentPayload()));
+
+      expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
+      expect(meta.callsTo('POST', '/:id/replies')).toHaveLength(1);
+      const row = await sentRow('17900000000000001');
+      expect(row).toMatchObject({ dm_status: 'ok', reply_status: 'failed' });
+      expect(row?.error).toMatch(/^public reply: Instagram didn't answer within 10 seconds, so it may have been posted\./);
+    });
+  });
+});
+
+describe('reads from Instagram', () => {
+  it('retries a 5xx with growing jittered backoff and uses the eventual answer', async () => {
+    await seedAccount({ expiresAt: NOW + 3 * DAY, lastRefreshedAt: NOW - 57 * DAY });
+    meta.on(
+      'GET',
+      '/refresh_access_token',
+      replies(
+        { status: 500, json: {} },
+        { status: 503, json: {} },
+        { json: { access_token: 'refreshed-token', token_type: 'bearer', expires_in: FAKE_EXPIRES_IN } },
+      ),
+    );
+
+    await withBackoffSkipped(runScheduled('0 3 * * *'));
+
+    const attempts = meta.callsTo('GET', '/refresh_access_token');
+    expect(attempts).toHaveLength(3);
+    expect(await storedToken()).toBe('refreshed-token');
+    const [first, second] = gapsBetween(attempts);
+    expect(first).toBeGreaterThanOrEqual(250);
+    expect(first).toBeLessThan(750);
+    expect(second).toBeGreaterThanOrEqual(500);
+    expect(second).toBeLessThan(1500);
   });
 });
 
@@ -154,59 +212,54 @@ describe('the time a webhook delivery is allowed', () => {
     return attempts;
   }
 
-  it('cuts the last DM attempt to the time left, then records a public reply there is no time for as failed', async () => {
-    const attempts = trackAttempts([0, 1]);
-    // The third attempt gets through a second before the deadline.
-    meta.on('POST', '/:id/messages', () => {
-      vi.setSystemTime(deadline - 1_000);
-      return { json: { recipient_id: '1234567890', message_id: 'm1' } };
+  /** Meta answers every call to `path` after `ms` of the frozen clock. */
+  function answersAfter(method: string, path: string, ms: number, json: unknown) {
+    meta.on(method, path, () => {
+      vi.setSystemTime(Date.now() + ms);
+      return { json };
     });
+  }
+
+  function batch(...ids: string[]) {
+    const payload = commentPayload({ commentId: ids[0] });
+    for (const id of ids.slice(1)) payload.entry[0]!.changes.push({ field: 'comments', value: commentValue({ commentId: id }) });
+    return payload;
+  }
+
+  it('cuts a DM attempt to the time left, then records a public reply there is no time for as failed', async () => {
+    const attempts = trackAttempts([]);
+    answersAfter('POST', '/:id/messages', 9_000, { recipient_id: '1234567890', message_id: 'm1' });
+    answersAfter('POST', '/:id/replies', 9_000, { id: '18000000000000001' });
     await seedAccount();
     await seedRule({ publicReply: 'Sent you a DM!' });
 
-    await withBackoffSkipped(postWebhook(commentPayload()));
+    await postWebhook(batch('first', 'second'));
 
-    expect(attempts.map((a) => a.ms).slice(0, 2)).toEqual([10_000, 10_000]);
-    expect(attempts[2]!.ms).toBe(deadline - attempts[2]!.at);
-    expect(attempts[2]!.ms).toBeLessThan(10_000);
-    // Three attempts, all the DM's: the public reply never started one.
-    expect(attempts).toHaveLength(3);
-    expect(meta.callsTo('POST', '/:id/replies')).toEqual([]);
-    const row = await sentRow('17900000000000001');
-    expect(row).toMatchObject({ dm_status: 'ok', reply_status: 'failed', error: NO_TIME_FOR_PUBLIC_REPLY_ERROR });
-    expect(row!.sent_at * 1000).toBeLessThanOrEqual(deadline);
+    // The first comment's DM and reply use 18 s; the second's DM gets the 7 s
+    // left, is answered after 9, and leaves no time for its reply.
+    expect(attempts.map((a) => a.ms)).toEqual([10_000, 10_000, 7_000]);
+    expect(meta.callsTo('POST', '/:id/replies')).toHaveLength(1);
+    expect(await sentRow('first')).toMatchObject({ dm_status: 'ok', reply_status: 'ok', error: null });
+    expect(await sentRow('second')).toMatchObject({ dm_status: 'ok', reply_status: 'failed', error: NO_TIME_FOR_PUBLIC_REPLY_ERROR });
   });
 
-  it('shares the time across a batched delivery: no retry that cannot finish, and no claim without time to send', async () => {
-    // Attempt 0 is the first comment's DM, which Meta answers after 9 s.
-    const attempts = trackAttempts([1, 2]);
-    meta.on('POST', '/:id/messages', () => {
-      vi.setSystemTime(Date.now() + 9_000);
-      return { json: { recipient_id: '1234567890', message_id: 'm1' } };
-    });
+  it('shares the time across a batched delivery and claims no comment it has no time to send', async () => {
+    const attempts = trackAttempts([0, 1, 2]);
     await seedAccount();
     await seedRule();
-    const payload = commentPayload({ commentId: 'batch-1' });
-    payload.entry[0]!.changes.push(
-      { field: 'comments', value: commentValue({ commentId: 'batch-2' }) },
-      { field: 'comments', value: commentValue({ commentId: 'batch-3' }) },
-    );
 
-    await withBackoffSkipped(postWebhook(payload));
+    await postWebhook(batch('batch-1', 'batch-2', 'batch-3', 'batch-4'));
 
-    // The second comment's first attempt gets its full 10 s, its second only
-    // what is left, and a third would start after the deadline.
-    expect(attempts.map((a) => a.ms).slice(0, 2)).toEqual([10_000, 10_000]);
-    expect(attempts[2]!.ms).toBe(deadline - attempts[2]!.at);
-    expect(attempts).toHaveLength(3);
-    expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
-    expect(await sentRow('batch-1')).toMatchObject({ dm_status: 'ok' });
-    const failed = await sentRow('batch-2');
-    expect(failed).toMatchObject({ dm_status: 'failed' });
-    expect(failed?.error).toMatch(/^DM: could not reach Instagram after 2 tries, and there was no time left to try again \(.+\)$/);
-    expect(failed!.sent_at * 1000).toBeLessThanOrEqual(deadline);
+    // Two full attempts, a third cut to the 5 s left, and no time for a fourth.
+    expect(attempts.map((a) => a.ms)).toEqual([10_000, 10_000, 5_000]);
+    for (const id of ['batch-1', 'batch-2', 'batch-3']) {
+      const row = await sentRow(id);
+      expect(row).toMatchObject({ dm_status: 'failed' });
+      expect(row!.sent_at * 1000).toBeLessThanOrEqual(deadline);
+    }
+    expect((await sentRow('batch-3'))?.error).toMatch(/^DM: Instagram didn't answer within 5 seconds, so it may have been delivered\./);
     // Left unclaimed rather than failed, so the 5-minute poll can still send it.
-    expect(await sentRow('batch-3')).toBeNull();
+    expect(await sentRow('batch-4')).toBeNull();
   });
 });
 

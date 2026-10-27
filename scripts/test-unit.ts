@@ -16,6 +16,7 @@ import type { Env } from '../src/types.ts';
 import {
   META_CALL_MAX_MS,
   META_MIN_ATTEMPT_MS,
+  META_SEND_MAX_MS,
   META_TIMEOUT_MS,
   attemptTimeoutMs,
   authorizeUrl,
@@ -1095,13 +1096,17 @@ describe('authorizeUrl', () => {
 });
 
 describe('stale pending sends', () => {
-  it('bounds one Meta call by three timeouts plus the longest backoffs', () => {
+  it('bounds one retried Meta read by three timeouts plus the longest backoffs', () => {
     assert.equal(META_TIMEOUT_MS, 10_000);
     assert.equal(META_CALL_MAX_MS, 3 * 10_000 + 750 + 1_500);
   });
 
+  it('gives a DM or public reply one attempt, never the retries a read gets', () => {
+    assert.equal(META_SEND_MAX_MS, META_TIMEOUT_MS);
+  });
+
   it('waits far longer than the slowest possible send before calling a pending row abandoned', () => {
-    const slowestSendMs = 2 * META_CALL_MAX_MS;
+    const slowestSendMs = 2 * META_SEND_MAX_MS;
     assert.ok(STALE_PENDING_SECONDS * 1000 >= 10 * slowestSendMs, `${STALE_PENDING_SECONDS}s vs ${slowestSendMs}ms`);
   });
 });
@@ -1130,9 +1135,9 @@ describe('send time budget', () => {
   it('ends a webhook\'s Meta calls with seconds to spare before Cloudflare stops waitUntil', () => {
     const waitUntilLimitMs = 30_000;
     assert.ok(waitUntilLimitMs - WEBHOOK_SEND_BUDGET_MS >= 5_000, `${WEBHOOK_SEND_BUDGET_MS}ms`);
-    // Enough for two full attempts and the backoff between them, so the
-    // budget only bites on a send that was already going badly.
-    assert.ok(WEBHOOK_SEND_BUDGET_MS > 2 * META_TIMEOUT_MS + 750, `${WEBHOOK_SEND_BUDGET_MS}ms`);
+    // Enough for a DM and its public reply each given a full attempt, so the
+    // budget only bites on a delivery that was already going badly.
+    assert.ok(WEBHOOK_SEND_BUDGET_MS > 2 * META_SEND_MAX_MS, `${WEBHOOK_SEND_BUDGET_MS}ms`);
   });
 
   it('ends a sweep before the next one starts, even with one more Instagram read begun at its deadline', () => {

@@ -12,11 +12,10 @@ const MAX_PROCESS_PER_SWEEP = 10;
 
 /**
  * The poll runs in the scheduled handler, not in waitUntil, so it has
- * Cloudflare's 15 minutes rather than 30 seconds, and its sends keep their full
- * retries. It still stops starting sends after this: a send cut off at 15
- * minutes would stay `pending`, and stopping here also ends a slow sweep
- * before the next one begins. Comments it doesn't reach stay unclaimed, so the
- * next sweep picks them up.
+ * Cloudflare's 15 minutes rather than 30 seconds. It still stops starting
+ * sends after this: a send cut off at 15 minutes would stay `pending`, and
+ * stopping here also ends a slow sweep before the next one begins. Comments it
+ * doesn't reach stay unclaimed, so the next sweep picks them up.
  */
 export const POLL_BUDGET_MS = 4 * 60 * 1000;
 
