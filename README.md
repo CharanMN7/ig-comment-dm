@@ -91,7 +91,7 @@ About 15 minutes, mostly in Meta's dashboard. You need Node.js 22.13+, free [Clo
 
 Or open the cloned repo in Claude Code and say "set this up". A bundled skill runs the terminal side and, with Claude in Chrome, clicks through Meta while you keep the logins and secrets. See the [agent setup guide](https://charanmn7.github.io/ig-comment-dm/docs/agent-setup/).
 
-Updating is a pull and a redeploy; your secrets and data stay in Cloudflare. See [Updating your copy](https://charanmn7.github.io/ig-comment-dm/docs/updating/).
+To update, run `npm run update`: it pulls the latest version, applies any database migrations and redeploys, and your secrets and data stay in Cloudflare. See [Updating your copy](https://charanmn7.github.io/ig-comment-dm/docs/updating/), including for Deploy button copies.
 
 ## How you know it's working
 

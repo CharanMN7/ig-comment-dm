@@ -282,7 +282,7 @@ Create the tables:
 npm run db:migrate
 ```
 
-That runs `wrangler d1 migrations apply DB --remote`. It applies the files in `migrations/` in order and records each one in a `d1_migrations` table, so a later run applies only the migrations added since; `npm run db:migrate:list` shows what's pending. The tables come after the first deploy only because the database doesn't exist before it. When you update to a newer version later, deploy with `npm run deploy`, which applies new migrations before the new code goes live.
+That runs `wrangler d1 migrations apply DB --remote`. It applies the files in `migrations/` in order and records each one in a `d1_migrations` table, so a later run applies only the migrations added since; `npm run db:migrate:list` shows what's pending. The tables come after the first deploy only because the database doesn't exist before it. When you update to a newer version later, `npm run update` pulls it in and deploys with `npm run deploy`, which applies new migrations before the new code goes live. See [Updating your copy](/updating).
 
 Generate the four secrets you issue yourself:
 

@@ -245,7 +245,7 @@ npm run db:migrate
 
 ## Errors mention "no such column" after an update
 
-The new code went live without its database migrations, usually because it was deployed with `npx wrangler deploy` instead of `npm run deploy`. Apply them:
+The new code went live without its database migrations, usually because it was deployed with `npx wrangler deploy` instead of `npm run deploy` (which `npm run update` uses). Apply them:
 
 ```bash
 npm run db:migrate:list   # shows the ones that are missing
