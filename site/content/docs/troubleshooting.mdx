@@ -186,7 +186,7 @@ If the error says the account doesn't have Workers enabled, open [dash.cloudflar
 
 Every path that isn't `/a/<ADMIN_URL_SECRET>` returns 404 by design, so the panel can't be found by crawling. A 404 means the secret in your URL doesn't match the deployed one.
 
-Usually it's a typo, a character lost on paste, a trailing slash, or a secret rotated by a later `npm run setup -- --rotate`.
+Usually it's a typo, a character lost on paste, a trailing slash, or a secret rotated by a later `npm run setup -- --rotate`. It can also be a URL printed by an `npm run setup` that stopped before the end: the next run replaces it and prints the new one.
 
 **Check what's deployed:**
 

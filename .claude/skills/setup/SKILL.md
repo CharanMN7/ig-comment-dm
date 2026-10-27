@@ -99,8 +99,10 @@ npm run setup
 
 Tell them what to expect before they start. The first deploy creates the D1 database from
 the name in `wrangler.toml`, without asking. The script asks for the three Meta values from
-step 2, pasted straight from Meta's page. At the end it prints the values to paste into Meta
-and the admin URL, once. A password manager or private note should be open for those.
+step 2, pasted straight from Meta's page. It prints the admin URL and the verify token as
+soon as it saves them, and again at the end with the other values to paste into Meta. A
+password manager or private note should be open for those. If it stops after printing them,
+the next run replaces both and prints the new ones.
 
 Ask them for the **Worker URL** only (`https://ig-comment-dm.<name>.workers.dev`). It's
 public. If the script stops, ask what the last lines said, without secrets, and check them
