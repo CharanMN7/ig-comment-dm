@@ -13,6 +13,7 @@ import { isSelfComment } from './guard.ts';
 import { type MatchVerdict, exclusionSkipReason, matchComment } from './match.ts';
 import { type MetaCallResult, sendPrivateReply, sendPublicReply } from './meta.ts';
 import { fillPlaceholders } from './placeholders.ts';
+import { parsePublicReplies, pickReply } from './replies.ts';
 import type { Env } from './types.ts';
 
 type CommentValue = {
@@ -195,8 +196,8 @@ export async function processComment(
   // leaves it out, the text still goes, with `{username}` tidied away.
   const username = value.from?.username;
   const dmText = fillPlaceholders(rule.dm_text, username);
-  const savedReply = rule.public_reply_text?.trim();
-  const publicText = savedReply ? fillPlaceholders(savedReply, username) : '';
+  const reply = pickReply(parsePublicReplies(rule.public_reply_text));
+  const publicText = reply ? fillPlaceholders(reply, username) : '';
 
   let token: string;
   try {
