@@ -142,34 +142,70 @@ export function newMigrations(nameStatus: string): string[] {
 }
 
 export interface TreeDifference {
-  /** Lines that differ, leaving out wrangler.toml. */
+  /**
+   * Lines that differ, leaving out wrangler.toml, plus one for each file or
+   * whole directory the copy does not have.
+   */
   distance: number;
   /** Lines that differ in wrangler.toml, which Cloudflare edits in a Deploy button copy. */
   wranglerDistance: number;
-  /** Files the official commit has and the copy does not. */
-  lacking: string[];
+  /** What the official commit has and the copy does not: a file, or a directory ending in "/". */
+  missing: string[];
+  /** Migration files the official commit has and the copy does not. */
+  missingMigrations: string[];
 }
+
+const MIGRATION_FILE = /^migrations\/[^/]+\.sql$/;
 
 /**
  * Reads `git diff --numstat --summary --text --no-renames <official> <copy>`.
  * --text matters: package-lock.json is marked -diff, and numstat would
  * otherwise count a whole lockfile change as one line.
+ *
+ * A missing file or directory counts once, however long it is. Someone who
+ * deleted the docs site from a download should not look further from the
+ * version they downloaded than from one before the site existed.
  */
-export function treeDifference(output: string): TreeDifference {
-  const diff: TreeDifference = { distance: 0, wranglerDistance: 0, lacking: [] };
-  for (const line of output.split('\n')) {
-    const deleted = line.match(/^ delete mode \d+ (.+)$/);
-    if (deleted) {
-      diff.lacking.push(deleted[1]);
-      continue;
-    }
+export function treeDifference(output: string, copyFiles: string[]): TreeDifference {
+  const rows = output.split('\n');
+  const lacking = rows.flatMap((line) => line.match(/^ delete mode \d+ (.+)$/)?.[1] ?? []);
+  const gone = new Set(lacking);
+  const diff: TreeDifference = {
+    distance: 0,
+    wranglerDistance: 0,
+    missing: missingPaths(lacking, copyFiles),
+    missingMigrations: lacking.filter((f) => MIGRATION_FILE.test(f)),
+  };
+  for (const line of rows) {
     const [added, removed, path] = line.split('\t');
-    if (path === undefined) continue;
+    if (path === undefined || gone.has(path)) continue;
     const lines = added === '-' ? 1 : Number(added) + Number(removed);
     if (path === 'wrangler.toml') diff.wranglerDistance += lines;
     else diff.distance += lines;
   }
+  diff.distance += diff.missing.length;
   return diff;
+}
+
+/** Groups missing files under the highest directory the copy has nothing in. */
+export function missingPaths(lacking: string[], copyFiles: string[]): string[] {
+  const copyDirs = new Set<string>();
+  for (const file of copyFiles) {
+    for (let i = file.indexOf('/'); i !== -1; i = file.indexOf('/', i + 1)) copyDirs.add(file.slice(0, i + 1));
+  }
+  const units = new Set<string>();
+  for (const file of lacking) {
+    let unit = file;
+    for (let i = file.indexOf('/'); i !== -1; i = file.indexOf('/', i + 1)) {
+      const dir = file.slice(0, i + 1);
+      if (!copyDirs.has(dir)) {
+        unit = dir;
+        break;
+      }
+    }
+    units.add(unit);
+  }
+  return [...units];
 }
 
 export interface Candidate extends TreeDifference {
@@ -180,21 +216,21 @@ export interface Candidate extends TreeDifference {
  * Picks the official commit a copy most likely started from. Guessing too new
  * is the dangerous direction: every official change up to the guess counts as
  * already in the copy, so a change the copy never had is dropped without a
- * word. Guessing too old only makes git compare a few changes it already has,
- * which merge cleanly or show up as a clash. So:
+ * word. Guessing too old is safer but not free: changes the copy already has
+ * get compared again and can clash with lines the person never touched. So:
  *
- * - A commit with a file the copy lacks is out, because the copy predates it
- *   (a migration file is the case that matters most), unless every commit has
- *   that file, which means the person deleted it.
- * - Then the fewest differing lines, then the closest wrangler.toml, and on a
- *   tie the oldest.
+ * - A commit with a migration the copy lacks is out: the copy predates it, and
+ *   counting it as applied would leave the database without it. Other missing
+ *   files prove much less, since people delete folders they do not need and
+ *   Cloudflare's import may leave some out, so they only add to the distance.
+ * - Then the smallest distance, then the closest wrangler.toml, and on a tie
+ *   the oldest.
  *
  * `candidates` is newest first.
  */
 export function pickStartingPoint(candidates: Candidate[]): Candidate | null {
   if (candidates.length === 0) return null;
-  const everywhere = new Set(candidates[0].lacking.filter((f) => candidates.every((c) => c.lacking.includes(f))));
-  const plausible = candidates.filter((c) => c.lacking.every((f) => everywhere.has(f)));
+  const plausible = candidates.filter((c) => c.missingMigrations.length === 0);
   const pool = plausible.length ? plausible : candidates;
   let best = pool[0];
   for (const c of pool.slice(1)) {
@@ -210,7 +246,7 @@ export function pickStartingPoint(candidates: Candidate[]): Candidate | null {
 }
 
 export function isExactMatch(c: Candidate): boolean {
-  return c.distance === 0 && c.lacking.length === 0;
+  return c.distance === 0 && c.missing.length === 0;
 }
 
 /**
@@ -326,6 +362,12 @@ export interface ConflictInput {
   branch: string;
   /** The person has an uncommitted database_id line, which a plain git merge refuses to work around. */
   stashFirst: boolean;
+  /**
+   * The official commit the copy was only a close match for, which was not
+   * kept. A merge by hand has to record it first, and the clash may come from
+   * the guess rather than from the person's edits.
+   */
+  recordFirst?: string | null;
 }
 
 /**
@@ -333,7 +375,7 @@ export interface ConflictInput {
  * has to say which of their edits clashed and give both ways out, because
  * conflict markers are not something a creator should meet unannounced.
  */
-export function conflictMessage({ files, goneUpstream, mode, branch, stashFirst }: ConflictInput): Stop {
+export function conflictMessage({ files, goneUpstream, mode, branch, stashFirst, recordFirst }: ConflictInput): Stop {
   const takeable = files.filter((f) => f !== 'wrangler.toml');
   const checkout = takeable.filter((f) => !goneUpstream.includes(f));
   const remove = takeable.filter((f) => goneUpstream.includes(f));
@@ -341,11 +383,19 @@ export function conflictMessage({ files, goneUpstream, mode, branch, stashFirst 
     mode === 'push' ? `  git push origin ${shellQuote(branch)}` : '  npm ci\n  npm run deploy';
   const again = mode === 'push' ? '  npm run update -- --push' : '  npm run update';
 
-  const parts = [
-    'These files have edits of your own that clash with the new version:',
-    bullet(files),
-    'Your edits to them are the cause. Nothing was merged: your files are exactly as they were.',
-  ];
+  const parts = recordFirst
+    ? [
+        'These files clash with the new version:',
+        bullet(files),
+        'Your copy did not exactly match an official version, so a clash can come from an official',
+        'change your copy already had, as well as from your own edits. Nothing was merged: your',
+        'files are exactly as they were.',
+      ]
+    : [
+        'These files have edits of your own that clash with the new version:',
+        bullet(files),
+        'Your edits to them are the cause. Nothing was merged: your files are exactly as they were.',
+      ];
   if (files.includes('wrangler.toml')) {
     parts.push(
       '',
@@ -363,6 +413,9 @@ export function conflictMessage({ files, goneUpstream, mode, branch, stashFirst 
   // The set-aside database_id line is back in wrangler.toml now, and git
   // will not merge over an uncommitted change to a file the update touches.
   if (stashFirst) parts.push('  git stash');
+  if (recordFirst) {
+    parts.push(`  git merge -s ours --allow-unrelated-histories -m "Record where this copy started" ${recordFirst}`);
+  }
   parts.push(
     `  git merge upstream/${UPSTREAM_BRANCH}`,
     '  In each file above, keep the lines you want and delete the <<<<<<<, ======= and >>>>>>> lines.',

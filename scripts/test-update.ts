@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
@@ -19,6 +19,7 @@ import {
   isExactMatch,
   looksLikeCloudflareImport,
   mergeStoppedMessage,
+  missingPaths,
   newMigrations,
   onlyDatabaseIdChange,
   parseArgs,
@@ -131,12 +132,30 @@ describe('reading git output', () => {
     assert.deepEqual(newMigrations(''), []);
   });
 
-  it('totals differing lines, keeping wrangler.toml apart and listing files the copy lacks', () => {
+  it('totals differing lines, keeping wrangler.toml apart, and counts each missing file or directory once', () => {
+    const copy = ['src/a.ts', 'src/mine.ts', 'logo.png', 'README.md', 'wrangler.toml', 'migrations/001_init.sql'];
     const out =
-      '3\t1\tsrc/a.ts\n-\t-\tlogo.png\n0\t10\tREADME.md\n2\t0\twrangler.toml\n0\t1\tmigrations/002_note.sql\n' +
-      ' delete mode 100644 migrations/002_note.sql\n create mode 100644 src/mine.ts\n';
-    assert.deepEqual(treeDifference(out), { distance: 16, wranglerDistance: 2, lacking: ['migrations/002_note.sql'] });
-    assert.deepEqual(treeDifference(''), { distance: 0, wranglerDistance: 0, lacking: [] });
+      '3\t1\tsrc/a.ts\n-\t-\tlogo.png\n0\t10\tREADME.md\n2\t0\twrangler.toml\n' +
+      '0\t1\tmigrations/002_note.sql\n0\t40\tsite/a.md\n0\t60\tsite/deep/b.md\n0\t5\tsrc/gone.ts\n' +
+      ' delete mode 100644 migrations/002_note.sql\n delete mode 100644 site/a.md\n delete mode 100644 site/deep/b.md\n' +
+      ' delete mode 100644 src/gone.ts\n create mode 100644 src/mine.ts\n';
+    assert.deepEqual(treeDifference(out, copy), {
+      distance: 4 + 1 + 10 + 3,
+      wranglerDistance: 2,
+      missing: ['migrations/002_note.sql', 'site/', 'src/gone.ts'],
+      missingMigrations: ['migrations/002_note.sql'],
+    });
+    assert.deepEqual(treeDifference('', copy), { distance: 0, wranglerDistance: 0, missing: [], missingMigrations: [] });
+  });
+
+  it('groups missing files under the highest directory the copy has nothing in', () => {
+    const copy = ['src/index.ts', '.github/ISSUE_TEMPLATE/bug.md'];
+    assert.deepEqual(missingPaths(['site/a.md', 'site/b/c.md', 'src/gone.ts', '.github/workflows/ci.yml', 'LICENSE'], copy), [
+      'site/',
+      'src/gone.ts',
+      '.github/workflows/',
+      'LICENSE',
+    ]);
   });
 
   it('reads the files git refuses to overwrite', () => {
@@ -152,11 +171,12 @@ describe('reading git output', () => {
 });
 
 describe('pickStartingPoint', () => {
-  const c = (sha: string, distance: number, wranglerDistance = 0, lacking: string[] = []): Candidate => ({
+  const c = (sha: string, distance: number, wranglerDistance = 0, missing: string[] = []): Candidate => ({
     sha,
     distance,
     wranglerDistance,
-    lacking,
+    missing,
+    missingMigrations: missing.filter((f) => f.startsWith('migrations/')),
   });
 
   it('picks the closest official commit', () => {
@@ -187,9 +207,11 @@ describe('pickStartingPoint', () => {
     assert.equal(isExactMatch(picked as Candidate), false);
   });
 
-  it('ignores a file every commit has, which means the person deleted it', () => {
-    const picked = pickStartingPoint([c('c2', 5, 0, ['docs/x.md']), c('c1', 9, 0, ['docs/x.md'])]);
-    assert.equal(picked?.sha, 'c2');
+  it('does not rule out a commit for any other missing folder, which the person may have deleted', () => {
+    // A download of c3 with site/ (added in c2) deleted, or a Deploy button copy
+    // without .github/workflows/: going back to c1 would be too old.
+    const picked = pickStartingPoint([c('c4', 3, 0, ['site/']), c('c3', 1, 0, ['site/']), c('c2', 3, 0, ['site/']), c('c1', 2)]);
+    assert.equal(picked?.sha, 'c3');
     assert.equal(isExactMatch(picked as Candidate), false);
     assert.equal(isExactMatch(c('c1', 0)), true);
   });
@@ -294,6 +316,20 @@ describe('conflictMessage', () => {
     const pushCopy = conflictMessage({ files: ['src/a.ts'], goneUpstream: [], mode: 'push', branch: 'my branch', stashFirst: false });
     assert.match(pushCopy.hint, /clashed"\n  npm run update -- --push\n/);
     assert.match(pushCopy.hint, /git push origin 'my branch'$/);
+  });
+
+  it('does not blame the person for a clash an inexact guess may have caused, and records it in a merge by hand', () => {
+    const { hint } = conflictMessage({
+      files: ['src/index.ts'],
+      goneUpstream: [],
+      mode: 'deploy',
+      branch: 'master',
+      stashFirst: false,
+      recordFirst: 'abc1234',
+    });
+    assert.doesNotMatch(hint, /Your edits to them are the cause/);
+    assert.match(hint, /did not exactly match an official version/);
+    assert.match(hint, /git merge -s ours --allow-unrelated-histories -m "Record where this copy started" abc1234\n  git merge upstream\/master/);
   });
 
   it('sets an uncommitted database_id aside around a merge by hand', () => {
@@ -619,6 +655,20 @@ describe('npm run update, end to end', () => {
     assert.equal(existsSync(join(copy, BACKUP)), false);
   });
 
+  it('leaves a stale backup alone when wrangler.toml changed after the interrupted run', () => {
+    write(join(copy, BACKUP), withDatabaseId(WRANGLER_V1, 'feedf00d'));
+    const anHourAgo = Date.now() / 1000 - 3600;
+    utimesSync(join(copy, BACKUP), anHourAgo, anHourAgo);
+
+    const { code, out } = update(copy, '--yes');
+    assert.equal(code, 0, out);
+    assert.match(out, /wrangler\.toml has changed since: database_id = "feedf00d"/);
+    assert.match(out, /Left wrangler\.toml as it is/);
+    assert.match(out, /delete \.git\/ig-comment-dm-update-wrangler\.toml/);
+    assert.doesNotMatch(readFileSync(join(copy, 'wrangler.toml'), 'utf8'), /database_id/);
+    assert.equal(head(copy), v2);
+  });
+
   it('keeps the database_id line safe when the update deletes wrangler.toml', () => {
     const moved = join(dir, `moved-${n}`);
     sh(dir, ['clone', '-q', join(dir, 'v1.git'), moved]);
@@ -635,6 +685,12 @@ describe('npm run update, end to end', () => {
     assert.match(out, /database_id = "c0ffee00"/);
     assert.equal(existsSync(join(copy, 'wrangler.toml')), false);
     assert.match(readFileSync(join(copy, BACKUP), 'utf8'), /database_id = "c0ffee00"/);
+    assert.match(out, /delete that file to stop this message/);
+
+    const again = updateWith({ env: { UPDATE_UPSTREAM_URL: join(dir, `moved-${n}.git`) } }, copy, '--yes');
+    assert.equal(again.code, 0, again.out);
+    assert.match(again.out, /no wrangler\.toml to put it back in: database_id = "c0ffee00"/);
+    assert.match(again.out, /To stop this message, delete \.git\/ig-comment-dm-update-wrangler\.toml/);
   });
 
   it('offers to push again after a push that failed, instead of saying there is nothing to do', () => {
@@ -673,8 +729,8 @@ describe('npm run update, end to end', () => {
     const tags: Record<string, string> = {};
 
     // An official history where the dangerous guesses are available: a change
-    // made only in wrangler.toml, and a migration that comes before a fix
-    // someone might copy across by hand.
+    // made only in wrangler.toml, a folder people may delete, and a migration
+    // that comes before a fix someone might copy across by hand.
     before(() => {
       graft = join(dir, 'graft-work');
       mkdirSync(join(graft, 'scripts'), { recursive: true });
@@ -694,6 +750,8 @@ describe('npm run update, end to end', () => {
       commit('g1', 'First version.');
       write(join(graft, 'wrangler.toml'), `${WRANGLER_V1}\n[triggers]\ncrons = ["*/5 * * * *"]\n`);
       commit('g2', 'Add the 5-minute poll cron.');
+      for (const page of ['a', 'b', 'c']) write(join(graft, `site/${page}.md`), `# Page ${page}\n\n${'Words.\n'.repeat(30)}`);
+      commit('g2s', 'Add a docs site.');
       write(join(graft, 'migrations/002_note.sql'), 'ALTER TABLE rules ADD COLUMN note TEXT;\n');
       write(join(graft, 'src/index.ts'), index(1, true));
       commit('g3', 'Add a note column.');
@@ -727,10 +785,29 @@ describe('npm run update, end to end', () => {
       const { code, out } = updateWith(opts(), zip, '--yes');
       assert.equal(code, 0, out);
       assert.match(out, new RegExp(`started from official version ${tags.g1.slice(0, 7)}`));
-      assert.match(out, /4 new changes since your copy/);
+      assert.match(out, /5 new changes since your copy/);
       assert.match(out, /Add the 5-minute poll cron\./);
       assert.match(readFileSync(join(zip, 'wrangler.toml'), 'utf8'), /\[triggers\]\ncrons = /);
       assert.equal(readFileSync(join(zip, 'src/index.ts'), 'utf8'), index(2, true));
+    });
+
+    it('does not go back too far for a copy whose docs folder was deleted', () => {
+      // A download taken after the migration, without the docs site.
+      const zip = zipCopy('g3', (path) => rmSync(join(path, 'site'), { recursive: true }));
+      const mine = head(zip);
+
+      const declined = updateWith(opts(), zip, '--yes');
+      assert.match(declined.out, new RegExp(`closest to official version ${tags.g3.slice(0, 7)}`));
+      assert.match(declined.out, /Not in your copy:\n    site\/\n/);
+      assert.doesNotMatch(declined.out, /This update changes your database/);
+      assert.equal(head(zip), mine);
+
+      const accepted = updateWith(opts('y\n'), zip, '--yes');
+      assert.equal(accepted.code, 0, accepted.out);
+      assert.match(accepted.out, /2 new changes since your copy/);
+      assert.equal(readFileSync(join(zip, 'src/index.ts'), 'utf8'), index(2, true));
+      assert.equal(readFileSync(join(zip, 'src/fix.ts'), 'utf8'), FIX_V2);
+      assert.equal(existsSync(join(zip, 'site')), false);
     });
 
     it('asks before trusting an inexact match, and never treats a missing migration as applied', () => {
@@ -741,7 +818,7 @@ describe('npm run update, end to end', () => {
       const declined = updateWith(opts(), zip, '--yes');
       assert.equal(declined.code, 0, declined.out);
       assert.match(declined.out, new RegExp(`closest to official version ${tags.g2.slice(0, 7)}`));
-      assert.match(declined.out, /    src\/fix\.ts\n/);
+      assert.match(declined.out, /Files that differ from it:\n    src\/fix\.ts\n/);
       assert.match(declined.out, /count as already in your copy:\n\s+\w+ Add the 5-minute poll cron\.\n\s+\w+ First version\./);
       assert.match(declined.out, /This update changes your database: 1 new migration\n\s+migrations\/002_note\.sql/);
       assert.match(declined.out, /Asking even with --yes/);

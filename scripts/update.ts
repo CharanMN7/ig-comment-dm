@@ -24,7 +24,7 @@
  * UPDATE_SKIP_INSTALL_AND_DEPLOY=1 stops after the merge or push. The tests use both.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
@@ -78,6 +78,9 @@ const SKIP_INSTALL_AND_DEPLOY = process.env.UPDATE_SKIP_INSTALL_AND_DEPLOY === '
 // Where the uncommitted database_id line waits while the merge runs, so a crash
 // or Ctrl-C cannot lose it. The next run puts it back.
 const BACKUP_NAME = 'ig-comment-dm-update-wrangler.toml';
+// An interrupted run's last write to wrangler.toml comes seconds after the
+// backup. A change later than this is the person's own.
+const BACKUP_GRACE_MS = 2 * 60 * 1000;
 // npm and npx are .cmd shims on Windows, which spawn only runs through a shell.
 // Every argument passed that way is a fixed string.
 const SHELL = process.platform === 'win32';
@@ -228,7 +231,10 @@ function putDatabaseIdBack(): void {
   const keep = (why: string): void => {
     warn(`${why} Your database_id line was:`);
     say(`    ${held.line}`);
-    note(`A copy is kept in ${relative(ROOT, held.backup)}. Wrangler finds the database by name, so deploys still work.`);
+    note(
+      `A copy is kept in ${relative(ROOT, held.backup)}. Wrangler finds the database by name, so deploys still work.\n` +
+        'Once you have noted the line, delete that file to stop this message.',
+    );
   };
   if (!existsSync(WRANGLER_TOML)) return keep('The new version has no wrangler.toml, so it could not go back in.');
   if (git(['rev-parse', 'HEAD:wrangler.toml']).out.trim() === held.blobBefore) {
@@ -250,25 +256,50 @@ process.on('SIGINT', () => {
   process.exit(130);
 });
 
-/** A run that was killed mid-merge left the line in the backup. Put it back first. */
-function recoverDatabaseId(): void {
+/**
+ * A run that was killed mid-merge left the line in the backup. Put it back
+ * first, unless wrangler.toml has changed since: the person may have taken the
+ * line out on purpose.
+ */
+async function recoverDatabaseId(yes: boolean): Promise<void> {
   const backup = gitPath(BACKUP_NAME);
   if (!existsSync(backup)) return;
+  const clear = `To stop this message, delete ${relative(ROOT, backup)}.`;
   const line = databaseIdLineIn(readFileSync(backup, 'utf8'));
-  if (line === null || !existsSync(WRANGLER_TOML)) {
-    if (line) warn(`An earlier update set aside your database_id line and wrangler.toml is gone: ${line}`);
+  if (line === null) {
+    rmSync(backup, { force: true });
+    return;
+  }
+  if (!existsSync(WRANGLER_TOML)) {
+    warn(`An earlier update set aside your database_id line, and there is no wrangler.toml to put it back in: ${line}`);
+    note(`Wrangler finds the database by name, so deploys still work. ${clear}`);
     return;
   }
   const current = readFileSync(WRANGLER_TOML, 'utf8');
-  if (databaseIdLineIn(current) === null) {
-    const restored = restoreDatabaseId(current, line);
-    if (restored === null) {
-      warn(`An earlier update set aside your database_id line and could not put it back: ${line}`);
+  if (databaseIdLineIn(current) !== null) {
+    rmSync(backup, { force: true });
+    return;
+  }
+  if (statSync(WRANGLER_TOML).mtimeMs > statSync(backup).mtimeMs + BACKUP_GRACE_MS) {
+    warn(`An earlier update was interrupted while your database_id line was set aside, and wrangler.toml has changed since: ${line}`);
+    if (yes) {
+      note(`Left wrangler.toml as it is. To put the line back, add it under database_name. ${clear}`);
       return;
     }
-    writeFileSync(WRANGLER_TOML, restored);
-    ok('Put back the database_id line an interrupted update had set aside.');
+    if (!(await confirm('  Put the line back? [y/N] '))) {
+      rmSync(backup, { force: true });
+      note('Left wrangler.toml as it is.');
+      return;
+    }
   }
+  const restored = restoreDatabaseId(current, line);
+  if (restored === null) {
+    warn(`An earlier update set aside your database_id line and found no database_name line to put it under: ${line}`);
+    note(clear);
+    return;
+  }
+  writeFileSync(WRANGLER_TOML, restored);
+  ok('Put back the database_id line an interrupted update had set aside.');
   rmSync(backup, { force: true });
 }
 
@@ -277,7 +308,10 @@ function recoverDatabaseId(): void {
 interface StartingPoint {
   sha: string;
   exact: boolean;
+  /** Files in both that differ, or that only the copy has. */
   differing: string[];
+  /** Files or directories the official version has and the copy does not. */
+  missing: string[];
 }
 
 /**
@@ -291,10 +325,11 @@ interface StartingPoint {
 function findStartingPoint(target: string): StartingPoint | null {
   const roots = lines(gitOut(['rev-list', '--max-parents=0', 'HEAD']));
   const root = roots[roots.length - 1];
+  const copyFiles = lines(gitOut(['ls-tree', '-r', '--name-only', root]));
   const candidates: Candidate[] = lines(gitOut(['log', '--first-parent', '--format=%H', '-n', '500', target])).map(
     (sha) => ({
       sha,
-      ...treeDifference(gitOut(['diff', '--numstat', '--summary', '--text', '--no-renames', sha, root])),
+      ...treeDifference(gitOut(['diff', '--numstat', '--summary', '--text', '--no-renames', sha, root]), copyFiles),
     }),
   );
   const best = pickStartingPoint(candidates);
@@ -302,8 +337,10 @@ function findStartingPoint(target: string): StartingPoint | null {
   const exact = isExactMatch(best);
   const differing = exact
     ? []
-    : lines(gitOut(['diff', '--name-only', '--no-renames', best.sha, root, '--', '.', ':(exclude)wrangler.toml']));
-  return { sha: best.sha, exact, differing };
+    : lines(
+        gitOut(['diff', '--name-only', '--no-renames', '--diff-filter=AM', best.sha, root, '--', '.', ':(exclude)wrangler.toml']),
+      );
+  return { sha: best.sha, exact, differing, missing: best.missing };
 }
 
 // --------------------------------------------------------------- merging
@@ -448,7 +485,7 @@ async function main(): Promise<void> {
   }
   const branch = branchRes.out.trim();
 
-  if (!args.dryRun) recoverDatabaseId();
+  if (!args.dryRun) await recoverDatabaseId(args.yes);
 
   let changed = changedPaths(git(['status', '--porcelain', '-z', '--untracked-files=no']).out);
   let databaseIdLine: string | null = null;
@@ -569,10 +606,21 @@ async function main(): Promise<void> {
     if (startingPoint.exact) {
       ok(`Your copy started from official version ${short}.`);
     } else {
-      warn(`Your copy is closest to official version ${short}, but these files differ from it:`);
-      for (const f of startingPoint.differing.slice(0, 15)) say(`    ${f}`);
-      if (startingPoint.differing.length > 15) say(dim(`    …and ${startingPoint.differing.length - 15} more`));
-      note('They count as your own edits: the update keeps them, and stops if it needs to change the same lines.');
+      warn(`Your copy is closest to official version ${short}, but it is not an exact match.`);
+      const list = (paths: string[]): void => {
+        for (const f of paths.slice(0, 15)) say(`    ${f}`);
+        if (paths.length > 15) say(dim(`    …and ${paths.length - 15} more`));
+      };
+      if (startingPoint.differing.length) {
+        say('  Files that differ from it:');
+        list(startingPoint.differing);
+        note('They count as your own edits: the update keeps them, and stops if it needs to change the same lines.');
+      }
+      if (startingPoint.missing.length) {
+        say('  Not in your copy:');
+        list(startingPoint.missing);
+        note('They count as deleted by you: they stay deleted, and if the update changes one, it stops and says what to do.');
+      }
       say('');
       warn('These official changes, and everything before them, count as already in your copy:');
       for (const c of parseLog(gitOut(['log', '--no-merges', '--format=%h%x09%s', '-n', '8', startingPoint.sha]))) {
@@ -646,12 +694,19 @@ async function main(): Promise<void> {
     putDatabaseIdBack();
   }
 
+  // A starting point that was only a close match may itself be why the merge
+  // clashed, so it is not kept; an exact one is, so a merge by hand can use it.
+  const recordFirst = startingPoint && !startingPoint.exact ? startingPoint.sha.slice(0, 7) : null;
   if (!result.ok) {
-    if (startingPoint) note('The record of where your copy started is kept, so the commands below work. It changes no files.');
+    if (recordFirst) {
+      if (git(['reset', '-q', '--keep', head]).code !== 0) warn('Could not take back the record of where your copy started. It changes no files.');
+    } else if (startingPoint) {
+      note('The record of where your copy started is kept, so the commands below work. It changes no files.');
+    }
     if (result.kind !== 'refused' && result.abort.code !== 0) stop(abortFailedMessage(result.abort.out));
     if (result.kind === 'conflict') {
       const goneUpstream = result.files.filter((f) => git(['cat-file', '-e', `${target}:${f}`]).code !== 0);
-      stop(conflictMessage({ files: result.files, goneUpstream, mode, branch, stashFirst: databaseIdLine !== null }));
+      stop(conflictMessage({ files: result.files, goneUpstream, mode, branch, stashFirst: databaseIdLine !== null, recordFirst }));
     }
     if (result.kind === 'stopped') stop(mergeStoppedMessage(result.out));
     if (result.blocked.length) stop(blockedMessage(result.blocked));

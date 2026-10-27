@@ -99,7 +99,7 @@ Every stop leaves your copy as it was and says what to do next. The common ones:
 | You aren't logged in to Cloudflare | Run `npx wrangler login`. If Cloudflare deploys your copy from GitHub, use `--push` instead. |
 | The new version adds files that already exist in this folder | Move those files out of the folder, then run it again. |
 | Git doesn't know your name and email | Set them once with `git config --global user.name "Your Name"` and `git config --global user.email "you@example.com"`. |
-| Your copy is closest to an official version, but some files differ | It found no exact match for where your copy started, so it lists the official changes it will treat as already in your copy and asks, even with `--yes`. Answer no if your copy is missing one of them. |
+| Your copy is closest to an official version, but it is not an exact match | It found no exact match for where your copy started. It lists the files that differ, anything missing from your copy (a folder you deleted, say), and the official changes it will treat as already in your copy, then asks, even with `--yes`. Answer no if your copy is missing one of those changes. |
 
 If it stops after merging, because installing or deploying failed, the update is already merged. Fix what the output says, then run `npm run deploy`. With `--push`, running `npm run update -- --push` again notices GitHub is behind and offers to push.
 
