@@ -71,7 +71,11 @@ Instagram allows one DM per comment, but any number of public replies. The other
 
 A rule with **Reply to every comment on this post** ticked has no keywords: every comment on its post matches. Each comment gets its own DM, so someone who comments three times gets it three times. Exclusions still apply, matched as whole words.
 
-On an older post, the five-minute check also reads the post's 25 newest comments from the last 72 hours and answers any it hasn't handled, up to 10 per check, within the same minute. Comments it already skipped stay skipped. On the Test page, pick the post under "Which posts" to see such a rule match.
+On an older post, the five-minute check below also answers the post's comments from the last 72 hours that it hasn't handled. Comments it already skipped stay skipped. On the Test page, pick the post under "Which posts" to see such a rule match.
+
+### The five-minute check
+
+Every 5 minutes the Worker also reads recent comments itself, for the ones the webhook missed. It covers each post a rule is limited to, plus your 3 newest posts if any rule is on all posts, and reads 3 of them per account each time. When there are more than 3, it takes turns: with 4 to 6 posts each one is read every 10 minutes, with 7 to 9 every 15, and so on. From each post it reads the 25 newest comments from the last 72 hours. It queues up to 10 comments per check across all accounts, which the same minute starts sending under the hourly limit below, so a busy check leaves the rest for the next one.
 
 ## Test a rule
 

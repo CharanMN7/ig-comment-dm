@@ -150,6 +150,57 @@ describe('the comment poll, every fifth minute', () => {
     expect(meta.callsTo('GET', '/me/media')).toEqual([]);
   });
 
+  const commentReads = () => meta.callsTo('GET', '/:id/comments').map((c) => c.path.split('/')[1]);
+
+  it('takes turns when rules cover more than 3 posts, so a fourth post is read on the next sweep', async () => {
+    await seedAccount();
+    for (const post of ['p1', 'p2', 'p3', 'p4']) await seedRule({ keywords: [], matchAll: true, mediaId: post });
+    meta.on('GET', '/:id/comments', commentsByMedia({ p4: [comment('c-on-p4', 'me please')] }));
+
+    await runScheduled(POLL);
+    expect(commentReads()).toEqual(['p1', 'p2', 'p3']);
+    expect(dmTargets()).toEqual([]);
+
+    meta.clearCalls();
+    await runScheduled(POLL);
+    expect(commentReads()).toEqual(['p4', 'p1', 'p2']);
+    expect(dmTargets()).toEqual(['c-on-p4']);
+
+    meta.clearCalls();
+    await runScheduled(POLL);
+    expect(commentReads()).toEqual(['p3', 'p4', 'p1']);
+  });
+
+  it('still reads the newest posts for an all-posts rule when 3 rules have posts of their own', async () => {
+    await seedAccount();
+    for (const post of ['s1', 's2', 's3']) await seedRule({ keywords: ['recipe'], mediaId: post });
+    await seedRule({ keywords: ['guide'] });
+    meta.on('GET', '/me/media', { json: { data: ['m1', 'm2', 'm3', 'm4'].map((id) => ({ id })) } });
+    meta.on('GET', '/:id/comments', commentsByMedia({ m1: [comment('c-guide', 'guide please')] }));
+
+    await runScheduled(POLL);
+    expect(commentReads()).toEqual(['s1', 's2', 's3']);
+    meta.clearCalls();
+    await runScheduled(POLL);
+    expect(commentReads()).toEqual(['m1', 'm2', 'm3']);
+    expect(dmTargets()).toEqual(['c-guide']);
+  });
+
+  it('starts the next sweep at a post the 10-a-sweep cap cut short', async () => {
+    await seedAccount();
+    for (const post of ['p1', 'p2', 'p3', 'p4']) await seedRule({ keywords: [], matchAll: true, mediaId: post });
+    meta.on('GET', '/:id/comments', commentsByMedia({ p1: Array.from({ length: 12 }, (_, i) => comment(`c${String(i)}`, 'me')) }));
+
+    await runScheduled(POLL);
+    expect(commentReads()).toEqual(['p1']);
+    expect(dmTargets()).toHaveLength(10);
+
+    meta.clearCalls();
+    await runScheduled(POLL);
+    expect(commentReads()).toEqual(['p1', 'p2', 'p3']);
+    expect(dmTargets()).toEqual(['c10', 'c11']);
+  });
+
   it('does not DM a comment the webhook already handled', async () => {
     await seedAccount();
     await seedRule();

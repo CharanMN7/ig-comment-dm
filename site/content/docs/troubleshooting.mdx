@@ -18,11 +18,11 @@ Most confusing symptoms make sense once you know there are two.
 
 | | The webhook | The poll |
 |---|---|---|
-| Speed | About two seconds, or a minute or more when queued | Up to five minutes |
+| Speed | About two seconds, or a minute or more when queued | Up to five minutes, or longer when rules cover more than 3 posts ([how it takes turns](/using#the-five-minute-check)) |
 | How it starts | Meta POSTs to `/webhook` | The Worker asks Instagram for recent comments |
 | Needs the app to be Live | Yes | **No** |
 | Sees Hidden Words comments | No | No |
-| Covers old posts | Yes | Only the 3 most recent posts, last 72 hours |
+| Covers old posts | Yes | Posts a rule is limited to, plus the 3 newest for rules on all posts. Last 72 hours only |
 
 They share the same rule matching, the same send queue and the same duplicate protection, so a comment is never answered twice, whichever path finds it first.
 

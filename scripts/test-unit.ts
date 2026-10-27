@@ -42,7 +42,7 @@ import {
 } from '../src/other-replies.ts';
 import { WEBHOOK_SEND_BUDGET_MS, parseWebhookPayload } from '../src/process.ts';
 import { DRAIN_BUDGET_MS, MAX_ATTEMPTS, RETRY_BACKOFF_SECONDS, drainRatePerMinute, minuteOf } from '../src/queue.ts';
-import { POLL_BUDGET_MS } from '../src/reconcile.ts';
+import { POLL_BUDGET_MS, pollWindow } from '../src/reconcile.ts';
 import { adminStep, isLocalTarget } from './selftest-lib.ts';
 import {
   EXCLUSION_TOO_SHORT_MESSAGE,
@@ -697,6 +697,39 @@ describe('public replies from the other matching rules', () => {
 
   it('are capped at the two the docs promise', () => {
     assert.equal(EXTRA_PUBLIC_REPLY_CAP, 2);
+  });
+});
+
+describe('pollWindow', () => {
+  const posts = ['p1', 'p2', 'p3', 'p4', 'p5'];
+
+  it('reads every post when they fit, in order', () => {
+    assert.deepEqual(pollWindow(['p1', 'p2'], null, 3), ['p1', 'p2']);
+    assert.deepEqual(pollWindow(['p1', 'p2', 'p3'], 'p2', 3), ['p1', 'p2', 'p3']);
+  });
+
+  it('takes the next ones after the last post read, wrapping round', () => {
+    assert.deepEqual(pollWindow(posts, null, 3), ['p1', 'p2', 'p3']);
+    assert.deepEqual(pollWindow(posts, 'p3', 3), ['p4', 'p5', 'p1']);
+    assert.deepEqual(pollWindow(posts, 'p5', 3), ['p1', 'p2', 'p3']);
+  });
+
+  it('starts from the top when the last post read is no longer covered by a rule', () => {
+    assert.deepEqual(pollWindow(posts, 'gone', 3), ['p1', 'p2', 'p3']);
+  });
+
+  it('reaches every post within ceil(n / size) sweeps', () => {
+    for (let n = 1; n <= 10; n++) {
+      const all = Array.from({ length: n }, (_, i) => `p${String(i)}`);
+      const seen = new Set<string>();
+      let after: string | null = null;
+      for (let sweep = 0; sweep < Math.ceil(n / 3); sweep++) {
+        const window = pollWindow(all, after, 3);
+        for (const id of window) seen.add(id);
+        after = window.at(-1) ?? null;
+      }
+      assert.equal(seen.size, n, `n = ${String(n)}`);
+    }
   });
 });
 

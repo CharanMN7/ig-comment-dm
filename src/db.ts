@@ -14,6 +14,12 @@ export async function systemSet(db: D1Database, key: string, value: string): Pro
     .run();
 }
 
+/** Writes several `system` keys as one D1 batch, which counts as one query. */
+export async function systemSetAll(db: D1Database, entries: ReadonlyArray<readonly [string, string]>): Promise<void> {
+  const upsert = db.prepare('INSERT INTO system (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
+  await db.batch(entries.map(([key, value]) => upsert.bind(key, value)));
+}
+
 export type HealthSnapshot = {
   lastCronOkAt: number | null;
   lastPollOkAt: number | null;
