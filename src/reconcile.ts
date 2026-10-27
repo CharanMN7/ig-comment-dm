@@ -92,6 +92,9 @@ export async function reconcileComments(env: Env): Promise<void> {
         if (!match && excluded.length === 0) continue;
         if ((await countSentByComment(env.DB, comment.id)) > 0) continue;
         try {
+          // For a boosted post, Instagram lists the ad's comments here along
+          // with the post's own, so an ad comment is matched as the post's,
+          // the same as the webhook does with `original_media_id`.
           const claimed = await processComment(env, account.ig_user_id, ts, {
             id: comment.id,
             text: comment.text,

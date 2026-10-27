@@ -591,6 +591,50 @@ describe('match-all rules', () => {
   });
 });
 
+describe('comments on an ad made from a post', () => {
+  // A boosted post's ad has its own media id; the webhook's original_media_id is the post's.
+  const AD = '18055500000000001';
+  const POST = '18011100000000001';
+  const onPost = rule({ id: 40, label: 'on the post', keywords: JSON.stringify(['guide']), media_id: POST });
+  const allPosts = rule({ id: 41, label: 'all posts', keywords: JSON.stringify(['guide', 'price']) });
+
+  it('match a rule scoped to the original post', () => {
+    assert.deepEqual(matchComment([onPost], 'guide please', AD, POST), { match: { rule: onPost, keyword: 'guide' }, excluded: [] });
+    assert.equal(matchComment([onPost], 'guide please', AD).match, null);
+  });
+
+  it('still prefer the post rule over an all-posts rule', () => {
+    assert.equal(matchComment([allPosts, onPost], 'guide please', AD, POST).match?.rule.id, 40);
+    assert.equal(matchComment([allPosts, onPost], 'price?', AD, POST).match?.rule.id, 41);
+  });
+
+  it('leave all-posts rules as they were', () => {
+    assert.equal(matchComment([allPosts], 'guide please', AD, POST).match?.rule.id, 41);
+    assert.equal(matchComment([allPosts], 'guide please', AD).match?.rule.id, 41);
+  });
+
+  it("put the original post's rules before any scoped to the ad's own id", () => {
+    const onAd = rule({ id: 42, label: 'on the ad', keywords: JSON.stringify(['guide']), media_id: AD });
+    // The ad's rule is older, to show the original wins by post, not by row order.
+    assert.equal(matchComment([onAd, onPost], 'guide please', AD, POST).match?.rule.id, 40);
+    assert.equal(matchComment([onAd], 'guide please', AD, POST).match?.rule.id, 42);
+    const giveawayOnAd = rule({ id: 43, label: 'ad giveaway', keywords: '[]', match_all: 1, media_id: AD });
+    const giveawayOnPost = rule({ id: 44, label: 'post giveaway', keywords: '[]', match_all: 1, media_id: POST });
+    assert.equal(matchComment([giveawayOnAd, giveawayOnPost], 'love it', AD, POST).match?.rule.id, 44);
+  });
+
+  it("answer every comment on an ad of a match-all rule's post, after keyword rules", () => {
+    const giveaway = rule({ id: 45, label: 'giveaway', keywords: '[]', match_all: 1, media_id: POST });
+    assert.equal(matchComment([giveaway], 'love it', AD, POST).match?.rule.id, 45);
+    assert.equal(matchComment([giveaway, allPosts], 'price?', AD, POST).match?.rule.id, 41);
+  });
+
+  it('consider each rule once when both ids are the same post', () => {
+    const picky = { ...onPost, exclude_keywords: JSON.stringify(['how much']) };
+    assert.deepEqual(matchComment([picky], 'how much is the guide', POST, POST).excluded.map((e) => e.rule.id), [40]);
+  });
+});
+
 describe('readRuleFields', () => {
   const valid = {
     ig_user_id: 'acct',

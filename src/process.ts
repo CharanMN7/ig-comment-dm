@@ -33,7 +33,8 @@ type CommentValue = {
   comment_id?: string | number;
   text?: string;
   from?: { id?: string | number; username?: string };
-  media?: { id?: string | number };
+  /** `original_media_id` is set only on a comment left on an ad: the post the ad was made from. */
+  media?: { id?: string | number; original_media_id?: string | number };
   media_id?: string | number;
 };
 
@@ -125,8 +126,9 @@ export async function chooseRule(
   igUserId: string,
   text: string,
   mediaId: string | undefined,
+  originalMediaId?: string,
 ): Promise<MatchVerdict> {
-  return matchComment(await listActiveRules(db, igUserId), text, mediaId);
+  return matchComment(await listActiveRules(db, igUserId), text, mediaId, originalMediaId);
 }
 
 /**
@@ -175,6 +177,7 @@ export async function processComment(
   const now = nowSeconds();
   const text = value.text ?? '';
   const mediaId = asId(value.media?.id) ?? asId(value.media_id);
+  const originalMediaId = asId(value.media?.original_media_id);
 
   if (entryTime != null) {
     const ts = asUnixSeconds(entryTime);
@@ -207,7 +210,7 @@ export async function processComment(
   });
   if (!claimed) return false;
 
-  const { match, excluded } = await chooseRule(env.DB, account.ig_user_id, text, mediaId);
+  const { match, excluded } = await chooseRule(env.DB, account.ig_user_id, text, mediaId, originalMediaId);
   if (!match) {
     // When several rules were excluded, the first in matching order is the one
     // that would have fired, so that is the rule and the reason Home shows.

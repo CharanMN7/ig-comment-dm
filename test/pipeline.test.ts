@@ -397,6 +397,88 @@ describe('media-scoped rules', () => {
   });
 });
 
+describe('comments on a boosted post', () => {
+  const POST = '18011100000000001';
+  const AD_MEDIA = '18055500000000001';
+
+  /**
+   * A comment left on the ad, in the shape Meta documents: `media.id` is the
+   * ad's own media, and `ad_id`, `ad_title` and `original_media_id` are added
+   * to `media`. No live boosted post was available, so this fixture is built
+   * from Meta's webhook reference rather than captured.
+   */
+  function adComment(opts: { commentId?: string; text?: string } = {}) {
+    return {
+      object: 'instagram',
+      entry: [
+        {
+          id: IG_USER,
+          time: NOW,
+          changes: [
+            {
+              field: 'comments',
+              value: {
+                from: { id: '9100000000000042', username: 'saw_the_ad' },
+                media: {
+                  id: AD_MEDIA,
+                  ad_id: '120212345678900001',
+                  ad_title: 'Free guide reel - boost',
+                  original_media_id: POST,
+                  media_product_type: 'FEED',
+                },
+                id: opts.commentId ?? '17955500000000001',
+                text: opts.text ?? 'guide please!',
+              },
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  it('answers with the rule scoped to the original post, once, though Meta may deliver it twice', async () => {
+    await seedAccount();
+    const scoped = await seedRule({ label: 'This reel', keywords: ['guide'], mediaId: POST, dmText: 'reel guide', publicReply: 'Sent!' });
+
+    // Meta warns that comments on boosted posts can arrive as duplicate notifications.
+    await postWebhook(adComment());
+    await postWebhook(adComment());
+
+    expect(dmCalls()).toEqual([
+      expect.objectContaining({ body: { recipient: { comment_id: '17955500000000001' }, message: { text: 'reel guide' } } }),
+    ]);
+    expect(replyCalls()).toEqual([expect.objectContaining({ path: '/17955500000000001/replies' })]);
+    expect(await sentRows()).toEqual([
+      expect.objectContaining({ comment_id: '17955500000000001', rule_id: scoped, dm_status: 'ok', reply_status: 'ok' }),
+    ]);
+  });
+
+  it('still prefers the post rule over an older all-posts rule', async () => {
+    await seedAccount();
+    await seedRule({ label: 'All posts', keywords: ['guide'], dmText: 'generic guide' });
+    const scoped = await seedRule({ label: 'This reel', keywords: ['guide'], mediaId: POST, dmText: 'reel guide' });
+    await postWebhook(adComment());
+    expect(dmCalls()).toEqual([expect.objectContaining({ body: expect.objectContaining({ message: { text: 'reel guide' } }) })]);
+    expect(await sentRows()).toEqual([expect.objectContaining({ rule_id: scoped })]);
+  });
+
+  it('leaves all-posts rules answering ad comments as before', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['recipe'], mediaId: POST, dmText: 'recipe' });
+    const general = await seedRule({ keywords: ['guide'], dmText: 'generic guide' });
+    await postWebhook(adComment());
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'ok', rule_id: general })]);
+  });
+
+  it('reads original_media_id exactly when Meta sends it as a bare number', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'], mediaId: '18099999999999999' });
+    const raw = JSON.stringify(adComment()).replace(`"original_media_id":"${POST}"`, '"original_media_id":18099999999999999');
+    await postWebhook(raw);
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'ok' })]);
+  });
+});
+
 describe('when Meta or the stored token fails', () => {
   it('records a 400 from the DM endpoint verbatim as failed, without retrying', async () => {
     await seedAccount();

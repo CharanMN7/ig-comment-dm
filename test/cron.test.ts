@@ -16,7 +16,7 @@ import {
   storedToken,
   systemValue,
 } from './support/seed.ts';
-import { adminPath, runScheduled, signedInAdmin } from './support/worker.ts';
+import { adminPath, commentValue, postWebhook, runScheduled, signedInAdmin } from './support/worker.ts';
 
 const POLL = '*/5 * * * *';
 const DAILY = '0 3 * * *';
@@ -155,6 +155,33 @@ describe('the 5-minute comment poll', () => {
     await runScheduled(POLL);
     await runScheduled(POLL);
     expect(dmTargets()).toEqual(['c1']);
+  });
+
+  it("answers a boosted post's ad comments, which Instagram lists under the post, once across webhook and poll", async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'], mediaId: 'post-1', dmText: 'reel guide' });
+    // The webhook saw this one on the ad, with the ad's media id and the post as original_media_id.
+    await postWebhook({
+      object: 'instagram',
+      entry: [{
+        id: IG_USER,
+        time: NOW,
+        changes: [{
+          field: 'comments',
+          value: { ...commentValue({ commentId: 'c-ad-hooked', text: 'guide' }), media: { id: 'ad-media-1', ad_id: '120212345678900001', original_media_id: 'post-1' } },
+        }],
+      }],
+    });
+    // The post's listing carries comments on its ad as well, with nothing marking them as the ad's.
+    meta.on('GET', '/:id/comments', commentsByMedia({ 'post-1': [comment('c-ad-hooked', 'guide'), comment('c-ad-missed', 'guide')] }));
+
+    await runScheduled(POLL);
+
+    expect(dmTargets()).toEqual(['c-ad-hooked', 'c-ad-missed']);
+    expect((await sentRows()).map((r) => [r.comment_id, r.dm_status])).toEqual([
+      ['c-ad-hooked', 'ok'],
+      ['c-ad-missed', 'ok'],
+    ]);
   });
 
   it('puts the username from the comment listing into the DM and public reply', async () => {
