@@ -77,29 +77,54 @@ describe('the admin home page', () => {
     expect(page).toContain('Public reply not posted, because Instagram didn’t confirm the DM.');
   });
 
-  it('warns when the last webhook failed its signature check', async () => {
+  async function wrongSecretFor(minutes: number) {
+    for (let minute = 0; minute < minutes; minute++) {
+      vi.setSystemTime(FROZEN_NOW_MS + minute * 60_000);
+      await postWebhook(commentPayload(), { secret: 'wrong' });
+    }
+  }
+
+  it('lists one wrong signature without raising the signing secret banner', async () => {
     await postWebhook(commentPayload(), { secret: 'wrong' });
+    const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
+    expect(page).toContain('Wrong secret');
+    expect(page).not.toContain('the signing secret did not match');
+  });
+
+  it('warns about the signing secret after wrong signatures in three separate minutes with no good one between', async () => {
+    await wrongSecretFor(3);
     const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
     expect(page).toContain('the signing secret did not match');
-    expect(page).toContain('Wrong secret');
   });
 
-  it('does not blame the signing secret for a POST that carried no signature at all', async () => {
-    await postWebhook(commentPayload(), { signature: null });
+  it('does not warn about the signing secret for a burst of wrong signatures in the same minute', async () => {
+    await Promise.all(Array.from({ length: 50 }, () => postWebhook(commentPayload(), { secret: 'wrong' })));
     const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
     expect(page).not.toContain('the signing secret did not match');
-    expect(page).toContain('Not signed');
   });
 
-  it('judges the signing secret by the newest signed delivery, whatever unsigned noise came after it', async () => {
+  it('drops the signing secret banner once a good delivery arrives, until wrong ones repeat again', async () => {
+    await wrongSecretFor(3);
     const admin = await signedInAdmin();
-    await postWebhook(commentPayload(), { secret: 'wrong' });
-    for (let i = 0; i < 10; i++) await postWebhook('{}', { signature: null });
     expect((await admin.get(adminPath('/'))).text).toContain('the signing secret did not match');
 
     await postWebhook({ object: 'instagram', entry: [] });
-    await postWebhook('{}', { signature: null });
+    vi.setSystemTime(FROZEN_NOW_MS + 3 * 60_000);
+    await postWebhook(commentPayload(), { secret: 'wrong' });
+    vi.setSystemTime(FROZEN_NOW_MS + 4 * 60_000);
+    await postWebhook(commentPayload(), { secret: 'wrong' });
     expect((await admin.get(adminPath('/'))).text).not.toContain('the signing secret did not match');
+
+    vi.setSystemTime(FROZEN_NOW_MS + 5 * 60_000);
+    await postWebhook(commentPayload(), { secret: 'wrong' });
+    expect((await admin.get(adminPath('/'))).text).toContain('the signing secret did not match');
+  });
+
+  it('neither lists nor warns about a POST that carried no signature at all', async () => {
+    for (let i = 0; i < 10; i++) await postWebhook(commentPayload(), { signature: null });
+    const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
+    expect(page).not.toContain('the signing secret did not match');
+    expect(page).not.toContain('Not signed');
   });
 
   it('says the daily check has not run yet on a fresh deploy, instead of calling it 3 days late', async () => {

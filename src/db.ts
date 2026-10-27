@@ -542,20 +542,45 @@ export async function recentWebhookEvents(db: D1Database, limit: number): Promis
   return results ?? [];
 }
 
+const BAD_SIG_LOG_SECONDS = 60;
+
 /**
- * The newest delivery that carried a signature, so unsigned POSTs from
- * scanners can neither raise the "secret did not match" banner nor hide it.
+ * Logs a POST whose signature matched neither app secret, unless one was
+ * logged in the last minute. Anyone can send these, and a row each would let
+ * them spend D1's daily write allowance, after which sends fail too. One a
+ * minute is still enough to show Meta retrying with a secret we don't have.
+ *
+ * The minute is checked in D1, not in a module variable: Cloudflare runs many
+ * isolates at once, and each would keep its own. The check is one indexed
+ * read, a refused insert writes nothing, and the statement is atomic, so a
+ * burst still logs one row.
  */
-export async function latestSignedWebhookStatus(db: D1Database): Promise<string | null> {
-  const row = await db
+export async function logBadSignature(db: D1Database, now: number, preview: string): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO webhook_events (received_at, status, object, preview, error)
+       SELECT ?1, 'bad_sig', NULL, ?2, 'signature did not match Instagram or Facebook app secret'
+       WHERE NOT EXISTS (SELECT 1 FROM webhook_events WHERE status = 'bad_sig' AND received_at > ?1 - ?3)`,
+    )
+    .bind(now, preview, BAD_SIG_LOG_SECONDS)
+    .run();
+}
+
+/**
+ * The newest deliveries that carried a signature, newest first. Unsigned
+ * POSTs are no longer logged, but older rows stay until the weekly prune.
+ */
+export async function latestSignedWebhookStatuses(db: D1Database, limit: number): Promise<string[]> {
+  const { results } = await db
     .prepare(
       `SELECT status FROM webhook_events
        WHERE status IN ('received', 'bad_sig')
        ORDER BY received_at DESC, id DESC
-       LIMIT 1`,
+       LIMIT ?`,
     )
-    .first<{ status: string }>();
-  return row?.status ?? null;
+    .bind(limit)
+    .all<{ status: string }>();
+  return (results ?? []).map((r) => r.status);
 }
 
 export async function pruneWebhookEvents(db: D1Database, olderThan: number): Promise<void> {

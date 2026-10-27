@@ -126,9 +126,13 @@ and confirm the field is subscribed to **comments** with **Include values** on.
 
 ## "Did Instagram reach us?" says Wrong secret
 
-Meta reached you, and the request was rejected because its HMAC signature matched neither app secret.
+Something POSTed to your webhook, and the request was rejected because its HMAC signature matched neither app secret.
 
-A **Not signed** row is different: that request carried no signature at all, so it didn't come from Meta. Scanners send these to every public URL. They're rejected, and they never trigger the red banner.
+Anyone who knows the URL can send one of these, so a single row isn't proof of anything. To keep strangers from filling the database, a wrong signature is logged at most once a minute. Home's red banner ("the signing secret did not match") appears only when the last three signed deliveries were all wrong, which spans at least two minutes with nothing valid getting through. That's what a wrong secret looks like: Meta retries a rejected delivery, and every real comment fails the same way.
+
+To check on demand, use the Meta dashboard's **Test → Send to My Server** button. A new `Reached us` row means the secret is right. Anything else, with `Wrong secret` rows listed, means it's wrong.
+
+Requests with no signature at all never came from Meta. They're rejected and not logged.
 
 This is nearly always a missing `FACEBOOK_APP_SECRET`: see [cause 3](#3-facebook_app_secret-isnt-set).
 
