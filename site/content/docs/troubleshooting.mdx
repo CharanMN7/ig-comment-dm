@@ -18,13 +18,13 @@ Most confusing symptoms make sense once you know there are two.
 
 | | The webhook | The poll |
 |---|---|---|
-| Speed | About two seconds | Up to five minutes |
+| Speed | About two seconds, or a minute or more when queued | Up to five minutes, or longer when rules cover more than 3 posts ([how it takes turns](/using#the-five-minute-check)) |
 | How it starts | Meta POSTs to `/webhook` | The Worker asks Instagram for recent comments |
 | Needs the app to be Live | Yes | **No** |
 | Sees Hidden Words comments | No | No |
-| Covers old posts | Yes | Only the 3 most recent posts, last 72 hours |
+| Covers old posts | Yes | Posts a rule is limited to, plus the 3 newest for rules on all posts. Last 72 hours only |
 
-They share the same rule matching and the same duplicate protection, so a comment is never answered twice, whichever path finds it first.
+They share the same rule matching, the same send queue and the same duplicate protection, so a comment is never answered twice, whichever path finds it first.
 
 That explains the two most common confusing reports:
 
@@ -92,6 +92,8 @@ Instagram refuses a private reply to a comment older than seven days. Those are 
 
 ### 7. No rule matched
 
+A comment no rule matches isn't listed under **Last 20 sends** at all.
+
 **Confirm:** admin → **Test**, paste the exact comment text, and see which rule lights up. This sends nothing.
 
 Matching ignores case, emoji, punctuation and accents on Latin letters, and by default matches whole words: `guide` matches `Guide!` and `guide 🙏` but not `guides` or `#guide2026`, and `cafe` matches `café`. The Test page shows the comment as it was matched, with all of that stripped out.
@@ -108,7 +110,9 @@ Keywords under 3 characters are rejected when you save the rule, because they ma
 
 ## "Did Instagram reach us?" is empty
 
-Meta has never POSTed to your Worker. The problem is upstream of the Worker, so nothing in the admin panel will help.
+The list covers the last 7 days. If it says **Nothing in the last 7 days** and gives the date of the last notification, Meta has reached your Worker before and just hasn't sent anything since. That's normal when nobody has commented. If someone has, work through the causes below: the app or the subscription may have been switched off since.
+
+If it says **No notification has arrived yet**, Meta has never POSTed to your Worker. The problem is upstream of the Worker, so nothing in the admin panel will help.
 
 In order of likelihood: the app is in Development ([cause 1](#1-the-meta-app-is-still-in-development)), the per-account webhook subscription is off ([cause 2](#2-the-per-account-webhook-subscription-is-off)), or the webhook was never configured.
 
@@ -126,9 +130,13 @@ and confirm the field is subscribed to **comments** with **Include values** on.
 
 ## "Did Instagram reach us?" says Wrong secret
 
-Meta reached you, and the request was rejected because its HMAC signature matched neither app secret.
+Something POSTed to your webhook, and the request was rejected because its HMAC signature matched neither app secret.
 
-A **Not signed** row is different: that request carried no signature at all, so it didn't come from Meta. Scanners send these to every public URL. They're rejected, and they never trigger the red banner.
+Anyone who knows the URL can send one of these, so a single row isn't proof of anything. To keep strangers from filling the database, a wrong signature is logged at most once a minute. Home's red banner ("the signing secret did not match") appears only when the last three signed deliveries were all wrong, which spans at least two minutes with nothing valid getting through. That's what a wrong secret looks like: Meta retries a rejected delivery, and every real comment fails the same way.
+
+To check on demand, use the Meta dashboard's **Test → Send to My Server** button. A new `Reached us` row means the secret is right. Anything else, with `Wrong secret` rows listed, means it's wrong.
+
+Requests with no signature at all never came from Meta. They're rejected and not logged.
 
 This is nearly always a missing `FACEBOOK_APP_SECRET`: see [cause 3](#3-facebook_app_secret-isnt-set).
 
@@ -182,7 +190,7 @@ If the error says the account doesn't have Workers enabled, open [dash.cloudflar
 
 Every path that isn't `/a/<ADMIN_URL_SECRET>` returns 404 by design, so the panel can't be found by crawling. A 404 means the secret in your URL doesn't match the deployed one.
 
-Usually it's a typo, a character lost on paste, a trailing slash, or a secret rotated by a later `npm run setup -- --rotate`.
+Usually it's a typo, a character lost on paste, a trailing slash, or a secret rotated by a later `npm run setup -- --rotate`. It can also be a URL printed by an `npm run setup` that stopped before the end: the next run replaces it and prints the new one.
 
 **Check what's deployed:**
 
@@ -224,7 +232,7 @@ npx wrangler d1 execute ig-comment-dm --remote --command \
   "DELETE FROM system WHERE key IN ('admin_password_hash','admin_password_salt');"
 ```
 
-Then open your admin URL and create a new password. Connected accounts and rules are untouched.
+Then open your admin URL and create a new password. Connected accounts and rules are untouched. Any browser that was still logged in, yours or anyone else's, is logged out.
 
 ## Creating the first password returns a 500
 
@@ -258,7 +266,9 @@ npm run db:migrate
 
 The **Last 20 sends** row shows the exact error from Meta. When the DM fails, the public reply isn't posted either, because a reply like "Sent you a DM!" would be false; the row says so. A public reply can still fail on its own after a DM went through.
 
-"So it may have been delivered" means Instagram got the request but its answer never arrived in a usable form: it didn't answer within 10 seconds, the connection dropped, or it answered with a server error. Instagram may have sent the DM anyway, so it isn't sent again: a second try could reach the same person twice. Ask the commenter, or check the conversation in the Instagram app, before sending anything by hand. A public reply in the same situation says "so it may have been posted", and isn't posted again either; look under the comment.
+**May have been delivered** means Instagram got the request but its answer never arrived in a usable form: it didn't answer within 10 seconds, the connection dropped, or it answered with a server error. Instagram may have sent the DM anyway, so the Worker never sends it again by itself: a second try could reach the same person twice. Check the conversation in the Instagram app, or ask the commenter. If it didn't arrive, press **Send again** on that row, and it goes out within a minute or two, with four fresh tries. A public reply in the same situation says "so it may have been posted", and isn't posted again; look under the comment.
+
+**Retrying** means Instagram turned the DM down for now: the account was sending too fast (other apps on the same account count towards the same limit), or Instagram had a temporary problem. It's tried again after 1, 5 and 20 minutes, and the row says which try is next and when. After a fourth refusal it's **Failed**, "Instagram turned it down 4 times". When Instagram says the account is sending too fast, Home also notes that its DMs wait 15 minutes. A DM refused because the token stopped working stays **Queued** and doesn't use up a try: reconnect the account, and it goes out.
 
 A comment from a webhook has 25 seconds for its DM and public reply, so when Instagram is slow its timeout can be shorter than 10 seconds. If the DM got through but used up that time, the public reply is recorded as failed with "no time was left to post it".
 
@@ -269,9 +279,19 @@ Common DM failures:
 | a closed messaging window | The comment is older than 7 days |
 | the reply was already sent | Instagram allows one private reply per comment, ever |
 | permissions or scope | The token predates a scope change: click **Reconnect** |
-| rate limit | You're near Meta's cap of 750 private replies per hour |
+| rate limit | Meta's cap on private replies. The Worker keeps under it and retries, so this means another app is sending from the same account too |
 
 If the DM says it succeeded but the recipient sees nothing, have them check **Message requests**. Instagram files DMs there when the recipient doesn't follow you.
+
+## Sends say Queued
+
+The account has made its 12 DM calls for this minute, Instagram's hourly limit spread evenly, and the comment is waiting its turn. Nothing needs doing: every minute, the Worker sends the oldest waiting comments first, about 700 an hour for one account, fewer each when several have DMs waiting. If it has said **Queued** for more than a few minutes on a quiet account, check that the minute trigger is registered (see [the daily check hasn't run](#red-banner-the-daily-check-hasnt-run)) and that the account isn't paused.
+
+**Expired** means a comment waited until an hour before Instagram's 7-day limit and was given up on, without calling Instagram.
+
+"The Worker stopped before this send finished, so it may have been delivered" means a send was cut off, by a deploy or Cloudflare stopping the Worker. Within 2 minutes it's recorded as **May have been delivered** and never sent again by itself, since the DM may already have arrived. **Send again** is there if you've checked it didn't.
+
+The **Sending** table on Home shows how many wait, how old the oldest is, roughly how long they'll take, and how many DMs went out in the last hour; Instagram allows about 750. The time is rough: one Worker run a minute shares its sends between the accounts with DMs waiting.
 
 ## Red banner: an account needs reconnecting
 
@@ -297,7 +317,7 @@ npx wrangler deployments list
 
 ```toml
 [triggers]
-crons = ["0 3 * * *", "*/5 * * * *"]
+crons = ["0 3 * * *", "* * * * *"]
 ```
 
 If it does, redeploy. Cron triggers are registered at deploy time, and a deploy from an older config can drop them.
@@ -330,7 +350,7 @@ To run it right now, click **Check connections now** on the admin Home page, or 
 |---|---|---|
 | `"database": "error"` | The Worker couldn't read D1, or the tables are missing. | Run `npm run db:migrate`. If the tables exist, check [Cloudflare's status page](https://www.cloudflarestatus.com) and `npx wrangler tail`. |
 | `"cron": "stale"` | The nightly token refresh hasn't succeeded in over 3 days, or hasn't run at all in the 26 hours since `/health` was first checked. | See [the daily check hasn't run](#red-banner-the-daily-check-hasnt-run). |
-| `"poll": "stale"` | The 5-minute comment poll hasn't finished in over an hour. | Usually the cron triggers were dropped. Redeploy with `npx wrangler deploy`. |
+| `"poll": "stale"` | The comment poll, which runs every fifth minute, hasn't finished in over an hour. | Usually the cron triggers were dropped. Redeploy with `npx wrangler deploy`. |
 
 `"starting"` means a job hasn't run yet on a new deploy. It counts as healthy, but only until the job is overdue: a day and two hours for the nightly refresh, an hour for the poll. Press **Check connections now** on Home to run the nightly job straight away.
 

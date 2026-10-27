@@ -1,4 +1,5 @@
 import { jitteredDelayMs, sleep } from './crypto.ts';
+import type { Subrequests } from './subrequests.ts';
 
 export const GRAPH_VERSION = 'v23.0';
 export const GRAPH = `https://graph.instagram.com/${GRAPH_VERSION}`;
@@ -61,13 +62,17 @@ export function hasTimeForCall(deadline: number): boolean {
 
 /**
  * For reads and the other calls that are safe to repeat. Never for a DM or a
- * public reply: those go through sendOnce.
+ * public reply: those go through sendOnce. With `subrequests`, each attempt
+ * spends one, and none is made once they run out.
  */
-async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+async function fetchWithRetry(url: string, init: RequestInit, subrequests?: Subrequests): Promise<Response> {
   let lastRes: Response | undefined;
   let lastErr: unknown;
+  let tries = 0;
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    if (subrequests && !subrequests.take(1)) break;
     if (attempt > 0) await sleep(jitteredDelayMs(BACKOFF_BASE_MS * 2 ** (attempt - 1)));
+    tries++;
     try {
       const res = await fetch(url, { ...init, signal: AbortSignal.timeout(META_TIMEOUT_MS) });
       if (res.status === 429 || res.status >= 500) {
@@ -80,8 +85,9 @@ async function fetchWithRetry(url: string, init: RequestInit): Promise<Response>
     }
   }
   if (lastRes) return lastRes;
+  if (tries === 0) throw new Error('no subrequests were left in this run to contact Instagram');
   const detail = lastErr instanceof Error ? lastErr.message : String(lastErr);
-  throw new Error(`could not reach Instagram after ${ATTEMPTS} tries (${detail})`);
+  throw new Error(`could not reach Instagram after ${tries} ${tries === 1 ? 'try' : 'tries'} (${detail})`);
 }
 
 async function readResult(res: Response): Promise<MetaCallResult> {
@@ -104,6 +110,44 @@ type UnansweredSend = {
   /** What happened, in words for the send log; `body` is the detail. */
   cause: string;
 };
+
+/**
+ * What Instagram's refusal of a DM means for trying again. `rate`: the
+ * account or app is sending too fast, so wait and try again: HTTP 429, the
+ * platform limits (codes 4, 17, 32, 613), or the business-use-case limits
+ * Meta lists for Pages (80001), Instagram (80002) and Messenger (80006),
+ * which other apps on the same account share. `transient`: Instagram's own
+ * temporary problem, code 2 or any error it marks `is_transient`, so try
+ * again soon. `token`: the access token no longer works (code 190), which
+ * only reconnecting fixes. `final`: anything else, including the reply
+ * already sent (subcode 2534025), the 7-day window closed (code 10, subcode
+ * 2534022), the user unavailable (551) and a privacy block (200, subcode
+ * 1545041), so never again.
+ */
+export type Refusal = 'rate' | 'transient' | 'token' | 'final';
+
+const RATE_LIMIT_CODES = new Set([4, 17, 32, 613, 80001, 80002, 80006]);
+
+export function classifyRefusal(status: number, body: string): Refusal {
+  let code: number | undefined;
+  let subcode: number | undefined;
+  let transient = false;
+  try {
+    const parsed = JSON.parse(body) as { error?: { code?: unknown; error_subcode?: unknown; is_transient?: unknown } };
+    if (typeof parsed.error?.code === 'number') code = parsed.error.code;
+    if (typeof parsed.error?.error_subcode === 'number') subcode = parsed.error.error_subcode;
+    transient = parsed.error?.is_transient === true;
+  } catch {
+    // Not JSON: judged by its status alone.
+  }
+  if (code === 190) return 'token';
+  // Checked before the rate codes: a refusal that proves this comment can't
+  // get a reply must never be tried again, whatever else it says.
+  if (subcode === 2534025 || subcode === 2534022 || subcode === 1545041 || code === 551) return 'final';
+  if (status === 429 || (code !== undefined && RATE_LIMIT_CODES.has(code))) return 'rate';
+  if (code === 2 || transient) return 'transient';
+  return 'final';
+}
 
 function seconds(ms: number): string {
   const s = Math.round(ms / 1000);
@@ -194,7 +238,7 @@ export type IgComment = {
 };
 
 /** One page of newest comments. Used by the 5-minute poll when webhooks miss. */
-export async function listMediaComments(token: string, mediaId: string): Promise<IgComment[]> {
+export async function listMediaComments(token: string, mediaId: string, subrequests?: Subrequests): Promise<IgComment[]> {
   const url = new URL(`${GRAPH}/${encodeURIComponent(mediaId)}/comments`);
   url.searchParams.set('fields', 'id,text,timestamp,from');
   url.searchParams.set('order', 'reverse_chronological');
@@ -202,7 +246,7 @@ export async function listMediaComments(token: string, mediaId: string): Promise
   const res = await fetchWithRetry(url.toString(), {
     method: 'GET',
     headers: { Authorization: `Bearer ${token}` },
-  });
+  }, subrequests);
   const text = await res.text();
   let json: {
     data?: Array<{
@@ -363,14 +407,14 @@ export type IgMediaItem = {
   kind: 'reel' | 'post';
 };
 
-export async function listRecentMedia(token: string): Promise<IgMediaItem[]> {
+export async function listRecentMedia(token: string, subrequests?: Subrequests): Promise<IgMediaItem[]> {
   const url = new URL(`${GRAPH}/me/media`);
   url.searchParams.set('fields', 'id,caption,permalink,media_type,media_product_type');
   url.searchParams.set('limit', '25');
   const res = await fetchWithRetry(url.toString(), {
     method: 'GET',
     headers: { Authorization: `Bearer ${token}` },
-  });
+  }, subrequests);
   const text = await res.text();
   let json: {
     data?: Array<{

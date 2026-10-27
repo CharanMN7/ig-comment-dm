@@ -13,7 +13,7 @@
  * This checks the four of those that are visible from outside, so the bug
  * report starts from a real answer instead of a guess.
  */
-import { spawnSync } from 'node:child_process';
+import { runWrangler, wranglerBin } from './wrangler.ts';
 
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
@@ -30,12 +30,10 @@ function record(level: Level, title: string, detail?: string, fix?: string): voi
   results.push({ level, title, detail, fix });
 }
 
+const WRANGLER = wranglerBin();
+
 function wrangler(args: string[]): { code: number; out: string } {
-  const res = spawnSync('npx', ['wrangler', ...args], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  return { code: res.status ?? 1, out: `${res.stdout ?? ''}${res.stderr ?? ''}` };
+  return runWrangler(WRANGLER, args);
 }
 
 const REQUIRED = [
@@ -49,6 +47,10 @@ const REQUIRED = [
 ];
 
 function checkLogin(): boolean {
+  if (!WRANGLER) {
+    record('fail', 'Wrangler is not installed in this folder', undefined, 'npm install');
+    return false;
+  }
   const who = wrangler(['whoami']);
   if (who.code !== 0 || /not authenticated|you are not logged in/i.test(who.out)) {
     record('fail', 'Not logged in to Cloudflare', undefined, 'npx wrangler login');
@@ -124,13 +126,13 @@ function checkDatabase(): void {
     );
     return;
   }
-  const expected = ['accounts', 'rules', 'sent', 'system', 'webhook_events'];
+  const expected = ['accounts', 'rules', 'sent', 'sent_extra_replies', 'system', 'webhook_events'];
   const missing = expected.filter((t) => !out.includes(`"${t}"`));
   if (missing.length) {
     record('fail', `Database tables missing: ${missing.join(', ')}`, undefined, 'npm run db:migrate');
     return;
   }
-  record('ok', 'All five database tables exist');
+  record('ok', 'All six database tables exist');
 
   const accounts = d1Query('SELECT COUNT(*) AS n FROM accounts WHERE active = 1');
   if (accounts && /"n":\s*0\b/.test(accounts)) {
@@ -168,15 +170,33 @@ function checkDatabase(): void {
     );
   }
 
-  const anyEvent = d1Query("SELECT COUNT(*) AS n FROM webhook_events WHERE status IN ('received', 'bad_sig')");
+  // webhook_events only keeps 7 days, so the time of the last signed delivery,
+  // kept in system, is what says whether Meta has ever got through.
+  const anyEvent = d1Query(
+    "SELECT (SELECT value FROM system WHERE key = 'last_webhook_received_at') AS last, " +
+      "(SELECT COUNT(*) FROM webhook_events WHERE status IN ('received', 'bad_sig')) AS n",
+  );
   if (anyEvent && /"n":\s*0\b/.test(anyEvent)) {
-    record(
-      'warn',
-      'Instagram has never reached this Worker',
-      'No webhook has ever arrived, valid or not. Almost always this means the Meta app is still in ' +
-        'Development mode, or the per-account "Webhook subscription" toggle is off.',
-      'Meta → Publish (make the app Live), and Generate access tokens → Webhook subscription → On',
-    );
+    const last = anyEvent.match(/"last":\s*"(\d+)"/);
+    if (last) {
+      const days = Math.floor((Date.now() / 1000 - Number.parseInt(last[1], 10)) / 86400);
+      record(
+        'warn',
+        'Nothing from Instagram in the last 7 days',
+        `The last notification arrived ${days} days ago. That is normal if nobody has commented since. ` +
+          'If someone has, the Meta app may be back in Development mode, or the per-account ' +
+          '"Webhook subscription" toggle may be off.',
+        'Check Meta → Publish, and Generate access tokens → Webhook subscription → On',
+      );
+    } else {
+      record(
+        'warn',
+        'Instagram has never reached this Worker',
+        'No webhook has ever arrived, valid or not. Almost always this means the Meta app is still in ' +
+          'Development mode, or the per-account "Webhook subscription" toggle is off.',
+        'Meta → Publish (make the app Live), and Generate access tokens → Webhook subscription → On',
+      );
+    }
   }
 }
 

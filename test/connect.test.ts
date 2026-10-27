@@ -148,14 +148,34 @@ describe('Connect (Instagram Business Login)', () => {
     expect(back.location).toBe(adminPath('/accounts'));
   });
 
-  it('still shows Instagram’s reason for any other refusal, with a way back', async () => {
-    const res = await request('/connect/callback?error=invalid_request&error_description=Invalid+scope');
+  it('shows Instagram’s reason for any other refusal in the browser that started Connect, with a way back', async () => {
+    const admin = await signedInAdmin();
+    const state = await startConnect(admin);
+    const res = await returnFromInstagram(admin, { error: 'invalid_request', error_description: 'Invalid scope', state });
     expect(res.status).toBe(200);
     expect(res.text).toContain('<h1>Not connected</h1>');
     expect(res.text).not.toContain('Something went wrong');
+    expect(res.text).toContain('Instagram stopped the connection before it finished');
     expect(res.text).toContain('Invalid scope');
     expect(res.text).toContain('href="/connect/accounts"');
     expect(res.text).not.toContain(env.ADMIN_URL_SECRET);
+  });
+
+  it('shows only its own words for a refusal that didn’t come back to the browser that started Connect', async () => {
+    const text = 'Your account is suspended. Call 555-0100 to restore it';
+    const anyone = await request(`/connect/callback?${new URLSearchParams({ error: 'x', error_description: text })}`);
+    const admin = await signedInAdmin();
+    const state = await startConnect(admin);
+    const otherBrowser = await request(`/connect/callback?${new URLSearchParams({ error: 'x', error_description: text, state })}`);
+    const forgedState = await returnFromInstagram(admin, { error: 'x', error_description: text, state: `${state}x` });
+
+    for (const res of [anyone, otherBrowser, forgedState]) {
+      expect(res.status).toBe(200);
+      expect(res.text).toContain('Instagram stopped the connection before it finished');
+      expect(res.text).not.toContain('555-0100');
+      expect(res.text).not.toContain('>x<');
+      expect(res.text).toContain('href="/connect/accounts"');
+    }
   });
 
   it("shows Instagram's reason when the code exchange fails and stores no account", async () => {

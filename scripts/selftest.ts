@@ -3,14 +3,23 @@
  *
  *   ADMIN_URL_SECRET=... WEBHOOK_VERIFY_TOKEN=... META_APP_SECRET=... \
  *   ADMIN_PASSWORD=... node --experimental-strip-types scripts/selftest.ts https://YOUR.workers.dev
+ *
+ * ADMIN_PASSWORD is the admin panel's password. On a Worker that has none yet,
+ * selftest creates it on localhost only, unless --allow-setup is passed. The
+ * fake account it adds for the webhook checks is removed before it finishes.
  */
 import { hmacSha256Hex, nowSeconds } from '../src/crypto.ts';
+import { adminStep, isLocalTarget } from './selftest-lib.ts';
 
-const BASE = (process.argv[2] || process.env.BASE_URL || 'http://localhost:8787').replace(/\/+$/, '');
+const args = process.argv.slice(2);
+const ALLOW_SETUP = args.includes('--allow-setup');
+const BASE = (args.find((a) => !a.startsWith('--')) || process.env.BASE_URL || 'http://localhost:8787').replace(/\/+$/, '');
 const VERIFY = required('WEBHOOK_VERIFY_TOKEN');
 const APP_SECRET = required('META_APP_SECRET');
 const ADMIN_SECRET = required('ADMIN_URL_SECRET');
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'selftest-password-change-me';
+// No default: a fixed one, published here, would become the real password of
+// any fresh Worker this ran against.
+const ADMIN_PASSWORD = required('ADMIN_PASSWORD');
 
 const ADMIN = `${BASE}/a/${ADMIN_SECRET}`;
 const IG_USER = 'selftest_ig_user';
@@ -142,10 +151,19 @@ async function follow(res: Response, cookies = jar): Promise<Response> {
 }
 
 async function loginOrSetup(): Promise<void> {
-  let page = await follow(await req(`${ADMIN}/`));
-  let html = await page.text();
-  if (html.includes('Create your password')) {
-    page = await follow(
+  const page = await follow(await req(`${ADMIN}/`));
+  const html = await page.text();
+  const step = adminStep(html, { local: isLocalTarget(BASE), allowSetup: ALLOW_SETUP });
+  if (step === 'refuse-setup') {
+    console.error(
+      `\n${BASE} has no admin password yet. Open the admin URL in a browser and create one, then run ` +
+        'selftest again with it as ADMIN_PASSWORD.\n' +
+        'To have selftest set ADMIN_PASSWORD as the password instead, add --allow-setup.',
+    );
+    process.exit(2);
+  }
+  if (step === 'setup') {
+    await follow(
       await postForm(`${ADMIN}/setup`, {
         csrf: csrfFrom(html),
         password: ADMIN_PASSWORD,
@@ -154,7 +172,7 @@ async function loginOrSetup(): Promise<void> {
     );
     return;
   }
-  if (html.includes('name="password"') && html.includes('Log in')) {
+  if (step === 'login') {
     await follow(await postForm(`${ADMIN}/login`, { csrf: csrfFrom(html), password: ADMIN_PASSWORD }));
   }
 }
@@ -176,7 +194,7 @@ async function main() {
   const badSig = await fetch(`${BASE}/webhook`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Hub-Signature-256': `sha256=${'00'.repeat(32)}` },
-    body: '{"object":"instagram","entry":[]}',
+    body: JSON.stringify({ object: 'instagram', entry: [{ id: IG_USER }] }),
   });
   report(badSig.status === 401, 'POST /webhook with a bad signature returns 401');
 
@@ -202,27 +220,38 @@ async function main() {
   }
 
   const home = await follow(await req(`${ADMIN}/`));
-  const homeHtml = await home.text();
-  const seed = await postForm(`${ADMIN}/selftest/seed`, { csrf: csrfFrom(homeHtml) });
+  const csrf = csrfFrom(await home.text());
+  const seed = await postForm(`${ADMIN}/selftest/seed`, { csrf });
   report(seed.status === 200, 'selftest seed account', seed.status === 200 ? '' : `HTTP ${seed.status}`);
 
-  const commentId = `cmt_${Date.now()}`;
-  const payload = commentPayload(commentId, 'someone_else');
-  const post1 = await signedPost(payload);
-  report(post1.status === 200, 'POST /webhook with a valid signature and a synthetic comment returns 200');
-  const count1 = await pollSent(commentId, 1);
-  report(count1 === 1, 'that payload creates exactly one sent row', `count=${count1}`);
+  // Removed before the cron check runs, so the cron's totals snapshot and
+  // webhook subscriptions never see it, and removed even if a check throws.
+  try {
+    const commentId = `cmt_${Date.now()}`;
+    const payload = commentPayload(commentId, 'someone_else');
+    const post1 = await signedPost(payload);
+    report(post1.status === 200, 'POST /webhook with a valid signature and a synthetic comment returns 200');
+    const count1 = await pollSent(commentId, 1);
+    report(count1 === 1, 'that payload creates exactly one sent row', `count=${count1}`);
 
-  const post2 = await signedPost(payload);
-  report(post2.status === 200, 'the same payload posted twice still returns 200');
-  const count2 = await pollSent(commentId, 1);
-  report(count2 === 1, 'the duplicate delivery creates exactly ONE sent row', `count=${count2}`);
+    const post2 = await signedPost(payload);
+    report(post2.status === 200, 'the same payload posted twice still returns 200');
+    const count2 = await pollSent(commentId, 1);
+    report(count2 === 1, 'the duplicate delivery creates exactly ONE sent row', `count=${count2}`);
 
-  const selfId = `cmt_self_${Date.now()}`;
-  const selfPost = await signedPost(commentPayload(selfId, IG_USER));
-  report(selfPost.status === 200, 'self-comment payload returns 200');
-  const countSelf = await pollSent(selfId, 0);
-  report(countSelf === 0, 'a payload where from.id equals the account id creates NO send', `count=${countSelf}`);
+    const selfId = `cmt_self_${Date.now()}`;
+    const selfPost = await signedPost(commentPayload(selfId, IG_USER));
+    report(selfPost.status === 200, 'self-comment payload returns 200');
+    const countSelf = await pollSent(selfId, 0);
+    report(countSelf === 0, 'a payload where from.id equals the account id creates NO send', `count=${countSelf}`);
+  } finally {
+    const cleanup = await postForm(`${ADMIN}/selftest/cleanup`, { csrf });
+    report(
+      cleanup.status === 200,
+      'the selftest account, its sends and its webhook rows are removed',
+      cleanup.status === 200 ? '' : `HTTP ${cleanup.status}`,
+    );
+  }
 
   const cronHome = await follow(await req(`${ADMIN}/`));
   const cronRes = await follow(await postForm(`${ADMIN}/run-cron`, { csrf: csrfFrom(await cronHome.text()) }));

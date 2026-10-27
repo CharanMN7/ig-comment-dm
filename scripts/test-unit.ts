@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { readFileSync, readdirSync } from 'node:fs';
 import { describe, it } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import {
+  COMMENT_MAX_AGE_SECONDS,
   DM_TEXT_MAX,
   PUBLIC_REPLY_MAX,
+  QUEUE_EXPIRY_SECONDS,
+  SENDS_PER_MINUTE,
+  SEND_LEASE_SECONDS,
   hmacSha256Hex,
   randomIndex,
   timingSafeEqualString,
@@ -20,14 +27,25 @@ import {
   META_TIMEOUT_MS,
   attemptTimeoutMs,
   authorizeUrl,
+  classifyRefusal,
   oauthRedirectUri,
 } from '../src/meta.ts';
 import { STALE_PENDING_SECONDS } from '../src/cron.ts';
 import { isSelfComment } from '../src/guard.ts';
+import {
+  EXTRA_PUBLIC_REPLY_CAP,
+  EXTRA_REPLY_NONE,
+  EXTRA_REPLY_OVER_CAP,
+  EXTRA_REPLY_OWN_DM_ONLY,
+  otherRuleSkipReason,
+  planOtherRules,
+} from '../src/other-replies.ts';
 import { sentLogQuery } from '../src/db.ts';
 import { logsHref, pageLinks, parseDay, parseLogsQuery } from '../src/logs.ts';
 import { WEBHOOK_SEND_BUDGET_MS, parseWebhookPayload } from '../src/process.ts';
-import { POLL_BUDGET_MS } from '../src/reconcile.ts';
+import { DRAIN_BUDGET_MS, MAX_ATTEMPTS, RETRY_BACKOFF_SECONDS, drainRatePerMinute, minuteOf } from '../src/queue.ts';
+import { POLL_BUDGET_MS, pollWindow } from '../src/reconcile.ts';
+import { adminStep, isLocalTarget } from './selftest-lib.ts';
 import {
   EXCLUSION_TOO_SHORT_MESSAGE,
   KEYWORD_CACHE_MAX,
@@ -50,7 +68,7 @@ import {
   worstCaseLength,
 } from '../src/placeholders.ts';
 import { parsePublicReplies, pickReply, serializePublicReplies } from '../src/replies.ts';
-import { MATCH_ALL_NEEDS_POST_MESSAGE, readRuleFields } from '../src/routes/admin.ts';
+import { MATCH_ALL_NEEDS_POST_MESSAGE, UNKNOWN_ACCOUNT_MESSAGE, readRuleFields } from '../src/routes/admin.ts';
 import { LINK_MARKER, TEMPLATES, findTemplate, placeholderLinkIn, type RuleTemplate } from '../src/templates.ts';
 import type { Rule } from '../src/types.ts';
 
@@ -60,6 +78,7 @@ function rule(partial: Partial<Rule> & Pick<Rule, 'id' | 'keywords' | 'label'>):
     match_mode: 'word',
     exclude_keywords: '[]',
     match_all: 0,
+    reply_without_dm: 0,
     media_id: null,
     dm_text: 'hello',
     public_reply_text: null,
@@ -443,21 +462,24 @@ describe('matchComment', () => {
     assert.equal(hit?.rule.id, 1);
   });
 
-  it('returns the first matching rule and stops', () => {
+  it('gives the DM to the first matching rule and lists the rest, in matching order', () => {
     const a = rule({ id: 10, label: 'a', keywords: JSON.stringify(['hello']) });
-    const b = rule({ id: 11, label: 'b', keywords: JSON.stringify(['hello']) });
-    const hit = matchComment([a, b], 'hello there', undefined).match;
-    assert.equal(hit?.rule.id, 10);
+    const b = rule({ id: 11, label: 'b', keywords: JSON.stringify(['there']) });
+    const c = rule({ id: 12, label: 'c', keywords: JSON.stringify(['hello']), media_id: 'MEDIA1' });
+    const verdict = matchComment([a, b, c], 'hello there', 'MEDIA1');
+    assert.equal(verdict.match?.rule.id, 12);
+    assert.deepEqual(verdict.also, [{ rule: a, keyword: 'hello' }, { rule: b, keyword: 'there' }]);
   });
 
   it('returns null when nothing matches', () => {
-    assert.deepEqual(matchComment([global], 'nice photo', undefined), { match: null, excluded: [] });
+    assert.deepEqual(matchComment([global], 'nice photo', undefined), { match: null, also: [], excluded: [] });
   });
 
   it('names the keyword that matched, as the operator typed it', () => {
     const r = rule({ id: 3, label: 'launch', keywords: JSON.stringify(['Guide', 'LAUNCH']), match_mode: 'contains' });
     assert.deepEqual(matchComment([r], 'so ready for #launch2026', undefined), {
       match: { rule: r, keyword: 'LAUNCH' },
+      also: [],
       excluded: [],
     });
   });
@@ -482,6 +504,7 @@ describe('exclusions', () => {
   it('stops a rule whose keyword matched, and says which exclusion did it', () => {
     assert.deepEqual(matchComment([guide], 'How much is the GUIDE??', undefined), {
       match: null,
+      also: [],
       excluded: [{ rule: guide, keyword: 'guide', exclusion: 'how much' }],
     });
   });
@@ -491,7 +514,7 @@ describe('exclusions', () => {
   });
 
   it('only counts a rule as excluded when its keyword matched', () => {
-    assert.deepEqual(matchComment([guide], 'how much for a shoutout', undefined), { match: null, excluded: [] });
+    assert.deepEqual(matchComment([guide], 'how much for a shoutout', undefined), { match: null, also: [], excluded: [] });
   });
 
   it('uses the same normalisation as keywords', () => {
@@ -529,6 +552,15 @@ describe('exclusions', () => {
     assert.deepEqual(verdict.excluded.map((e) => e.rule.id), [20, 27]);
   });
 
+  it('leaves an excluded rule out of the other matching rules, wherever it comes', () => {
+    const later = rule({ id: 29, label: 'later', keywords: JSON.stringify(['guide']), exclude_keywords: JSON.stringify(['how much']) });
+    const fallback = rule({ id: 26, label: 'any guide', keywords: JSON.stringify(['guide']) });
+    const verdict = matchComment([guide, fallback, later], 'how much is the guide', undefined);
+    assert.equal(verdict.match?.rule.id, 26);
+    assert.deepEqual(verdict.also, []);
+    assert.deepEqual(verdict.excluded.map((e) => e.rule.id), [20, 29]);
+  });
+
   it('treats a rule saved before exclusions existed as having none', () => {
     const old = rule({ id: 28, label: 'old', keywords: JSON.stringify(['guide']), exclude_keywords: '' });
     assert.equal(matchComment([old], 'how much is the guide', undefined).match?.rule.id, 28);
@@ -546,7 +578,7 @@ describe('match-all rules', () => {
   const giveaway = rule({ id: 30, label: 'giveaway', keywords: '[]', match_all: 1, media_id: 'REEL1' });
 
   it('match every comment on their post, with no keyword', () => {
-    assert.deepEqual(matchComment([giveaway], 'love this 😍', 'REEL1'), { match: { rule: giveaway, keyword: null }, excluded: [] });
+    assert.deepEqual(matchComment([giveaway], 'love this 😍', 'REEL1'), { match: { rule: giveaway, keyword: null }, also: [], excluded: [] });
     assert.equal(matchComment([giveaway], '🔥', 'REEL1').match?.rule.id, 30);
     assert.equal(matchComment([giveaway], '', 'REEL1').match?.rule.id, 30);
   });
@@ -563,8 +595,8 @@ describe('match-all rules', () => {
 
   it('never fire without a post, even if one reached the database', () => {
     const accountWide = { ...giveaway, media_id: null };
-    assert.deepEqual(matchComment([accountWide], 'love this', 'REEL1'), { match: null, excluded: [] });
-    assert.deepEqual(matchComment([{ ...giveaway, media_id: '' }], 'love this', 'REEL1'), { match: null, excluded: [] });
+    assert.deepEqual(matchComment([accountWide], 'love this', 'REEL1'), { match: null, also: [], excluded: [] });
+    assert.deepEqual(matchComment([{ ...giveaway, media_id: '' }], 'love this', 'REEL1'), { match: null, also: [], excluded: [] });
   });
 
   it('come after every keyword rule: post keyword, then all-posts keyword, then match-all', () => {
@@ -581,6 +613,7 @@ describe('match-all rules', () => {
     const picky = { ...giveaway, exclude_keywords: JSON.stringify(['spam']) };
     assert.deepEqual(matchComment([picky], 'this is SPAM', 'REEL1'), {
       match: null,
+      also: [],
       excluded: [{ rule: picky, keyword: null, exclusion: 'spam' }],
     });
     assert.equal(matchComment([picky], 'no spammers here', 'REEL1').match?.rule.id, 30);
@@ -602,7 +635,7 @@ describe('comments on an ad made from a post', () => {
   const allPosts = rule({ id: 41, label: 'all posts', keywords: JSON.stringify(['guide', 'price']) });
 
   it('match a rule scoped to the original post', () => {
-    assert.deepEqual(matchComment([onPost], 'guide please', AD, POST), { match: { rule: onPost, keyword: 'guide' }, excluded: [] });
+    assert.deepEqual(matchComment([onPost], 'guide please', AD, POST), { match: { rule: onPost, keyword: 'guide' }, also: [], excluded: [] });
     assert.equal(matchComment([onPost], 'guide please', AD).match, null);
   });
 
@@ -638,6 +671,73 @@ describe('comments on an ad made from a post', () => {
   });
 });
 
+describe('public replies from the other matching rules', () => {
+  const other = (id: number, publicReply: string | null, optedIn = true) => ({
+    rule: rule({ id, label: `r${id}`, keywords: '["guide"]', public_reply_text: publicReply, reply_without_dm: optedIn ? 1 : 0 }),
+    keyword: 'guide',
+  });
+
+  it(`post for the first ${EXTRA_PUBLIC_REPLY_CAP} opted-in rules that have one, in matching order`, () => {
+    const plan = planOtherRules([
+      other(1, 'One'),
+      other(2, null),
+      other(3, 'Sent you a DM!', false),
+      other(4, '["Four a","Four b"]'),
+      other(5, 'Five'),
+      other(6, 'Six', false),
+    ]);
+    assert.deepEqual(plan.map((o) => [o.rule.id, o.posts, otherRuleSkipReason(o)]), [
+      [1, true, null],
+      [2, false, EXTRA_REPLY_NONE],
+      [3, false, EXTRA_REPLY_OWN_DM_ONLY],
+      [4, true, null],
+      [5, false, EXTRA_REPLY_OVER_CAP],
+      [6, false, EXTRA_REPLY_OWN_DM_ONLY],
+    ]);
+    assert.deepEqual(plan[3]?.replies, ['Four a', 'Four b']);
+  });
+
+  it('are capped at the two the docs promise', () => {
+    assert.equal(EXTRA_PUBLIC_REPLY_CAP, 2);
+  });
+});
+
+describe('pollWindow', () => {
+  const posts = ['p1', 'p2', 'p3', 'p4', 'p5'];
+
+  it('reads every post when they fit, in order', () => {
+    assert.deepEqual(pollWindow(['p1', 'p2'], null, 3), ['p1', 'p2']);
+    assert.deepEqual(pollWindow(['p1', 'p2', 'p3'], 'p2', 3), ['p1', 'p2', 'p3']);
+  });
+
+  it('takes the next ones after the last post read, wrapping round', () => {
+    assert.deepEqual(pollWindow(posts, null, 3), ['p1', 'p2', 'p3']);
+    assert.deepEqual(pollWindow(posts, 'p3', 3), ['p4', 'p5', 'p1']);
+    assert.deepEqual(pollWindow(posts, 'p5', 3), ['p1', 'p2', 'p3']);
+  });
+
+  it('starts from the top when the last post read is no longer covered by a rule', () => {
+    assert.deepEqual(pollWindow(posts, 'gone', 3), ['p1', 'p2', 'p3']);
+  });
+
+  it('reaches every post within ceil(n / size) sweeps', () => {
+    for (let n = 1; n <= 10; n++) {
+      const all = Array.from({ length: n }, (_, i) => `p${String(i)}`);
+      const seen = new Set<string>();
+      let after: string | null = null;
+      for (let sweep = 0; sweep < Math.ceil(n / 3); sweep++) {
+        const window = pollWindow(all, after, 3);
+        for (const id of window) seen.add(id);
+        after = window.at(-1) ?? null;
+      }
+      assert.equal(seen.size, n, `n = ${String(n)}`);
+    }
+  });
+});
+
+// The accounts a rule form can name: every form below uses 'acct'.
+const ACCOUNTS = [{ ig_user_id: 'acct' }];
+
 describe('readRuleFields', () => {
   const valid = {
     ig_user_id: 'acct',
@@ -650,13 +750,20 @@ describe('readRuleFields', () => {
     public_reply_text: '',
   };
 
+  it('refuses an account that is not connected, before anything reaches the database', () => {
+    const form = { ...valid, keywords: 'guide', ig_user_id: 'someone-else' };
+    assert.deepEqual(readRuleFields(form, ACCOUNTS), { error: UNKNOWN_ACCOUNT_MESSAGE });
+    assert.deepEqual(readRuleFields(form, []), { error: UNKNOWN_ACCOUNT_MESSAGE });
+    assert.ok('row' in readRuleFields({ ...form, ig_user_id: ' acct ' }, ACCOUNTS));
+  });
+
   it('rejects a match-all rule with no post', () => {
-    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', media_id: '' }), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
-    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', media_id: '   ' }), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
+    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', media_id: '' }, ACCOUNTS), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
+    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', media_id: '   ' }, ACCOUNTS), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
   });
 
   it('accepts a match-all rule on one post without keywords, and keeps none', () => {
-    const read = readRuleFields({ ...valid, match_all: '1', keywords: 'AI\n🔥', match_mode: 'contains' });
+    const read = readRuleFields({ ...valid, match_all: '1', keywords: 'AI\n🔥', match_mode: 'contains' }, ACCOUNTS);
     assert.ok('row' in read);
     assert.deepEqual(
       { keywords: read.row.keywords, match_mode: read.row.match_mode, match_all: read.row.match_all, media_id: read.row.media_id },
@@ -665,12 +772,21 @@ describe('readRuleFields', () => {
   });
 
   it('still checks the exclusions of a match-all rule', () => {
-    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', exclude_keywords: 'no' }), { error: EXCLUSION_TOO_SHORT_MESSAGE });
+    assert.deepEqual(readRuleFields({ ...valid, match_all: '1', exclude_keywords: 'no' }, ACCOUNTS), { error: EXCLUSION_TOO_SHORT_MESSAGE });
+  });
+
+  it('stores the reply-without-DM box ticked as 1, and left out as 0', () => {
+    const base = { ...valid, keywords: 'guide' };
+    const ticked = readRuleFields({ ...base, reply_without_dm: '1' }, ACCOUNTS);
+    const unticked = readRuleFields(base, ACCOUNTS);
+    assert.ok('row' in ticked && 'row' in unticked);
+    assert.equal(ticked.row.reply_without_dm, 1);
+    assert.equal(unticked.row.reply_without_dm, 0);
   });
 
   it('needs keywords when the box is not ticked, and stores match_all 0', () => {
-    assert.deepEqual(readRuleFields(valid), { error: 'Add at least one keyword, one per line.' });
-    const read = readRuleFields({ ...valid, keywords: 'guide', media_id: '' });
+    assert.deepEqual(readRuleFields(valid, ACCOUNTS), { error: 'Add at least one keyword, one per line.' });
+    const read = readRuleFields({ ...valid, keywords: 'guide', media_id: '' }, ACCOUNTS);
     assert.ok('row' in read);
     assert.equal(read.row.match_all, 0);
     assert.equal(read.row.media_id, null);
@@ -926,7 +1042,7 @@ describe('rule templates', () => {
 
   for (const t of TEMPLATES) {
     it(`${t.id}: passes the rule form's checks once the link is put in, and saves as written`, () => {
-      const read = readRuleFields(templateForm(t, LINK));
+      const read = readRuleFields(templateForm(t, LINK), ACCOUNTS);
       assert.ok('row' in read, 'error' in read ? read.error : '');
       assert.deepEqual(
         {
@@ -950,7 +1066,7 @@ describe('rule templates', () => {
 
     it(`${t.id}: can't be saved with the link marker still in it`, () => {
       assert.ok(t.dm.includes(LINK_MARKER));
-      const read = readRuleFields(templateForm(t, LINK_MARKER));
+      const read = readRuleFields(templateForm(t, LINK_MARKER), ACCOUNTS);
       assert.ok('error' in read);
       assert.match(read.error, new RegExp(`still says ${LINK_MARKER}`));
     });
@@ -1000,7 +1116,7 @@ describe('rule templates', () => {
   it('only the giveaway replies to every comment, and it needs its post', () => {
     assert.deepEqual(TEMPLATES.filter((t) => t.matchAll).map((t) => t.id), ['giveaway']);
     const giveaway = findTemplate('giveaway')!;
-    assert.deepEqual(readRuleFields({ ...templateForm(giveaway, LINK), media_id: '' }), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
+    assert.deepEqual(readRuleFields({ ...templateForm(giveaway, LINK), media_id: '' }, ACCOUNTS), { error: MATCH_ALL_NEEDS_POST_MESSAGE });
   });
 });
 
@@ -1039,16 +1155,16 @@ describe('placeholderLinkIn', () => {
 
   it('stops a rule being saved with one, in the message or any reply, and names it', () => {
     const form = { ig_user_id: 'acct', label: 'Guide', keywords: 'guide', dm_text: 'Here: https://ana.studio/g', public_reply_text: 'Sent!' };
-    assert.deepEqual(readRuleFields({ ...form, dm_text: 'Here: https://example.com/guide' }), {
+    assert.deepEqual(readRuleFields({ ...form, dm_text: 'Here: https://example.com/guide' }, ACCOUNTS), {
       error: 'The DM links to “https://example.com/guide”, a sample address that isn’t yours. Replace it with your own link before saving.',
     });
-    assert.deepEqual(readRuleFields({ ...form, public_reply_text: `Also at ${LINK_MARKER}` }), {
+    assert.deepEqual(readRuleFields({ ...form, public_reply_text: `Also at ${LINK_MARKER}` }, ACCOUNTS), {
       error: `The public reply still says ${LINK_MARKER}. Replace it with your own link, or delete it, before saving.`,
     });
-    const third = readRuleFields({ ...form, public_reply_text_2: 'Sent', public_reply_text_3: 'see yourshop.com' });
+    const third = readRuleFields({ ...form, public_reply_text_2: 'Sent', public_reply_text_3: 'see yourshop.com' }, ACCOUNTS);
     assert.ok('error' in third);
     assert.match(third.error, /^Reply 3 links to “yourshop\.com”/);
-    assert.ok('row' in readRuleFields(form));
+    assert.ok('row' in readRuleFields(form, ACCOUNTS));
   });
 });
 
@@ -1110,6 +1226,76 @@ describe('stale pending sends', () => {
   it('waits far longer than the slowest possible send before calling a pending row abandoned', () => {
     const slowestSendMs = 2 * META_SEND_MAX_MS;
     assert.ok(STALE_PENDING_SECONDS * 1000 >= 10 * slowestSendMs, `${STALE_PENDING_SECONDS}s vs ${slowestSendMs}ms`);
+  });
+});
+
+describe('classifyRefusal', () => {
+  const body = (code: number, subcode?: number) => JSON.stringify({ error: { message: 'x', code, ...(subcode ? { error_subcode: subcode } : {}) } });
+
+  it('waits out rate limits, by status or by code, the business-use-case ones included', () => {
+    assert.equal(classifyRefusal(429, '{}'), 'rate');
+    for (const code of [4, 17, 32, 613, 80001, 80002, 80006]) assert.equal(classifyRefusal(400, body(code)), 'rate', String(code));
+  });
+
+  it('tries Instagram’s temporary errors again, and holds a dead token for reconnecting', () => {
+    assert.equal(classifyRefusal(400, body(2)), 'transient');
+    assert.equal(classifyRefusal(400, body(2, 2018344)), 'transient');
+    assert.equal(classifyRefusal(400, JSON.stringify({ error: { code: 1, is_transient: true } })), 'transient');
+    assert.equal(classifyRefusal(400, JSON.stringify({ error: { code: 100, is_transient: false } })), 'final');
+    assert.equal(classifyRefusal(400, body(190)), 'token');
+  });
+
+  it('never tries again when the refusal proves the comment can’t get a reply, whatever else it says', () => {
+    assert.equal(classifyRefusal(400, body(100, 2534025)), 'final');
+    assert.equal(classifyRefusal(429, body(4, 2534025)), 'final');
+    assert.equal(classifyRefusal(400, JSON.stringify({ error: { code: 10, error_subcode: 2534022, is_transient: true } })), 'final');
+    assert.equal(classifyRefusal(400, body(10, 2534022)), 'final');
+    assert.equal(classifyRefusal(400, body(551)), 'final');
+    assert.equal(classifyRefusal(403, body(200, 1545041)), 'final');
+    assert.equal(classifyRefusal(400, body(100)), 'final');
+    assert.equal(classifyRefusal(400, 'not json'), 'final');
+  });
+
+  it('spaces retries 1, 5 and 20 minutes apart, with one backoff for each try before the last', () => {
+    assert.deepEqual(RETRY_BACKOFF_SECONDS, [60, 300, 1200]);
+    assert.equal(RETRY_BACKOFF_SECONDS.length, MAX_ATTEMPTS - 1);
+  });
+});
+
+describe('the send queue', () => {
+  it('keeps every rolling hour under Instagram’s 750 private replies, counting the 62 minutes an hour of calls can touch', () => {
+    // 61 windows an hour, and one more because a slot is taken up to
+    // DRAIN_BUDGET_MS before its call.
+    assert.ok(DRAIN_BUDGET_MS < 60_000);
+    assert.ok(SENDS_PER_MINUTE * 62 < 750, `${SENDS_PER_MINUTE * 62}`);
+  });
+
+  it('shares a minute’s sends between the accounts with DMs waiting', () => {
+    assert.equal(drainRatePerMinute(1), SENDS_PER_MINUTE);
+    assert.equal(drainRatePerMinute(2), 7);
+    assert.equal(drainRatePerMinute(3), 4);
+    assert.ok(drainRatePerMinute(2) * 2 >= 13);
+  });
+
+  it('never gives up on a send while the minute job that claimed it can still be sending', () => {
+    assert.ok(SEND_LEASE_SECONDS * 1000 >= 2 * (DRAIN_BUDGET_MS + META_SEND_MAX_MS), `${SEND_LEASE_SECONDS}s`);
+    assert.ok(SEND_LEASE_SECONDS * 1000 >= 2 * (WEBHOOK_SEND_BUDGET_MS + META_SEND_MAX_MS), `${SEND_LEASE_SECONDS}s`);
+  });
+
+  it('ends a minute’s sends before the next minute starts', () => {
+    assert.ok(DRAIN_BUDGET_MS + META_SEND_MAX_MS < 60_000, `${DRAIN_BUDGET_MS}ms`);
+  });
+
+  it('gives up on a queued DM before Instagram’s 7 days run out', () => {
+    assert.ok(QUEUE_EXPIRY_SECONDS < COMMENT_MAX_AGE_SECONDS);
+    assert.ok(QUEUE_EXPIRY_SECONDS >= COMMENT_MAX_AGE_SECONDS - 2 * 60 * 60);
+  });
+
+  it('counts minutes from the epoch', () => {
+    assert.equal(minuteOf(0), 0);
+    assert.equal(minuteOf(59), 0);
+    assert.equal(minuteOf(60), 1);
+    assert.equal(minuteOf(Date.UTC(2026, 9, 1, 12, 5) / 1000) % 5, 0);
   });
 });
 
@@ -1451,5 +1637,60 @@ describe('logs page links', () => {
   it('offers no links on an empty page', () => {
     const cursor = { dir: 'older', sent_at: 1, comment_id: 'c0' } as const;
     assert.deepEqual(pageLinks(base, { form, cursor }, [], false), { newer: null, older: null });
+  });
+});
+
+describe('GitHub Actions workflows', () => {
+  it('pin every action to a full commit SHA, with the version in a comment', () => {
+    // A tag like @v7 can be moved to other code after review; a SHA can't.
+    // Dependabot reads the comment to keep the pin current.
+    const dir = new URL('../.github/workflows/', import.meta.url);
+    const uses = readdirSync(dir)
+      .filter((f) => /\.ya?ml$/.test(f))
+      .flatMap((f) =>
+        readFileSync(new URL(f, dir), 'utf8')
+          .split('\n')
+          .filter((line) => /^\s*(-\s+)?uses:/.test(line))
+          .map((line) => `${f}: ${line.trim()}`),
+      );
+    assert.ok(uses.length > 0, 'no workflow steps found');
+    for (const line of uses) {
+      assert.match(line, /uses: [\w.-]+\/[\w./-]+@[0-9a-f]{40} # v\d+(\.\d+)*$/, line);
+    }
+  });
+});
+
+describe('selftest', () => {
+  it('treats only loopback addresses as local', () => {
+    for (const url of ['http://localhost:8787', 'http://127.0.0.1:8787', 'http://127.1.2.3', 'http://[::1]:8787']) {
+      assert.equal(isLocalTarget(url), true, url);
+    }
+    for (const url of ['https://ig.example.workers.dev', 'http://localhost.example.com', 'http://10.0.0.5', 'not a url']) {
+      assert.equal(isLocalTarget(url), false, url);
+    }
+  });
+
+  it('refuses to create the first password on a deployed Worker unless told to', () => {
+    const setup = '<h1>Create your password</h1><input name="password" />';
+    assert.equal(adminStep(setup, { local: false, allowSetup: false }), 'refuse-setup');
+    assert.equal(adminStep(setup, { local: false, allowSetup: true }), 'setup');
+    assert.equal(adminStep(setup, { local: true, allowSetup: false }), 'setup');
+  });
+
+  it('logs in when a password already exists, wherever the Worker is', () => {
+    const login = '<h1>Log in</h1><input name="password" />';
+    assert.equal(adminStep(login, { local: false, allowSetup: false }), 'login');
+    assert.equal(adminStep('<h1>Home</h1>', { local: false, allowSetup: false }), 'none');
+  });
+
+  it('stops before sending anything when ADMIN_PASSWORD is not set', () => {
+    const env: NodeJS.ProcessEnv = { ...process.env, WEBHOOK_VERIFY_TOKEN: 'v', META_APP_SECRET: 's', ADMIN_URL_SECRET: 'a' };
+    delete env.ADMIN_PASSWORD;
+    const script = fileURLToPath(new URL('./selftest.ts', import.meta.url));
+    // Port 9 refuses connections, so a run that went ahead would fail differently.
+    const res = spawnSync(process.execPath, ['--experimental-strip-types', script, 'http://127.0.0.1:9'], { env, encoding: 'utf8' });
+    assert.equal(res.status, 2, res.stderr);
+    assert.match(res.stderr, /ADMIN_PASSWORD/);
+    assert.doesNotMatch(res.stdout, /selftest →/);
   });
 });

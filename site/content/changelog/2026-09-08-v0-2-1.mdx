@@ -1,0 +1,26 @@
+---
+title: Keywords in any script
+date: 2026-09-08
+version: 0.2.1
+---
+
+Two matching fixes, and the first pull requests merged from outside contributors. The troubleshooting guide had listed both bugs as known since 0.2.0.
+
+### Fixed
+
+- Keywords in non-Latin scripts match. Before, a keyword in Cyrillic, Arabic, Devanagari, Korean, Chinese, Japanese or Thai never matched any comment, because the word-boundary check only understood ASCII. Chinese, Japanese and Thai don't put spaces between words, so there is no word edge to check, and a keyword in those scripts also matches inside a longer word: `ガイド` matches `ガイドライン`. Thanks to [dchaudhari7177](https://github.com/dchaudhari7177). ([#56])
+- Accents on Latin letters are ignored when matching, so the keyword `preco` matches "qual o preço" and `preço` matches "preco". Thanks to [anisayakmitra-in](https://github.com/anisayakmitra-in). ([#57])
+
+### Changed
+
+- Hono, the Worker's only runtime dependency, is updated from 4.13.2 to 4.13.5. ([#15])
+- For contributors: TypeScript 7, newer Wrangler and Workers types, and newer GitHub Actions. ([#10], [#11], [#12], [#14], [#16])
+
+[#10]: https://github.com/CharanMN7/ig-comment-dm/pull/10
+[#11]: https://github.com/CharanMN7/ig-comment-dm/pull/11
+[#12]: https://github.com/CharanMN7/ig-comment-dm/pull/12
+[#14]: https://github.com/CharanMN7/ig-comment-dm/pull/14
+[#15]: https://github.com/CharanMN7/ig-comment-dm/pull/15
+[#16]: https://github.com/CharanMN7/ig-comment-dm/pull/16
+[#56]: https://github.com/CharanMN7/ig-comment-dm/pull/56
+[#57]: https://github.com/CharanMN7/ig-comment-dm/pull/57

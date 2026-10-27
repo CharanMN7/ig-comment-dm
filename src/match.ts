@@ -136,7 +136,12 @@ export type RuleMatch = { rule: Rule; keyword: string | null };
 /** A rule whose keyword matched, passed over because one of its exclusions matched too. */
 export type RuleExclusion = { rule: Rule; keyword: string | null; exclusion: string };
 
-export type MatchVerdict = { match: RuleMatch | null; excluded: RuleExclusion[] };
+/**
+ * `match` sends the DM. `also` are the other rules that matched, in matching
+ * order, which may still post their public replies. `excluded` are the rules
+ * passed over, before or after `match`.
+ */
+export type MatchVerdict = { match: RuleMatch | null; also: RuleMatch[]; excluded: RuleExclusion[] };
 
 function firstMatching(normalizedComment: string, keywords: string[], mode: MatchMode): string | null {
   for (const keyword of keywords) {
@@ -169,6 +174,10 @@ function firstMatching(normalizedComment: string, keywords: string[], mode: Matc
  * from its own form: adding "how much" to the guide rule cannot silently mute
  * the launch rule. Every rule passed over is returned, so a skip can say which
  * exclusion caused it.
+ *
+ * Matching carries on past the first match, because Meta's one-private-reply
+ * limit binds only the DM: the other matching rules can still post their
+ * public replies.
  */
 export function matchComment(
   rules: Rule[],
@@ -186,19 +195,18 @@ export function matchComment(
     ...global.filter((r) => r.match_all !== 1),
     ...scoped.filter((r) => r.match_all === 1),
   ];
+  const matches: RuleMatch[] = [];
   const excluded: RuleExclusion[] = [];
   for (const rule of ordered) {
     const matchAll = rule.match_all === 1;
     const keyword = matchAll ? null : firstMatching(normalized, parseKeywords(rule.keywords), rule.match_mode);
     if (!matchAll && keyword === null) continue;
     const exclusion = firstMatching(normalized, parseKeywords(rule.exclude_keywords), rule.match_mode);
-    if (exclusion !== null) {
-      excluded.push({ rule, keyword, exclusion });
-      continue;
-    }
-    return { match: { rule, keyword }, excluded };
+    if (exclusion !== null) excluded.push({ rule, keyword, exclusion });
+    else matches.push({ rule, keyword });
   }
-  return { match: null, excluded };
+  const [match = null, ...also] = matches;
+  return { match, also, excluded };
 }
 
 /**

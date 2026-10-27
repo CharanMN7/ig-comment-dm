@@ -1,5 +1,6 @@
 import { createExecutionContext, createScheduledController, waitOnExecutionContext } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
+import { vi } from 'vitest';
 import worker from '../../src/index.ts';
 import type { Env } from '../../src/types.ts';
 import { IG_USER, NOW } from './seed.ts';
@@ -43,6 +44,20 @@ export async function runScheduled(cron: string): Promise<void> {
   await waitOnExecutionContext(ctx);
 }
 
+export const MINUTE_CRON = '* * * * *';
+
+/**
+ * Runs the minute job `count` times, a minute apart, starting at the current
+ * fake time, and leaves the clock at the last run. Each run is a fresh
+ * minute for the send budget.
+ */
+export async function runMinutes(count = 1): Promise<void> {
+  for (let i = 0; i < count; i++) {
+    if (i > 0) vi.setSystemTime(Date.now() + 60_000);
+    await runScheduled(MINUTE_CRON);
+  }
+}
+
 export type DbCall = { sql: string; binds: unknown[]; rowsRead: number };
 
 /**
@@ -56,6 +71,8 @@ function traced(stmt: D1PreparedStatement, call: DbCall): D1PreparedStatement {
     return result;
   };
   return {
+    inner: stmt,
+    call,
     bind: (...values: unknown[]) => {
       call.binds = values;
       return traced(stmt.bind(...values), call);
@@ -82,7 +99,12 @@ export function countingDb(): { db: D1Database; statements: string[]; calls: DbC
       calls.push(call);
       return traced(env.DB.prepare(sql), call);
     },
-    batch: (s: D1PreparedStatement[]) => env.DB.batch(s),
+    // Each batched statement's rows read go to its own call, as if run alone.
+    batch: async (s: Array<{ inner: D1PreparedStatement; call: DbCall }>) => {
+      const results = await env.DB.batch(s.map((x) => x.inner));
+      results.forEach((r, i) => (s[i]!.call.rowsRead += r.meta.rows_read));
+      return results;
+    },
     exec: (sql: string) => env.DB.exec(sql),
   } as unknown as D1Database;
   return { db, statements, calls };

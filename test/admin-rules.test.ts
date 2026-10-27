@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EXCLUSION_TOO_SHORT_MESSAGE, KEYWORD_TOO_SHORT_MESSAGE } from '../src/match.ts';
-import { MATCH_ALL_NEEDS_POST_MESSAGE } from '../src/routes/admin.ts';
+import { MATCH_ALL_NEEDS_POST_MESSAGE, UNKNOWN_ACCOUNT_MESSAGE } from '../src/routes/admin.ts';
 import { LINK_MARKER, TEMPLATES, findTemplate } from '../src/templates.ts';
 import { meta } from './support/meta.ts';
 import { ACCESS_TOKEN, IG_USER, NOW, accountRow, ruleRows, seedAccount, seedRule, sentRows } from './support/seed.ts';
@@ -148,6 +148,26 @@ describe('creating a rule from the admin form', () => {
     expect(res.text).toContain(escaped(message));
     expect(res.text).toContain(escaped(fields.dm_text ?? validRule.dm_text));
     expect(await ruleRows()).toEqual([]);
+  });
+
+  it('refuses an account that is not connected with a form error, not a database error', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const res = await admin.submit(adminPath('/rules'), { ...validRule, ig_user_id: '17841499999999999' });
+    expect(res.status).toBe(400);
+    expect(res.text).toContain(escaped(UNKNOWN_ACCOUNT_MESSAGE));
+    expect(res.text).toContain(escaped(validRule.dm_text));
+    expect(await ruleRows()).toEqual([]);
+  });
+
+  it('refuses moving a rule to an account that is not connected', async () => {
+    const admin = await adminWithAccount();
+    const id = await seedRule({ keywords: ['guide'] });
+    await admin.get(adminPath(`/rules/${String(id)}/edit`));
+    const res = await admin.submit(adminPath(`/rules/${String(id)}`), { ...validRule, ig_user_id: '17841499999999999' });
+    expect(res.status).toBe(400);
+    expect(res.text).toContain(escaped(UNKNOWN_ACCOUNT_MESSAGE));
+    expect(await ruleRows()).toMatchObject([{ id, ig_user_id: IG_USER }]);
   });
 
   it('accepts DM text of exactly 1,000 characters', async () => {
@@ -418,12 +438,17 @@ describe('the rule form layout', () => {
     expect(page).toContain('<summary>Exclusions and matching (optional)</summary>');
     expect(at(folded)).toBeLessThan(at('id="exclude_keywords"'));
     expect(at(folded)).toBeLessThan(at('name="match_mode"'));
+    expect(at(folded)).toBeLessThan(at('id="reply_without_dm"'));
+    expect(page).toContain('<b>Also post this public reply when another rule sends the DM</b>');
+    expect(page).toContain('Only tick this if the reply doesn’t mention a DM.');
+    expect(page).not.toMatch(/name="reply_without_dm" value="1"\s+checked/);
     expect(page).toContain(`<a class="btn secondary" href="${adminPath('/rules')}">Cancel</a>`);
   });
 
   it.each([
     ['exclusions', { excludeKeywords: ['how much'] }],
     ['contains mode', { matchMode: 'contains' as const }],
+    ['reply without DM', { replyWithoutDm: true }],
   ])('opens the folded section when editing a rule that uses %s', async (_, opts) => {
     const admin = await adminWithAccount();
     const id = await seedRule(opts);
@@ -559,6 +584,7 @@ function formFields(page: string): Record<string, string> {
   };
   for (const n of [2, 3, 4, 5]) fields[`public_reply_text_${n}`] = textarea(`public_reply_text_${n}`);
   if (/name="match_all" value="1"\s+checked/.test(page)) fields.match_all = '1';
+  if (/name="reply_without_dm" value="1"\s+checked/.test(page)) fields.reply_without_dm = '1';
   return fields;
 }
 
@@ -637,6 +663,7 @@ describe('starting a rule from a template', () => {
         match_mode: 'word',
         exclude_keywords: JSON.stringify(t.exclusions),
         match_all: t.matchAll ? 1 : 0,
+        reply_without_dm: 0,
         media_id: t.matchAll ? '18000000000000777' : null,
         dm_text: t.dm.replaceAll(LINK_MARKER, LINK),
         public_reply_text: JSON.stringify(t.publicReplies),
@@ -690,6 +717,30 @@ describe('editing, pausing and deleting rules', () => {
     expect(await ruleRows()).toMatchObject([
       expect.objectContaining({ id, label: 'New', keywords: '["recipe"]', media_id: '18000000000000777', public_reply_text: null }),
     ]);
+  });
+
+  it('keeps reply without DM through an unchanged edit, and turns it off when unticked', async () => {
+    const admin = await adminWithAccount();
+    const id = await seedRule({ label: 'Prices', dmText: 'Prices: https://ana.studio/prices', publicReply: 'From $20', replyWithoutDm: true });
+
+    const fields = formFields((await admin.get(adminPath(`/rules/${id}/edit`))).text);
+    expect(fields).toMatchObject({ reply_without_dm: '1', public_reply_text: 'From $20' });
+    expect((await admin.submit(adminPath(`/rules/${id}`), fields)).status).toBe(302);
+    expect(await ruleRows()).toMatchObject([{ id, reply_without_dm: 1 }]);
+
+    const { reply_without_dm: _, ...unticked } = fields;
+    expect((await admin.submit(adminPath(`/rules/${id}`), unticked)).status).toBe(302);
+    expect(await ruleRows()).toMatchObject([{ id, reply_without_dm: 0 }]);
+  });
+
+  it('saves a new rule with reply without DM ticked, and keeps it ticked when the form is refused', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const refused = await admin.submit(adminPath('/rules'), { ...validRule, keywords: 'ok', reply_without_dm: '1' });
+    expect(refused.status).toBe(400);
+    expect(formFields(refused.text)).toMatchObject({ reply_without_dm: '1' });
+    await admin.submit(adminPath('/rules'), { ...validRule, public_reply_text: 'From $20', reply_without_dm: '1' });
+    expect(await ruleRows()).toMatchObject([{ reply_without_dm: 1, public_reply_text: 'From $20' }]);
   });
 
   it('validates edits the same way as new rules', async () => {
@@ -858,6 +909,18 @@ describe('the dry-run test page', () => {
     expect(page.text).not.toContain('sample');
   });
 
+  it('says the account is paused instead of that the rule would match', async () => {
+    await seedAccount({ active: false });
+    const admin = await signedInAdmin();
+    await seedRule({ label: 'Guide rule' });
+    await admin.get(adminPath('/test'));
+    const page = (await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'guide', media_id: '' })).text;
+    expect(page).not.toContain('This would match');
+    expect(page.replace(/\s+/g, ' ')).toContain(
+      `@creator is paused, so this comment would get no reply. Once you <a href="${adminPath('/accounts')}">resume it</a>, it would match the rule <b>Guide rule</b>.`,
+    );
+  });
+
   it('ignores paused rules', async () => {
     const admin = await adminWithAccount();
     await seedRule({ active: false });
@@ -907,7 +970,7 @@ describe('the dry-run test page', () => {
     await admin.get(adminPath('/test'));
     const page = (await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'how much is the guide', media_id: '' })).text;
     expect(page).toContain('This would match the rule <b>Any guide</b>');
-    expect(page).toContain('Passed over first');
+    expect(page).toContain('Passed over because of an exclusion');
     expect(page).toContain('<tr><td>Strict guide</td><td>guide</td><td>how much</td></tr>');
   });
 
@@ -937,7 +1000,48 @@ describe('the dry-run test page', () => {
     await admin.get(adminPath('/test'));
     const page = await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'guide pdf please', media_id: '' });
     expect(page.text).toContain('This would match the rule <b>First rule</b>');
-    expect(page.text).not.toContain('Second rule');
+    expect(page.text).not.toContain('This would match the rule <b>Second rule</b>');
+  });
+
+  it('lists the other matching rules, which of them would publicly reply, and the limit', async () => {
+    const admin = await adminWithAccount();
+    await seedRule({ label: 'Guide', keywords: ['guide'], dmText: 'The guide', publicReply: 'Sent!' });
+    await seedRule({ label: 'Price', keywords: ['price'], publicReply: 'From $20, {username}', replyWithoutDm: true });
+    await seedRule({ label: 'Quiet', keywords: ['guide'], replyWithoutDm: true });
+    await seedRule({ label: 'Own DM only', keywords: ['guide'], publicReply: 'Check your DMs' });
+    await seedRule({ label: 'Booking', keywords: ['guide'], publicReply: JSON.stringify(['Book A', 'Book B']), replyWithoutDm: true });
+    await seedRule({ label: 'Late', keywords: ['guide'], publicReply: 'One too many', replyWithoutDm: true });
+    await seedRule({ label: 'Strict', keywords: ['guide'], excludeKeywords: ['price'], publicReply: 'Excluded', replyWithoutDm: true });
+    await admin.get(adminPath('/test'));
+    meta.clearCalls();
+
+    const page = (await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'guide price?', media_id: '' })).text;
+
+    expect(page).toContain('This would match the rule <b>Guide</b>');
+    expect(page).toContain('<h2>Other matching rules</h2>');
+    expect(page).toMatch(/still posts its public reply, once the DM has gone through, up to\s+2\s+of them per comment/);
+    expect(page).toMatch(/<td>Price<\/td>\s*<td>price<\/td>\s*<td>\s*<span class="message">From \$20, sample_user<\/span>/);
+    expect(page).toMatch(/<td>Quiet<\/td>\s*<td>guide<\/td>\s*<td>\s*<span class="muted">Not posted: this rule has no public reply\.<\/span>/);
+    expect(page).toMatch(/<td>Own DM only<\/td>\s*<td>guide<\/td>\s*<td>\s*<span class="muted">Not posted: public reply only when this rule sends the DM\.<\/span>/);
+    expect(page).not.toContain('Check your DMs');
+    expect(page).toContain('One of these 2, at random:');
+    expect(page).toContain('<li class="message">Book B</li>');
+    expect(page).toMatch(/<td>Late<\/td>[\s\S]*?Not posted: only 2 other rules can publicly reply to one comment\./);
+    expect(page).not.toContain('One too many');
+    expect(page).toContain('Passed over because of an exclusion');
+    expect(page).toContain('<tr><td>Strict</td><td>guide</td><td>price</td></tr>');
+    expect(page).not.toContain('Excluded</');
+    expect(meta.calls).toEqual([]);
+  });
+
+  it('shows no other rules when only one matches', async () => {
+    const admin = await adminWithAccount();
+    await seedRule({ label: 'Guide', keywords: ['guide'] });
+    await seedRule({ label: 'Price', keywords: ['price'], publicReply: 'From $20' });
+    await admin.get(adminPath('/test'));
+    const page = (await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'guide', media_id: '' })).text;
+    expect(page).not.toContain('Other matching rules');
+    expect(page).not.toContain('Price');
   });
 });
 

@@ -123,6 +123,8 @@ npm run setup
 
 It's safe to re-run. Deploys are idempotent, migrations the database has already recorded are skipped, and it leaves existing secrets alone unless you pass `--rotate` (`npm run setup -- --rotate`). If it stops partway, [Deploying by hand](#deploying-by-hand) below lists what it was going to run next.
 
+It prints your admin URL and webhook verify token as soon as it saves them, before the final deploy, so save them right away. If a run stops after that, the next run makes a new admin URL and verify token and prints them, because Cloudflare can't show you the old ones again. The ones the stopped run printed stop working.
+
 <Frame caption="The end of npm run setup: the values to paste into Meta, and your admin URL.">
   <div className="shot" data-shot="cli-06-npm-run-setup.png">Screenshot coming</div>
 </Frame>

@@ -40,7 +40,7 @@ Meta webhook (signed) ───▶ your Worker ◀─── poll every 5 minutes
           one private DM, then an optional public reply
 ```
 
-There are two ways in because Instagram silently drops webhooks for collapsed and low-signal comments. Every five minutes the Worker reads the last 72 hours of comments on up to 3 posts per account and answers up to 10 per run that the webhook missed. Both paths claim the comment with `INSERT … ON CONFLICT DO NOTHING` before sending, so a duplicate delivery can't produce a second DM.
+There are two ways in because Instagram silently drops webhooks for collapsed and low-signal comments. Every five minutes the Worker reads the last 72 hours of comments on up to 3 posts per account, taking turns when rules cover more, and answers up to 10 per run that the webhook missed. Both paths claim the comment with `INSERT … ON CONFLICT DO NOTHING` before sending, so a duplicate delivery can't produce a second DM, and each DM call gets one attempt: one whose answer is lost is logged as "may have been delivered", never sent twice. A DM Instagram turns down for now (rate limits, its own temporary errors) is tried again after 1, 5 and 20 minutes.
 
 The whole thing is about 5,000 lines of TypeScript, with one runtime dependency (`hono`) and no client-side JavaScript. Instagram tokens are encrypted with AES-256-GCM under a key that exists only in your Cloudflare account.
 
@@ -53,7 +53,7 @@ Creators and small businesses who run "comment X for the link" posts and would r
 - **Professional accounts only.** Instagram's API doesn't work with personal accounts. Switching to Creator or Business takes a minute in the app.
 - **Your Meta app has to be Live.** In Development mode Meta sends no real comment webhooks, so only the five-minute poll works. Publishing needs no App Review while only your own accounts connect as Instagram Testers. Letting strangers connect theirs would need App Review; this is built for one person and their own accounts.
 - **One private reply per comment, ever, within 7 days.** No follow-up unless they reply to you. Older comments are skipped.
-- **About 750 private replies per hour per account**, Meta's cap. Nothing queues sends past it yet ([#35](https://github.com/CharanMN7/ig-comment-dm/issues/35)), so on a viral reel the overflow fails, is logged and isn't retried.
+- **About 750 private replies per hour per account**, Meta's cap. The Worker sends at most 12 a minute per account, which keeps every hour under it, and queues the rest, sending the oldest first every minute. One Worker drains about 12 a minute in all, shared between the accounts with DMs waiting: a backlog of 5,000 on one account takes about 7 hours, and two busy accounts get about 7 a minute each. A comment still queued an hour before Instagram's 7-day limit is skipped.
 - **Meta changes things.** It renames dashboard screens, retires OAuth hosts and changes which secret signs webhooks. The code pins Graph API v23.0, which Meta will eventually retire.
 - **Blind spots.** Comments hidden by Instagram's Hidden Words filter never reach the API. DMs to non-followers land in Message requests. Posts outside the poll's 3 rely on the webhook alone.
 - **60-day tokens.** A nightly job refreshes them. If it stops, `/health` turns 503 before they expire; a lapsed account needs a 20-second reconnect.
@@ -64,10 +64,11 @@ $0. Meta doesn't charge for the API, and it fits Cloudflare's free plan:
 
 | Free-plan limit | What uses it |
 |---|---|
-| 100,000 Worker requests a day | One per webhook, plus admin pages and `/health` checks |
+| 100,000 Worker requests a day | One per webhook, plus admin pages, `/health` checks and, at most, 1,441 cron runs |
 | 10 ms CPU per request | Why passwords use PBKDF2 at 12,000 iterations, not 600,000 |
-| 5 cron triggers per account | This uses 2: the 5-minute poll and the 03:00 UTC token refresh |
-| D1: 100,000 rows written a day | A few per comment |
+| 50 subrequests per run | Every fetch and D1 query counts, so a minute sends at most 12 queued DMs, and a webhook queues what it can't afford to send |
+| 5 cron triggers per account | This uses 2: the minute job (sends the queue, polls every fifth minute) and the 03:00 UTC token refresh |
+| D1: 100,000 rows written a day | The real ceiling: about 13 per DM (16 if it was queued) and 3 per comment no rule matches, so roughly 6,000 to 7,500 DMs a day. Past it, D1 refuses everything until 00:00 UTC |
 | D1: 5 million rows read a day | Each Home load reads the last 30 days of the send log, never all of it: 80+ loads a day at 1,000 comments a day, however old the log |
 | D1: 500 MB per database | The send log grows a row per comment; webhook logs are pruned after 7 days |
 

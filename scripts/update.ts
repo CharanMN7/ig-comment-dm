@@ -60,6 +60,7 @@ import {
   workerUrlFrom,
 } from './update-lib.ts';
 import type { Candidate, InProgress, Mode, Stop } from './update-lib.ts';
+import { runWrangler, wranglerBin } from './wrangler.ts';
 
 const color = stdout.isTTY === true && !process.env.NO_COLOR;
 const paint = (code: string) => (text: string) => (color ? `\x1b[${code}m${text}\x1b[0m` : text);
@@ -81,8 +82,8 @@ const BACKUP_NAME = 'ig-comment-dm-update-wrangler.toml';
 // An interrupted run's last write to wrangler.toml comes seconds after the
 // backup. A change later than this is the person's own.
 const BACKUP_GRACE_MS = 2 * 60 * 1000;
-// npm and npx are .cmd shims on Windows, which spawn only runs through a shell.
-// Every argument passed that way is a fixed string.
+// npm is a .cmd shim on Windows, which spawn only runs through a shell. Every
+// argument passed that way is a fixed string.
 const SHELL = process.platform === 'win32';
 const TOTAL = 5;
 
@@ -186,17 +187,12 @@ async function confirm(question: string): Promise<boolean> {
 }
 
 function wranglerLoggedIn(): boolean | null {
-  // Before the first npm install there is no wrangler to ask, and npx would
-  // download one. The install step comes before the deploy anyway.
-  if (!existsSync(resolve(ROOT, 'node_modules/wrangler'))) return null;
-  const res = spawnSync('npx', ['wrangler', 'whoami'], {
-    cwd: ROOT,
-    encoding: 'utf8',
-    shell: SHELL,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  const out = `${res.stdout ?? ''}${res.stderr ?? ''}`;
-  return res.status === 0 && !/not authenticated|you are not logged in/i.test(out);
+  // Before the first npm install there is no wrangler to ask. The install step
+  // comes before the deploy anyway.
+  const bin = wranglerBin();
+  if (!bin) return null;
+  const res = runWrangler(bin, ['whoami'], { cwd: ROOT });
+  return res.code === 0 && !/not authenticated|you are not logged in/i.test(res.out);
 }
 
 function inProgress(): InProgress | null {

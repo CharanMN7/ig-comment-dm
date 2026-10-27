@@ -1,7 +1,10 @@
+import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
+import { claimExtraReply } from '../src/db.ts';
+import { EXTRA_REPLY_NONE, EXTRA_REPLY_NO_DM, EXTRA_REPLY_OVER_CAP, EXTRA_REPLY_OWN_DM_ONLY } from '../src/other-replies.ts';
 import { meta } from './support/meta.ts';
-import { ACCESS_TOKEN, DAY, IG_USER, NOW, seedAccount, seedRule, sentRow, sentRows } from './support/seed.ts';
-import { commentPayload, commentValue, postWebhook } from './support/worker.ts';
+import { ACCESS_TOKEN, DAY, IG_USER, NOW, extraReplyRows, seedAccount, seedRule, sentRow, sentRows } from './support/seed.ts';
+import { commentPayload, commentValue, postWebhook, runMinutes } from './support/worker.ts';
 
 const dmCalls = () => meta.callsTo('POST', '/:id/messages');
 const replyCalls = () => meta.callsTo('POST', '/:id/replies');
@@ -142,7 +145,11 @@ describe('public reply variations', () => {
       payload.entry[0]!.changes.push({ field: 'comments', value: commentValue({ commentId: `v-${i}`, username: 'sarah' }) });
     }
 
+    // One delivery can't send 30 within its 50 subrequests, so most wait in
+    // the queue for the minute job.
     await postWebhook(payload);
+    expect(replyCalls().length).toBeLessThan(30);
+    await runMinutes(4);
 
     const posted = replyCalls().map((c) => (c.body as { message: string }).message);
     expect(posted).toHaveLength(30);
@@ -169,12 +176,14 @@ describe('public reply variations', () => {
 });
 
 describe('comments that must not trigger a DM', () => {
-  it('records a non-matching comment as skipped and calls Meta for nothing', async () => {
+  // A busy account's comments mostly match nothing, and a row for each would
+  // spend D1's 100,000 daily row writes on them.
+  it('writes no row for a comment no rule matches, and calls Meta for nothing', async () => {
     await seedAccount();
     await seedRule({ keywords: ['guide'] });
     await postWebhook(commentPayload({ text: 'great video, guidelines were helpful' }));
     expect(meta.calls).toEqual([]);
-    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'skipped', error: 'no matching rule', rule_id: null })]);
+    expect(await sentRows()).toEqual([]);
   });
 
   it('ignores the operator commenting on their own post, writing no row at all', async () => {
@@ -185,7 +194,7 @@ describe('comments that must not trigger a DM', () => {
     expect(await sentRows()).toEqual([]);
   });
 
-  it('skips a comment older than 7 days without calling Meta', async () => {
+  it('records a matching comment older than 7 days as skipped without calling Meta', async () => {
     await seedAccount();
     await seedRule();
     await postWebhook(commentPayload({ time: NOW - 7 * DAY - 1 }));
@@ -203,12 +212,13 @@ describe('comments that must not trigger a DM', () => {
     expect(await sentRows()).toEqual([]);
   });
 
-  it('drops comments for a paused account', async () => {
+  it('records a paused account’s matching comments as skipped, without calling Instagram', async () => {
     await seedAccount({ active: false });
-    await seedRule();
+    const ruleId = await seedRule();
     await postWebhook(commentPayload());
+    await postWebhook(commentPayload({ commentId: 'no-rule', text: 'love it' }));
     expect(meta.calls).toEqual([]);
-    expect(await sentRows()).toEqual([]);
+    expect(await sentRows()).toMatchObject([{ rule_id: ruleId, dm_status: 'skipped', error: 'account paused' }]);
   });
 
   it('ignores changes whose field is not comments', async () => {
@@ -226,7 +236,7 @@ describe('comments that must not trigger a DM', () => {
     await seedRule({ keywords: ['guide'], active: false });
     await postWebhook(commentPayload({ text: 'guide' }));
     expect(meta.calls).toEqual([]);
-    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'skipped', error: 'no matching rule' })]);
+    expect(await sentRows()).toEqual([]);
   });
 });
 
@@ -269,12 +279,12 @@ describe('match modes', () => {
     expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'ok', rule_id: ruleId })]);
   });
 
-  it('skips the same comment when the rule matches whole words only', async () => {
+  it('ignores the same comment when the rule matches whole words only', async () => {
     await seedAccount();
     await seedRule({ keywords: ['launch'], matchMode: 'word' });
     await postWebhook(commentPayload({ text: 'So ready for #launch2026 🚀' }));
     expect(meta.calls).toEqual([]);
-    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'skipped', error: 'no matching rule' })]);
+    expect(await sentRows()).toEqual([]);
   });
 });
 
@@ -329,7 +339,7 @@ describe('rules that reply to every comment on a post', () => {
     await seedRule({ keywords: [], matchAll: true, mediaId: 'reel-1' });
     await postWebhook(commentPayload({ mediaId: 'reel-2', text: 'love this' }));
     expect(meta.calls).toEqual([]);
-    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'skipped', error: 'no matching rule' })]);
+    expect(await sentRows()).toEqual([]);
   });
 
   it('lets a keyword rule on the same post, or on all posts, win', async () => {
@@ -385,7 +395,7 @@ describe('media-scoped rules', () => {
     await seedRule({ keywords: ['guide'], mediaId: 'reel-1' });
     await postWebhook(commentPayload({ mediaId: 'reel-2', text: 'guide' }));
     expect(meta.calls).toEqual([]);
-    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'skipped', error: 'no matching rule' })]);
+    expect(await sentRows()).toEqual([]);
   });
 
   it('falls back to an all-posts rule when the scoped rule does not match', async () => {
@@ -476,6 +486,146 @@ describe('comments on a boosted post', () => {
     const raw = JSON.stringify(adComment()).replace(`"original_media_id":"${POST}"`, '"original_media_id":18099999999999999');
     await postWebhook(raw);
     expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'ok' })]);
+  });
+});
+
+describe('when more than one rule matches', () => {
+  const replyTexts = () => replyCalls().map((c) => (c.body as { message: string }).message);
+
+  it('sends one DM, from the first rule, and the public reply of every rule set to reply without its DM', async () => {
+    await seedAccount();
+    const guide = await seedRule({ label: 'Guide', keywords: ['guide'], dmText: 'guide link', publicReply: 'Sent you the guide!' });
+    const price = await seedRule({ label: 'Price', keywords: ['price'], dmText: 'price list', publicReply: 'From $20, {username}!', replyWithoutDm: true });
+    const quiet = await seedRule({ label: 'Quiet', keywords: ['guide'], dmText: 'other guide', replyWithoutDm: true });
+    const own = await seedRule({ label: 'Own DM only', keywords: ['guide'], publicReply: 'Check your DMs!' });
+
+    await postWebhook(commentPayload({ text: 'guide price?', username: 'sarah' }));
+
+    expect(dmCalls().map((c) => c.body)).toEqual([{ recipient: { comment_id: '17900000000000001' }, message: { text: 'guide link' } }]);
+    expect(replyCalls().map((c) => [c.path, c.body])).toEqual([
+      ['/17900000000000001/replies', { message: 'Sent you the guide!' }],
+      ['/17900000000000001/replies', { message: 'From $20, sarah!' }],
+    ]);
+    expect(await sentRows()).toEqual([expect.objectContaining({ rule_id: guide, dm_status: 'ok', reply_status: 'ok', error: null })]);
+    expect(await extraReplyRows()).toMatchObject([
+      { comment_id: '17900000000000001', rule_id: price, status: 'ok', error: null, sent_at: NOW },
+      { comment_id: '17900000000000001', rule_id: quiet, status: 'skipped', error: EXTRA_REPLY_NONE },
+      { comment_id: '17900000000000001', rule_id: own, status: 'skipped', error: EXTRA_REPLY_OWN_DM_ONLY },
+    ]);
+  });
+
+  it('posts no other rule’s reply unless that rule was set to, so a “Check your DMs” reply is never false', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'], dmText: 'guide link' });
+    const prices = await seedRule({ keywords: ['guide'], dmText: 'price list', publicReply: 'Prices are in your DMs' });
+    await postWebhook(commentPayload({ text: 'guide' }));
+    expect(dmCalls()).toHaveLength(1);
+    expect(replyCalls()).toEqual([]);
+    expect(await extraReplyRows()).toMatchObject([{ rule_id: prices, status: 'skipped', error: EXTRA_REPLY_OWN_DM_ONLY }]);
+  });
+
+  it('posts other rules’ replies even when the DM rule has none, and picks one variation', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'] });
+    await seedRule({ keywords: ['guide'], publicReply: JSON.stringify(['Variation A', 'Variation B']), replyWithoutDm: true });
+    await postWebhook(commentPayload({ text: 'guide' }));
+    expect(dmCalls()).toHaveLength(1);
+    expect(replyTexts()).toHaveLength(1);
+    expect(['Variation A', 'Variation B']).toContain(replyTexts()[0]);
+    expect(await extraReplyRows()).toMatchObject([{ status: 'ok' }]);
+  });
+
+  it('posts at most two other rules’ replies, and records the rest as over the limit', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'], publicReply: 'Reply 1' });
+    const ids: number[] = [];
+    for (const n of [2, 3, 4, 5]) ids.push(await seedRule({ keywords: ['guide'], publicReply: `Reply ${n}`, replyWithoutDm: true }));
+
+    await postWebhook(commentPayload({ text: 'guide' }));
+
+    expect(dmCalls()).toHaveLength(1);
+    expect(replyTexts()).toEqual(['Reply 1', 'Reply 2', 'Reply 3']);
+    expect(await extraReplyRows()).toMatchObject([
+      { rule_id: ids[0], status: 'ok' },
+      { rule_id: ids[1], status: 'ok' },
+      { rule_id: ids[2], status: 'skipped', error: EXTRA_REPLY_OVER_CAP },
+      { rule_id: ids[3], status: 'skipped', error: EXTRA_REPLY_OVER_CAP },
+    ]);
+  });
+
+  it('posts no public reply at all when the DM fails, and says why for each rule', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'], publicReply: 'Sent you a DM!' });
+    const price = await seedRule({ keywords: ['guide'], publicReply: 'From $20', replyWithoutDm: true });
+    meta.on('POST', '/:id/messages', { status: 400, json: { error: { message: 'outside of allowed window' } } });
+
+    await postWebhook(commentPayload({ text: 'guide' }));
+
+    expect(replyCalls()).toEqual([]);
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'failed', reply_status: 'skipped' })]);
+    expect(await extraReplyRows()).toMatchObject([{ rule_id: price, status: 'skipped', error: EXTRA_REPLY_NO_DM }]);
+  });
+
+  it('posts nothing for other rules when the token no longer decrypts', async () => {
+    await seedAccount({ encryptionKey: btoa(String.fromCharCode(...new Uint8Array(32).fill(9))) });
+    await seedRule({ keywords: ['guide'] });
+    await seedRule({ keywords: ['guide'], publicReply: 'From $20', replyWithoutDm: true });
+    await postWebhook(commentPayload({ text: 'guide' }));
+    expect(meta.calls).toEqual([]);
+    expect(await extraReplyRows()).toMatchObject([{ status: 'skipped', error: EXTRA_REPLY_NO_DM }]);
+  });
+
+  it('leaves out a rule whose exclusion matched: it neither replies nor counts towards the limit', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'], publicReply: 'Reply 1' });
+    await seedRule({ keywords: ['guide'], excludeKeywords: ['how much'], publicReply: 'Excluded', replyWithoutDm: true });
+    await seedRule({ keywords: ['guide'], publicReply: 'Reply 2', replyWithoutDm: true });
+    await seedRule({ keywords: ['guide'], publicReply: 'Reply 3', replyWithoutDm: true });
+
+    await postWebhook(commentPayload({ text: 'how much is the guide' }));
+
+    expect(replyTexts()).toEqual(['Reply 1', 'Reply 2', 'Reply 3']);
+    expect((await extraReplyRows()).map((r) => r.status)).toEqual(['ok', 'ok']);
+  });
+
+  it('records another rule’s failed reply, and still posts the next one', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'] });
+    const broken = await seedRule({ keywords: ['guide'], publicReply: 'Broken', replyWithoutDm: true });
+    const fine = await seedRule({ keywords: ['guide'], publicReply: 'Fine', replyWithoutDm: true });
+    meta.on('POST', '/:id/replies', (call) =>
+      (call.body as { message: string }).message === 'Broken'
+        ? { status: 400, json: { error: { message: 'Comment is too long' } } }
+        : { json: { id: '18000000000000001' } },
+    );
+
+    await postWebhook(commentPayload({ text: 'guide' }));
+
+    expect(replyTexts()).toEqual(['Broken', 'Fine']);
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'ok', reply_status: null, error: null })]);
+    expect(await extraReplyRows()).toMatchObject([
+      { rule_id: broken, status: 'failed', error: expect.stringContaining('Comment is too long') },
+      { rule_id: fine, status: 'ok', error: null },
+    ]);
+  });
+
+  it('posts each reply once when Meta delivers the comment twice, even at the same time', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'], publicReply: 'Reply 1' });
+    await seedRule({ keywords: ['guide'], publicReply: 'Reply 2', replyWithoutDm: true });
+    await Promise.all([postWebhook(commentPayload({ text: 'guide' })), postWebhook(commentPayload({ text: 'guide' }))]);
+    await postWebhook(commentPayload({ text: 'guide' }));
+    expect(dmCalls()).toHaveLength(1);
+    expect(replyTexts()).toEqual(['Reply 1', 'Reply 2']);
+    expect(await extraReplyRows()).toHaveLength(1);
+  });
+
+  it('lets only one of two racing claims for the same rule and comment post its reply', async () => {
+    const row = { comment_id: '17900000000000001', rule_id: 7, status: 'pending', error: null, sent_at: NOW };
+    const claims = await Promise.all([claimExtraReply(env.DB, row), claimExtraReply(env.DB, { ...row, status: 'skipped' })]);
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    expect(await extraReplyRows()).toHaveLength(1);
+    expect(await claimExtraReply(env.DB, row)).toBe(false);
   });
 });
 

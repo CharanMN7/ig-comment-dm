@@ -1,0 +1,99 @@
+---
+title: Exclusions, templates and npm run update
+date: 2026-10-27
+version: 0.3.0
+---
+
+The first release with a test suite behind it. Every pull request now runs the real Worker against a local database with Instagram faked, and writing that suite turned up several of the fixes below. Rules gained exclusions, a contains mode, a reply-to-everyone mode, `{username}` and reply variations, and from here on `npm run update` brings each new version into your copy.
+
+<Warning>
+**Upgrading from 0.2.1**
+
+- You need Node.js 22.13 or later. On an older version `npm install` stops with "Unsupported engine". ([#113])
+- Deploy with `npm run deploy`, not `npx wrangler deploy`. It now applies database migrations before the new code goes live, and this release brings five (004 to 008). Without them you'll see [errors that mention "no such column"](/troubleshooting#errors-mention-no-such-column-after-an-update). The first run also records the two migrations your database already has, which changes nothing. ([#95])
+- Your copy doesn't have `npm run update` yet. Either [fetch the script once](/updating#if-your-copy-has-no-npm-run-update-yet) and run it, or update by hand with `git pull`, `npm install` and `npm run deploy`.
+- Rules you don't edit keep working as they are. Saving a rule is stricter now (see Changed), so an old rule with a keyword like `AI!!` or a link to `example.com` has to be fixed the next time you save it.
+</Warning>
+
+### Added
+
+- Exclusions. A rule skips a comment that also contains one of its exclusions, like "how much" or "not interested", and the next matching rule gets its turn. Home and the Test page show which exclusion stopped it. ([#103])
+- A match setting on each rule: whole words, as before, or anywhere in the comment, so `launch` matches `#launch2026`. ([#98])
+- "Reply to every comment on this post", for giveaways and waitlists: a rule with no keywords that answers everyone who comments on one post. It has to name a post, so it can't DM every commenter on the account. ([#106])
+- `{username}` in a DM or public reply becomes the commenter's Instagram username. When Instagram doesn't send one, the message still goes out, without the placeholder and the comma or space beside it. ([#100])
+- Up to five public replies per rule, one picked at random for each comment, so a busy post doesn't fill up with the same line. ([#101])
+- Eight rule templates that fill in the new-rule form for you to edit: free guide, product link, price list, booking page, waitlist, event RSVP, menu and giveaway entry. ([#114])
+- Home totals for today, the last 7 days, the last 30 days and all time: people reached, DMs sent, skipped and failed, and the same for each account when you have more than one. ([#104])
+- On a new install, Home opens with a three-step "Get started" list. Saving, pausing, resuming or deleting now confirms itself in one line. ([#116])
+- The admin panel can be installed on a phone's home screen, and every admin page works at 375px wide with 44px tap targets. ([#111])
+- `/health` for uptime monitors. It answers 200 while the database responds and both scheduled jobs are on time, and 503 with the reason when they aren't. ([#93])
+- `npm run update` pulls the latest version into your copy, applies new migrations, deploys and checks `/health`. It handles clones and forks, Deploy to Cloudflare copies (with `--push`) and ZIP downloads, and stops rather than touch edits you haven't committed. ([#110])
+- This docs site, with search, and a landing page. ([#105])
+- In Claude Code, say "set this up" and a bundled skill walks you through setup while you keep the logins and secrets. ([#113])
+
+### Changed
+
+- Keywords are measured after accents and punctuation are stripped. Each needs at least 3 characters, or 2 if written in Chinese or Japanese, and at least one letter or digit: `AI!!` is now too short and `🔥🔥🔥` is refused. ([#98], [#109])
+- A rule can't be saved while its DM or a public reply still contains `PASTE-YOUR-LINK-HERE` or a sample address like `example.com`. That covers every rule, not only ones started from a template. ([#114])
+- When the DM fails, the public reply is held back, since "Sent you a DM!" would be untrue. Home says why it wasn't posted. ([#94])
+- The rule form asks for the name, keywords and message first. The match setting and exclusions fold away until a rule uses them. ([#117])
+- The admin panel says "DM" throughout, gets its plurals right, keeps its menu on one row at 375px, and has easier-to-see inputs, placeholders and keyboard focus. ([#116], [#119])
+- A Home visit reads a bounded number of rows however long you've been running. All-time totals come from a nightly snapshot plus the sends since, so a visit over 2,010 old sends reads 47 rows instead of 8,040. That matters on D1's free plan, where every query fails for the rest of the day once 5 million rows have been read. ([#121])
+- Keyword matching is about ten times faster with a few hundred keywords. ([#96])
+- The README is shorter and no longer offers the Deploy to Cloudflare button; `npm run setup` is the supported way to deploy. Copies made with the button still update with `npm run update -- --push`. ([#115])
+- For contributors: every pull request runs the Worker end to end in workerd against a fresh local database, with Instagram faked ([#87]). A pull request has to come from an issue its author is assigned to ([#90]), and coding agents get `AGENTS.md` ([#113]).
+
+### Fixed
+
+- A send that couldn't reach Instagram stayed "In progress" forever and blocked any retry. It's now recorded as failed, with the reason. ([#94])
+- Requests to Meta time out after 10 seconds. A send the Worker never finished is marked failed by the daily job after 15 minutes, with a note that the DM may or may not have gone out. ([#102])
+- A slow send no longer gets cut off by the 30 seconds Cloudflare allows after a webhook: Meta calls stop at 25 seconds and the result is written in the time left. ([#112])
+- Delete on a rule deleted it at once, because the confirmation dialog never ran under the Content Security Policy. It now opens a confirmation page. The DM's character counter never ran either; the box now stops at 1,000 characters. ([#94])
+- The Test page could name a different rule from the one a real comment triggers. ([#94])
+- A comment containing a long number, such as an order number, could scramble the webhook's IDs and send the DM to a comment that doesn't exist. ([#97])
+- One unreachable account stopped the nightly token refresh for every account after it. ([#97])
+- A paused account's token wasn't refreshed, so an account paused for 60 days came back with a token that could no longer be renewed. ([#102])
+- Connect reported a saved account as a failure when subscribing it to notifications hit a network error. ([#97])
+- Letters like đ, ł, ø and ß are folded when matching, so `dien` matches `điện` and `lodz` matches `łódź`. ([#92])
+- On a fresh install Home said the daily job "hasn't run in over 3 days". It now says when to expect the first run. ([#104])
+- Unsigned POSTs from scanners no longer raise the "signing secret did not match" banner, and the "database tables are missing" page only appears when they are. ([#102])
+- The 5-minute poll's limit of 10 comments per run counted comments the webhook had already answered. ([#118])
+- A cancelled or refused Connect shows "Not connected" with a way back to Accounts, instead of a dead end. ([#119], [#120])
+- Wrong passwords sent at the same moment were counted as one. ([#97])
+- Login waits longer than a minute are rounded up, not down. ([#120])
+
+### Security
+
+- Connecting an Instagram account needs your admin login. Instagram's callback has to return to the same browser within 10 minutes, carrying a signed state. ([#99])
+- Installing the panel on Android sends its manifest, which contains your admin URL, to Google's WebAPK service. Your password still protects the panel, and the [security page](/security#installing-on-a-phone) explains it. ([#111])
+
+[#87]: https://github.com/CharanMN7/ig-comment-dm/pull/87
+[#90]: https://github.com/CharanMN7/ig-comment-dm/pull/90
+[#92]: https://github.com/CharanMN7/ig-comment-dm/pull/92
+[#93]: https://github.com/CharanMN7/ig-comment-dm/pull/93
+[#94]: https://github.com/CharanMN7/ig-comment-dm/pull/94
+[#95]: https://github.com/CharanMN7/ig-comment-dm/pull/95
+[#96]: https://github.com/CharanMN7/ig-comment-dm/pull/96
+[#97]: https://github.com/CharanMN7/ig-comment-dm/pull/97
+[#98]: https://github.com/CharanMN7/ig-comment-dm/pull/98
+[#99]: https://github.com/CharanMN7/ig-comment-dm/pull/99
+[#100]: https://github.com/CharanMN7/ig-comment-dm/pull/100
+[#101]: https://github.com/CharanMN7/ig-comment-dm/pull/101
+[#102]: https://github.com/CharanMN7/ig-comment-dm/pull/102
+[#103]: https://github.com/CharanMN7/ig-comment-dm/pull/103
+[#104]: https://github.com/CharanMN7/ig-comment-dm/pull/104
+[#105]: https://github.com/CharanMN7/ig-comment-dm/pull/105
+[#106]: https://github.com/CharanMN7/ig-comment-dm/pull/106
+[#109]: https://github.com/CharanMN7/ig-comment-dm/pull/109
+[#110]: https://github.com/CharanMN7/ig-comment-dm/pull/110
+[#111]: https://github.com/CharanMN7/ig-comment-dm/pull/111
+[#112]: https://github.com/CharanMN7/ig-comment-dm/pull/112
+[#113]: https://github.com/CharanMN7/ig-comment-dm/pull/113
+[#114]: https://github.com/CharanMN7/ig-comment-dm/pull/114
+[#115]: https://github.com/CharanMN7/ig-comment-dm/pull/115
+[#116]: https://github.com/CharanMN7/ig-comment-dm/pull/116
+[#117]: https://github.com/CharanMN7/ig-comment-dm/pull/117
+[#118]: https://github.com/CharanMN7/ig-comment-dm/pull/118
+[#119]: https://github.com/CharanMN7/ig-comment-dm/pull/119
+[#120]: https://github.com/CharanMN7/ig-comment-dm/pull/120
+[#121]: https://github.com/CharanMN7/ig-comment-dm/pull/121

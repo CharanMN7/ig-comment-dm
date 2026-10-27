@@ -1,0 +1,38 @@
+---
+title: One-command setup
+date: 2026-08-29
+version: 0.2.0
+---
+
+The release that made the repository public. Deploying went from fourteen commands and a hand-edited `wrangler.toml` to `npm run setup`, and the admin panel's secret handling was tightened now that anyone can read the code.
+
+<Warning>
+**Upgrading from 0.1.0.** `wrangler.toml` no longer has a `database_id` placeholder. If you replaced the placeholder with your own database's ID, git reports a conflict on that line when you pull: keep your line. After you deploy, open Home. It now lists any secret that's missing or malformed, with the command that fixes it.
+</Warning>
+
+### Added
+
+- `npm run setup` runs the whole first deploy. It checks your Cloudflare login, creates the database and its tables, asks for the three values from Meta's dashboard, generates every other secret, deploys, and prints what to paste back into Meta. Secrets reach Cloudflare through stdin, never the command line. Running it again keeps your secrets; `--rotate` replaces them. ([#17])
+- `npm run doctor` checks a deployment from the outside for the silent failures behind most "nothing happens" reports, such as a missing `FACEBOOK_APP_SECRET` or a Worker no notification has ever reached. It also names the two things it can't check: whether your Meta app is Live, and whether Hidden Words hid the comment. ([#17])
+- `npm run keys` prints the four secrets you generate yourself, at the right lengths. ([#9])
+- Home lists every secret that's missing, decodes to the wrong length, or is used for two jobs, with the command to fix each one. ([#13])
+- A troubleshooting guide organised by symptom, and the setup steps in a guide of their own. ([#18])
+- `SECURITY.md`, with the threat model and how to rotate each secret if it leaks, and the MIT license. ([#9])
+
+### Changed
+
+- A fresh clone deploys with no file edits: Wrangler creates the D1 database from the name in `wrangler.toml`. ([#17])
+- The README is a short front page, and the operator manual moved into `docs/`. Every roadmap item links to an issue that describes the approach. ([#18], [#55])
+- For contributors: CI runs the type check, unit tests, a dry-run deploy and a secret scan on every pull request, and the repository has issue templates and a contributing guide. ([#9])
+
+### Security
+
+- Admin pages send `Referrer-Policy: no-referrer`. Before this, following a link from the admin panel to Meta or Cloudflare sent your full admin URL, secret included, to that site. ([#13])
+- Login is rate limited: after five wrong passwords you wait a minute, and the wait doubles up to an hour. ([#13])
+- The secret in the admin URL is compared in constant time, and every page gets a `default-src 'none'` Content Security Policy. Admin and Connect pages are sent with `no-store`, so a shared cache or the browser's back button can't bring them back after you log out. ([#13])
+
+[#9]: https://github.com/CharanMN7/ig-comment-dm/pull/9
+[#13]: https://github.com/CharanMN7/ig-comment-dm/pull/13
+[#17]: https://github.com/CharanMN7/ig-comment-dm/pull/17
+[#18]: https://github.com/CharanMN7/ig-comment-dm/pull/18
+[#55]: https://github.com/CharanMN7/ig-comment-dm/pull/55

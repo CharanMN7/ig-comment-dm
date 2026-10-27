@@ -103,6 +103,12 @@ describe('migrations', () => {
     expect(rule).toEqual({ match_all: 0 });
   });
 
+  it('keeps rules saved before reply-without-DM replying only with their own DM', async () => {
+    await oldDeploymentThenMigrate();
+    const rule = await env.DB.prepare('SELECT reply_without_dm FROM rules WHERE id = 7').first<{ reply_without_dm: number }>();
+    expect(rule).toEqual({ reply_without_dm: 0 });
+  });
+
   it('gives rules saved before exclusions an empty list', async () => {
     await oldDeploymentThenMigrate();
     const rule = await env.DB.prepare('SELECT exclude_keywords FROM rules WHERE id = 7').first<{ exclude_keywords: string }>();

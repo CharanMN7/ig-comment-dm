@@ -1,12 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NO_TIME_FOR_PUBLIC_REPLY_ERROR, WEBHOOK_SEND_BUDGET_MS } from '../src/process.ts';
+import { WEBHOOK_SEND_BUDGET_MS } from '../src/process.ts';
+import { NO_TIME_FOR_PUBLIC_REPLY_ERROR } from '../src/queue.ts';
 import { FAKE_EXPIRES_IN, FAKE_ME, meta, type MetaReply } from './support/meta.ts';
-import { DAY, FROZEN_NOW_MS, NOW, accountRow, seedAccount, seedRule, sentRow, storedToken, systemValue } from './support/seed.ts';
+import {
+  DAY,
+  FROZEN_NOW_MS,
+  NOW,
+  accountRow,
+  extraReplyRows,
+  seedAccount,
+  seedRule,
+  sentRow,
+  storedToken,
+  systemValue,
+} from './support/seed.ts';
 import {
   commentPayload,
   commentValue,
   postWebhook,
   returnFromInstagram,
+  runMinutes,
   runScheduled,
   signedInAdmin,
   startConnect,
@@ -54,17 +67,17 @@ describe('a DM or public reply gets one attempt', () => {
     meta.on('POST', '/:id/messages', { status: 500, json: { error: { message: 'An unknown error occurred', code: 1 } } });
     const row = await deliverMatchingComment();
     expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
-    expect(row).toMatchObject({ dm_status: 'failed' });
+    expect(row).toMatchObject({ dm_status: 'unsure' });
     expect(row?.error).toMatch(
       /^DM: Instagram answered with a server error \(500\), so it may have been delivered\. It wasn't sent again, so it can't arrive twice\. \(.*An unknown error occurred.*\)$/,
     );
   });
 
-  it('records a 429 as Instagram turning the DM down, without sending again', async () => {
+  it('queues a DM Instagram turned down with a 429 to try later, never in the same breath', async () => {
     meta.on('POST', '/:id/messages', { status: 429, json: { error: { message: 'Application request limit reached', code: 4 } } });
     const row = await deliverMatchingComment();
     expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
-    expect(row).toMatchObject({ dm_status: 'failed' });
+    expect(row).toMatchObject({ dm_status: 'retry', attempts: 1, next_attempt_at: NOW + 60 });
     expect(row?.error).toMatch(/^DM: \{.*Application request limit reached/);
   });
 
@@ -82,7 +95,7 @@ describe('a DM or public reply gets one attempt', () => {
     meta.on('POST', '/:id/messages', { networkError: true });
     const row = await deliverMatchingComment();
     expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
-    expect(row).toMatchObject({ dm_status: 'failed' });
+    expect(row).toMatchObject({ dm_status: 'unsure' });
     expect(row?.error).toMatch(/^DM: the connection to Instagram failed, so it may have been delivered\. .+ \(.+\)$/);
   });
 
@@ -90,7 +103,7 @@ describe('a DM or public reply gets one attempt', () => {
     meta.on('POST', '/:id/messages', { cutOff: true });
     const row = await deliverMatchingComment();
     expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
-    expect(row).toMatchObject({ dm_status: 'failed' });
+    expect(row).toMatchObject({ dm_status: 'unsure' });
     expect(row?.error).toMatch(/^DM: Instagram's answer was cut off before it could be read, so it may have been delivered\./);
   });
 
@@ -127,7 +140,7 @@ describe('a DM or public reply gets one attempt', () => {
       const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(() => AbortSignal.abort(timedOut()));
       const row = await deliverMatchingComment();
       expect(timeout.mock.calls).toEqual([[10_000]]);
-      expect(row).toMatchObject({ dm_status: 'failed' });
+      expect(row).toMatchObject({ dm_status: 'unsure' });
       expect(row?.error).toBe(
         "DM: Instagram didn't answer within 10 seconds, so it may have been delivered. It wasn't sent again, so it can't arrive twice. (The operation was aborted due to timeout)",
       );
@@ -243,7 +256,23 @@ describe('the time a webhook delivery is allowed', () => {
     expect(await sentRow('second')).toMatchObject({ dm_status: 'ok', reply_status: 'failed', error: NO_TIME_FOR_PUBLIC_REPLY_ERROR });
   });
 
-  it('shares the time across a batched delivery and claims no comment it has no time to send', async () => {
+  it("records another rule's public reply as failed when the DM rule's own reply used up the time", async () => {
+    meta.on('POST', '/:id/replies', () => {
+      vi.setSystemTime(deadline - 1_000);
+      return { json: { id: '18000000000000001' } };
+    });
+    await seedAccount();
+    await seedRule({ publicReply: 'Sent you a DM!' });
+    const other = await seedRule({ publicReply: 'From $20', replyWithoutDm: true });
+
+    await withBackoffSkipped(postWebhook(commentPayload()));
+
+    expect(meta.callsTo('POST', '/:id/replies').map((c) => c.body)).toEqual([{ message: 'Sent you a DM!' }]);
+    expect(await sentRow('17900000000000001')).toMatchObject({ dm_status: 'ok', reply_status: 'ok', error: null });
+    expect(await extraReplyRows()).toMatchObject([{ rule_id: other, status: 'failed', error: NO_TIME_FOR_PUBLIC_REPLY_ERROR }]);
+  });
+
+  it('shares the time across a batched delivery and queues a comment it has no time to send', async () => {
     const attempts = trackAttempts([0, 1, 2]);
     await seedAccount();
     await seedRule();
@@ -254,12 +283,16 @@ describe('the time a webhook delivery is allowed', () => {
     expect(attempts.map((a) => a.ms)).toEqual([10_000, 10_000, 5_000]);
     for (const id of ['batch-1', 'batch-2', 'batch-3']) {
       const row = await sentRow(id);
-      expect(row).toMatchObject({ dm_status: 'failed' });
+      expect(row).toMatchObject({ dm_status: 'unsure' });
       expect(row!.sent_at * 1000).toBeLessThanOrEqual(deadline);
     }
     expect((await sentRow('batch-3'))?.error).toMatch(/^DM: Instagram didn't answer within 5 seconds, so it may have been delivered\./);
-    // Left unclaimed rather than failed, so the 5-minute poll can still send it.
-    expect(await sentRow('batch-4')).toBeNull();
+    // Queued rather than failed, so the minute job sends it.
+    expect(await sentRow('batch-4')).toMatchObject({ dm_status: 'queued', attempts: 0 });
+    vi.restoreAllMocks();
+    await runMinutes();
+    expect(meta.callsTo('POST', '/:id/messages').map((c) => (c.body as { recipient: { comment_id: string } }).recipient.comment_id)).toEqual(['batch-4']);
+    expect(await sentRow('batch-4')).toMatchObject({ dm_status: 'ok', attempts: 1 });
   });
 });
 

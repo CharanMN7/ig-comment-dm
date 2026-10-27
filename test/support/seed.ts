@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { decryptAesGcm, encryptAesGcm } from '../../src/crypto.ts';
-import { insertRule, setAccountActive, toggleRule, tryClaimComment, updateSent, upsertAccount } from '../../src/db.ts';
-import type { Account, MatchMode, Rule, Sent } from '../../src/types.ts';
+import { insertRule, insertSend, setAccountActive, toggleRule, tryClaimComment, updateSent, upsertAccount } from '../../src/db.ts';
+import type { Account, ExtraReply, MatchMode, Rule, Sent } from '../../src/types.ts';
 
 export const FROZEN_NOW_MS = Date.UTC(2026, 9, 1, 12, 0, 0);
 export const NOW = Math.floor(FROZEN_NOW_MS / 1000);
@@ -48,6 +48,7 @@ export async function seedRule(
     matchMode?: MatchMode;
     excludeKeywords?: string[];
     matchAll?: boolean;
+    replyWithoutDm?: boolean;
     mediaId?: string | null;
     dmText?: string;
     publicReply?: string | null;
@@ -61,6 +62,7 @@ export async function seedRule(
     match_mode: opts.matchMode ?? 'word',
     exclude_keywords: JSON.stringify(opts.excludeKeywords ?? []),
     match_all: opts.matchAll ? 1 : 0,
+    reply_without_dm: opts.replyWithoutDm ? 1 : 0,
     media_id: opts.mediaId ?? null,
     dm_text: opts.dmText ?? 'Here is your guide: https://example.com/guide',
     public_reply_text: opts.publicReply ?? null,
@@ -104,6 +106,28 @@ export async function seedSent(opts: {
   }
 }
 
+/** A matched comment waiting in the send queue, as the webhook or the poll leaves it. */
+export async function seedQueued(opts: {
+  commentId: string;
+  ruleId: number;
+  commentAt?: number;
+  username?: string | null;
+  commenterId?: string;
+  igUserId?: string;
+}): Promise<void> {
+  await insertSend(env.DB, {
+    comment_id: opts.commentId,
+    ig_user_id: opts.igUserId ?? IG_USER,
+    commenter_id: opts.commenterId ?? '9100000000000001',
+    rule_id: opts.ruleId,
+    username: opts.username === undefined ? 'a_fan' : opts.username,
+    comment_at: opts.commentAt ?? NOW - 60,
+    dm_status: 'queued',
+    now: NOW,
+    leaseUntil: NOW,
+  });
+}
+
 // Compare rows with toMatchObject, not toEqual: a migration that adds a column
 // should not have to touch tests that never look at it.
 export async function sentRows(): Promise<Sent[]> {
@@ -113,6 +137,12 @@ export async function sentRows(): Promise<Sent[]> {
 
 export async function sentRow(commentId: string): Promise<Sent | null> {
   return env.DB.prepare('SELECT * FROM sent WHERE comment_id = ?').bind(commentId).first<Sent>();
+}
+
+/** The other matching rules' rows, in the order they were written, which is matching order. */
+export async function extraReplyRows(): Promise<ExtraReply[]> {
+  const { results } = await env.DB.prepare('SELECT * FROM sent_extra_replies ORDER BY rowid').all<ExtraReply>();
+  return results;
 }
 
 export async function ruleRows(): Promise<Rule[]> {

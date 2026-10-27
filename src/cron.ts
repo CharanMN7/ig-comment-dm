@@ -23,13 +23,44 @@ import {
   writeTotalsSnapshot,
 } from './db.ts';
 import { refreshLongLived, subscribeCommentWebhooks } from './meta.ts';
+import { drainQueue, minuteOf } from './queue.ts';
+import { reconcileComments } from './reconcile.ts';
+import { Subrequests } from './subrequests.ts';
 import type { Env } from './types.ts';
 
 /**
+ * The minute job's trigger, and the 5-minute one it replaced: a deployment
+ * still on that keeps polling and draining, every 5 minutes. Any other
+ * trigger runs the daily job.
+ */
+export const MINUTE_CRONS = ['* * * * *', '*/5 * * * *'];
+
+/**
+ * Every minute: the queue is drained, and on every fifth minute the comment
+ * poll runs first, so what it finds goes out in the same run. Both share the
+ * run's subrequests.
+ */
+export async function runMinute(env: Env, scheduledMs: number): Promise<void> {
+  const subrequests = new Subrequests();
+  if (minuteOf(Math.floor(scheduledMs / 1000)) % 5 === 0) {
+    try {
+      await reconcileComments(env, subrequests);
+    } catch (err) {
+      console.error('comment poll failed', err instanceof Error ? err.message : err);
+    }
+  }
+  await drainQueue(env, subrequests);
+}
+
+/**
  * A send makes at most two Meta calls (DM, then public reply), one attempt
- * each, so it ends within 2 x META_SEND_MAX_MS, 20 s. A row still `pending`
- * long after that was claimed by a Worker stopped mid-send: waitUntil's 30 s
- * cap, a deploy, a crash. scripts/test-unit.ts keeps this above 10x that bound.
+ * each, before its row is written, so it ends within 2 x META_SEND_MAX_MS,
+ * 20 s. Other matching rules' public replies come after that, under rows of
+ * their own. A row still `pending` long after that was claimed by a Worker
+ * stopped mid-send: waitUntil's 30 s cap, a deploy, a crash. Its lease
+ * normally catches it within two minutes; this catches rows claimed before
+ * leases existed, and any the every-minute cron missed. scripts/test-unit.ts
+ * keeps this above 10x that bound.
  */
 export const STALE_PENDING_SECONDS = 15 * 60;
 
@@ -50,7 +81,7 @@ export async function snapshotTotals(db: D1Database, now: number): Promise<Total
   const previous = (await readTotalsSnapshot(db)) ?? EMPTY_SNAPSHOT;
   const cutoff = now - STALE_PENDING_SECONDS;
   if (cutoff <= previous.cutoff) return previous;
-  await failStalePending(db, previous.cutoff, cutoff, STALE_PENDING_ERROR);
+  await failStalePending(db, previous.cutoff, cutoff, now, STALE_PENDING_ERROR);
   const span = [{ from: previous.cutoff, to: cutoff, firstReach: true }];
   const [added = NO_SENDS] = await sendTotals(db, span);
   const accounts = { ...previous.accounts };

@@ -4,6 +4,17 @@ const decoder = new TextDecoder();
 // Spec asked for 600,000. Free Workers ~10ms CPU; 600k kills the first password save with a 500.
 export const PBKDF2_ITERATIONS = 12_000;
 export const COMMENT_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
+// Instagram allows about 750 private replies per account per hour. Counted in
+// one-minute windows: a slot is taken up to 40 seconds before its call is
+// made, so the calls in any hour fall in at most 62 windows, and 12 a window
+// is at most 744.
+export const SENDS_PER_MINUTE = 12;
+// A queued DM still unsent an hour before Instagram's 7-day limit is given up,
+// so none is started at the edge and refused.
+export const QUEUE_EXPIRY_SECONDS = COMMENT_MAX_AGE_SECONDS - 60 * 60;
+// A send records its outcome within about 60 seconds of claiming its row. One
+// still `pending` after this belongs to a Worker that was stopped mid-send.
+export const SEND_LEASE_SECONDS = 2 * 60;
 export const TOKEN_LOOKAHEAD_SECONDS = 10 * 24 * 60 * 60;
 export const TOKEN_MIN_AGE_SECONDS = 24 * 60 * 60;
 export const RECONNECT_WARN_SECONDS = 14 * 24 * 60 * 60;

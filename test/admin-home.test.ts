@@ -1,9 +1,10 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it, vi } from 'vitest';
-import { HEALTH_FIRST_SEEN_KEY, systemSet } from '../src/db.ts';
+import { HEALTH_FIRST_SEEN_KEY, claimExtraReply, systemSet } from '../src/db.ts';
+import { fmtWhen } from '../src/html.ts';
 import { meta } from './support/meta.ts';
-import { DAY, FROZEN_NOW_MS, IG_USER, NOW, seedAccount, seedRule, systemValue } from './support/seed.ts';
-import { adminPath, commentPayload, postWebhook, request, signedInAdmin } from './support/worker.ts';
+import { DAY, FROZEN_NOW_MS, IG_USER, NOW, seedAccount, seedRule, seedSent, systemValue } from './support/seed.ts';
+import { adminPath, commentPayload, postWebhook, request, runScheduled, signedInAdmin } from './support/worker.ts';
 
 /** The page as a reader sees it: tags gone, whitespace collapsed. */
 function textOf(page: string): string {
@@ -28,9 +29,10 @@ describe('the admin home page', () => {
 
   it("counts today's sends, skips, failures and people reached from real webhooks", async () => {
     await seedAccount();
-    await seedRule({ keywords: ['guide'] });
+    await seedRule({ keywords: ['guide'], excludeKeywords: ['price'] });
     await postWebhook(commentPayload({ commentId: 'ok-1', text: 'guide' }));
-    await postWebhook(commentPayload({ commentId: 'skip-1', text: 'hello' }));
+    await postWebhook(commentPayload({ commentId: 'skip-1', text: 'guide price?' }));
+    await postWebhook(commentPayload({ commentId: 'no-rule', text: 'hello' }));
     meta.on('POST', '/:id/messages', { status: 400, json: { error: { message: 'nope' } } });
     await postWebhook(commentPayload({ commentId: 'fail-1', text: 'guide' }));
 
@@ -82,29 +84,92 @@ describe('the admin home page', () => {
     expect(page).toContain('Public reply not posted, because Instagram didn’t confirm the DM.');
   });
 
-  it('warns when the last webhook failed its signature check', async () => {
+  it('lists the other rules that matched a send, and what became of their public replies', async () => {
+    await seedAccount();
+    await seedRule({ label: 'Guide', keywords: ['guide'] });
+    await seedRule({ label: 'Price', keywords: ['guide'], publicReply: 'From $20', replyWithoutDm: true });
+    await seedRule({ label: 'Booking', keywords: ['guide'], publicReply: 'Book here', replyWithoutDm: true });
+    await seedRule({ label: 'Quiet', keywords: ['guide'] });
+    await seedRule({ label: 'Own DM only', keywords: ['guide'], publicReply: 'Check your DMs' });
+    meta.on('POST', '/:id/replies', (call) =>
+      (call.body as { message: string }).message === 'Book here'
+        ? { status: 400, json: { error: { message: '<b>rate limited</b>' } } }
+        : { json: { id: '18000000000000001' } },
+    );
+    await postWebhook(commentPayload({ text: 'guide' }));
+
+    const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
+
+    expect(textOf(page)).toContain(
+      'Guide Sent Also matched Price : public reply posted. Also matched Booking : public reply failed. ' +
+        'public reply: {&quot;error&quot;:{&quot;message&quot;:&quot;&lt;b&gt;rate limited&lt;/b&gt;&quot;}} Also matched Quiet : this rule has no public reply. ' +
+        'Also matched Own DM only : public reply only when this rule sends the DM.',
+    );
+  });
+
+  it('says when the Worker stopped before another rule’s public reply finished', async () => {
+    await seedAccount();
+    const price = await seedRule({ label: 'Price' });
+    await seedSent({ commentId: 'stuck', status: 'ok', at: NOW - 3600 });
+    await claimExtraReply(env.DB, { comment_id: 'stuck', rule_id: price, status: 'pending', error: null, sent_at: NOW - 3600 });
+    await seedSent({ commentId: 'sending', status: 'ok', at: NOW - 60 });
+    await claimExtraReply(env.DB, { comment_id: 'sending', rule_id: price, status: 'pending', error: null, sent_at: NOW - 60 });
+
+    const page = textOf((await (await signedInAdmin()).get(adminPath('/'))).text);
+
+    expect(page).toContain('Also matched Price : public reply still sending.');
+    expect(page).toContain('Also matched Price : the Worker stopped before its public reply finished, so it was not tried again.');
+  });
+
+  async function wrongSecretFor(minutes: number) {
+    for (let minute = 0; minute < minutes; minute++) {
+      vi.setSystemTime(FROZEN_NOW_MS + minute * 60_000);
+      await postWebhook(commentPayload(), { secret: 'wrong' });
+    }
+  }
+
+  it('lists one wrong signature without raising the signing secret banner', async () => {
     await postWebhook(commentPayload(), { secret: 'wrong' });
+    const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
+    expect(page).toContain('Wrong secret');
+    expect(page).not.toContain('the signing secret did not match');
+  });
+
+  it('warns about the signing secret after wrong signatures in three separate minutes with no good one between', async () => {
+    await wrongSecretFor(3);
     const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
     expect(page).toContain('the signing secret did not match');
-    expect(page).toContain('Wrong secret');
   });
 
-  it('does not blame the signing secret for a POST that carried no signature at all', async () => {
-    await postWebhook(commentPayload(), { signature: null });
+  // 50 webhooks at once: slow on a busy machine, not wrong.
+  it('does not warn about the signing secret for a burst of wrong signatures in the same minute', { timeout: 30_000 }, async () => {
+    await Promise.all(Array.from({ length: 50 }, () => postWebhook(commentPayload(), { secret: 'wrong' })));
     const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
     expect(page).not.toContain('the signing secret did not match');
-    expect(page).toContain('Not signed');
   });
 
-  it('judges the signing secret by the newest signed delivery, whatever unsigned noise came after it', async () => {
+  it('drops the signing secret banner once a good delivery arrives, until wrong ones repeat again', async () => {
+    await wrongSecretFor(3);
     const admin = await signedInAdmin();
-    await postWebhook(commentPayload(), { secret: 'wrong' });
-    for (let i = 0; i < 10; i++) await postWebhook('{}', { signature: null });
     expect((await admin.get(adminPath('/'))).text).toContain('the signing secret did not match');
 
     await postWebhook({ object: 'instagram', entry: [] });
-    await postWebhook('{}', { signature: null });
+    vi.setSystemTime(FROZEN_NOW_MS + 3 * 60_000);
+    await postWebhook(commentPayload(), { secret: 'wrong' });
+    vi.setSystemTime(FROZEN_NOW_MS + 4 * 60_000);
+    await postWebhook(commentPayload(), { secret: 'wrong' });
     expect((await admin.get(adminPath('/'))).text).not.toContain('the signing secret did not match');
+
+    vi.setSystemTime(FROZEN_NOW_MS + 5 * 60_000);
+    await postWebhook(commentPayload(), { secret: 'wrong' });
+    expect((await admin.get(adminPath('/'))).text).toContain('the signing secret did not match');
+  });
+
+  it('neither lists nor warns about a POST that carried no signature at all', async () => {
+    for (let i = 0; i < 10; i++) await postWebhook(commentPayload(), { signature: null });
+    const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
+    expect(page).not.toContain('the signing secret did not match');
+    expect(page).not.toContain('Not signed');
   });
 
   it('says the daily check has not run yet on a fresh deploy, instead of calling it 3 days late', async () => {
@@ -145,11 +210,37 @@ describe('the admin home page', () => {
     expect(page).not.toContain('hasn’t run yet');
   });
 
+  it('says nothing has arrived for a week, not that nothing ever has, once the nightly job prunes the log', async () => {
+    await postWebhook(commentPayload());
+    vi.setSystemTime(FROZEN_NOW_MS + 8 * DAY * 1000);
+    await runScheduled('0 3 * * *');
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM webhook_events').first('n')).toBe(0);
+
+    const page = textOf((await (await signedInAdmin()).get(adminPath('/'))).text);
+    expect(page).toContain(`Did Instagram reach us? Nothing in the last 7 days. The last notification reached us on ${fmtWhen(NOW)}.`);
+    expect(page).not.toContain('No notification has arrived yet');
+  });
+
   it('flags an account whose token has expired', async () => {
     await seedAccount({ username: 'lapsed', expiresAt: NOW - 1 });
     const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
     expect(page).toContain('Instagram needs reconnecting');
     expect(page).toContain('Expired');
+  });
+
+  it('names the account that needs reconnecting whenever there is more than one', async () => {
+    await seedAccount({ username: 'lapsed', expiresAt: NOW - 1 });
+    await seedAccount({ igUserId: '17841400000000002', username: 'healthy', expiresAt: NOW + 30 * DAY });
+    const admin = await signedInAdmin();
+    expect(textOf((await admin.get(adminPath('/'))).text)).toContain('Instagram needs reconnecting for @lapsed. ');
+
+    await env.DB.prepare('UPDATE accounts SET needs_reconnect = 1 WHERE username = ?').bind('healthy').run();
+    expect(textOf((await admin.get(adminPath('/'))).text)).toContain('Instagram needs reconnecting for @healthy, @lapsed. ');
+  });
+
+  it('leaves the name out when there is only one account to mean', async () => {
+    await seedAccount({ username: 'lapsed', expiresAt: NOW - 1 });
+    expect(textOf((await (await signedInAdmin()).get(adminPath('/'))).text)).toContain('Instagram needs reconnecting. ');
   });
 
   it('shows no secrets banner when the config is right, and names a missing FACEBOOK_APP_SECRET', async () => {

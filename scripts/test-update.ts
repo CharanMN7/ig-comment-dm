@@ -483,7 +483,7 @@ describe('npm run update, end to end', () => {
     const work = join(dir, 'work');
     mkdirSync(work);
     sh(work, ['init', '-q', '-b', 'master']);
-    for (const name of ['update.ts', 'update-lib.ts']) {
+    for (const name of ['update.ts', 'update-lib.ts', 'wrangler.ts']) {
       mkdirSync(join(work, 'scripts'), { recursive: true });
       copyFileSync(join(SCRIPTS, name), join(work, 'scripts', name));
     }
@@ -735,7 +735,7 @@ describe('npm run update, end to end', () => {
       graft = join(dir, 'graft-work');
       mkdirSync(join(graft, 'scripts'), { recursive: true });
       sh(graft, ['init', '-q', '-b', 'master']);
-      for (const name of ['update.ts', 'update-lib.ts']) copyFileSync(join(SCRIPTS, name), join(graft, 'scripts', name));
+      for (const name of ['update.ts', 'update-lib.ts', 'wrangler.ts']) copyFileSync(join(SCRIPTS, name), join(graft, 'scripts', name));
       write(join(graft, 'package.json'), '{ "name": "fixture", "private": true, "type": "module" }\n');
       write(join(graft, 'wrangler.toml'), WRANGLER_V1);
       write(join(graft, 'migrations/001_init.sql'), 'CREATE TABLE IF NOT EXISTS rules (id INTEGER PRIMARY KEY);\n');
@@ -836,7 +836,7 @@ describe('npm run update, end to end', () => {
   it('explains the options in a folder that is not a git repository', () => {
     const zip = join(dir, `zip-${n}`);
     mkdirSync(join(zip, 'scripts'), { recursive: true });
-    for (const name of ['update.ts', 'update-lib.ts']) copyFileSync(join(SCRIPTS, name), join(zip, 'scripts', name));
+    for (const name of ['update.ts', 'update-lib.ts', 'wrangler.ts']) copyFileSync(join(SCRIPTS, name), join(zip, 'scripts', name));
 
     const { code, out } = update(zip, '--yes');
     assert.equal(code, 1, out);

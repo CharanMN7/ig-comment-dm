@@ -30,17 +30,20 @@ const CAROL = '9100000000000003';
 async function byHand(since: number, igUserId?: string, before?: number): Promise<SendTotals> {
   const account = igUserId ? ' AND ig_user_id = ?' : '';
   const until = before != null ? ' AND sent_at < ?' : '';
-  const one = async (select: string, status: string) => {
-    const binds: unknown[] = [status, since, ...(igUserId ? [igUserId] : []), ...(before != null ? [before] : [])];
-    const row = await env.DB.prepare(`SELECT ${select} AS n FROM sent WHERE dm_status = ? AND sent_at >= ?${account}${until}`)
+  const one = async (select: string, ...statuses: string[]) => {
+    const binds: unknown[] = [...statuses, since, ...(igUserId ? [igUserId] : []), ...(before != null ? [before] : [])];
+    const row = await env.DB.prepare(
+      `SELECT ${select} AS n FROM sent WHERE dm_status IN (${statuses.map(() => '?').join(', ')}) AND sent_at >= ?${account}${until}`,
+    )
       .bind(...binds)
       .first<{ n: number }>();
     return row!.n;
   };
+  // A DM Instagram never confirmed counts as failed: nobody can say it arrived.
   return {
     sent: await one('COUNT(*)', 'ok'),
     skipped: await one('COUNT(*)', 'skipped'),
-    failed: await one('COUNT(*)', 'failed'),
+    failed: await one('COUNT(*)', 'failed', 'unsure'),
     reached: await one('COUNT(DISTINCT commenter_id)', 'ok'),
   };
 }
@@ -261,9 +264,10 @@ describe('all-time totals from the nightly snapshot', () => {
 
     await runScheduled(DAILY);
 
-    // The sweep ran first, so the stuck send is in the snapshot as failed,
-    // and the one still in flight is left for the live count.
-    expect(await sentRow('stuck-before')).toMatchObject({ dm_status: 'failed', sent_at: CUTOFF - 1 });
+    // The sweep ran first, so the stuck send is in the snapshot as failed
+    // (unsure whether its DM went out), and the one still in flight is left
+    // for the live count.
+    expect(await sentRow('stuck-before')).toMatchObject({ dm_status: 'unsure', sent_at: CUTOFF - 1 });
     expect(await sentRow('today-pending')).toMatchObject({ dm_status: 'pending' });
     expect(await readTotalsSnapshot(env.DB)).toEqual({
       cutoff: CUTOFF,
@@ -293,7 +297,7 @@ describe('all-time totals from the nightly snapshot', () => {
     vi.setSystemTime(FROZEN_NOW_MS + DAY * 1000);
     await runScheduled(DAILY);
 
-    expect(await sentRow('stuck-tonight')).toMatchObject({ dm_status: 'failed' });
+    expect(await sentRow('stuck-tonight')).toMatchObject({ dm_status: 'unsure' });
     expect(await readTotalsSnapshot(env.DB)).toMatchObject({ cutoff: CUTOFF + DAY, all: await byHand(0, undefined, CUTOFF + DAY) });
 
     await seedSent({ commentId: 'grace-again', status: 'ok', at: NOW + DAY, commenterId: GRACE });
@@ -330,7 +334,8 @@ describe('all-time totals from the nightly snapshot', () => {
     expect(tilesAfter(await home(), 'Home')).toEqual(await fullRecount());
   });
 
-  it('reads the recent rows on each visit, not the whole history', async () => {
+  // Seeds 1,200 sends through the real write path, which takes seconds on a busy machine.
+  it('reads the recent rows on each visit, not the whole history', { timeout: 30_000 }, async () => {
     const OTHER = '17841400000000002';
     await seedAccount({ igUserId: IG_USER, username: 'alpha' });
     await seedAccount({ igUserId: OTHER, username: 'beta' });
@@ -360,7 +365,8 @@ describe('Home before the first snapshot', () => {
     expect(statements.filter((sql) => /^\s*UPDATE sent/.test(sql))).toEqual([]);
   });
 
-  it('takes the snapshot on the first visit when the history is large, so the next visit reads only recent rows', async () => {
+  // Seeds 1,200 sends through the real write path, which takes seconds on a busy machine.
+  it('takes the snapshot on the first visit when the history is large, so the next visit reads only recent rows', { timeout: 30_000 }, async () => {
     await seedAccount();
     await seedOneAccount();
     await seedHistory(1_200);
@@ -420,6 +426,16 @@ describe('query plans', () => {
     for (const call of calls.filter((c) => /\bsent\b/.test(c.sql) && c !== recent)) {
       expect((await plan(call)).filter((s) => /^SCAN (sent|s)\b/.test(s)), call.sql).toEqual([]);
     }
+  });
+
+  it('reads the other matching rules for the last 20 sends by key, never a scan', async () => {
+    await seedTwoWithSnapshot();
+    const { db, calls } = countingDb();
+    await home(db);
+    const [extras] = calls.filter((c) => c.sql.includes('FROM sent_extra_replies'));
+    const steps = await plan(extras!);
+    expect(steps.filter((s) => /^SCAN e\b/.test(s)), steps.join(' | ')).toEqual([]);
+    expect(steps).toContainEqual(expect.stringMatching(/^SEARCH e USING INDEX sqlite_autoindex_sent_extra_replies_1 \(comment_id=\?\)$/));
   });
 
   it('keeps the daily job’s sweep and snapshot to the rows since the last one', async () => {

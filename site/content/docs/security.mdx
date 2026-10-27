@@ -13,7 +13,7 @@ The panel is on the public internet, behind two independent factors:
 1. **A secret path segment.** It lives at `/a/<ADMIN_URL_SECRET>`, where the secret is 32 hex characters (128 bits). Every other path returns 404, so crawling can't find it.
 2. **A password**, chosen on your first visit and stored as a PBKDF2-SHA256 hash with a random 16-byte salt.
 
-Sessions are stateless cookies signed with HMAC-SHA256 (`SESSION_SIGNING_KEY`), marked `HttpOnly`, `SameSite=Strict`, and `Secure` over HTTPS. Every form that changes something carries a CSRF token bound to the session. Logins are rate limited, with a lockout that doubles after five failures. Each attempt is counted before its password is checked, so guesses sent in parallel get no more tries than guesses sent one at a time. The lockout is shared by every browser rather than tracked per IP, which an attacker with many addresses could sidestep. The cost is that someone guessing locks you out too, but only someone who already has the secret URL can try, and rotating it shuts them out. Admin responses send `Referrer-Policy: no-referrer`, so clicking an outbound link never leaks the secret URL.
+Sessions are stateless cookies signed with HMAC-SHA256 (`SESSION_SIGNING_KEY`), marked `HttpOnly`, `SameSite=Strict`, and `Secure` over HTTPS. Every form that changes something carries a CSRF token bound to the session. Each session's signature also covers the password's salt and a logout counter, so **Log out** ends the session on every browser and device, not just the one you're using, and setting a new password ends every session from before it. Logins are rate limited, with a lockout that doubles after five failures. Each attempt is counted before its password is checked, so guesses sent in parallel get no more tries than guesses sent one at a time. The lockout is shared by every browser rather than tracked per IP, which an attacker with many addresses could sidestep. The cost is that someone guessing locks you out too, but only someone who already has the secret URL can try, and rotating it shuts them out. Admin responses send `Referrer-Policy: no-referrer`, so clicking an outbound link never leaks the secret URL.
 
 Connecting an Instagram account needs the same logged-in session. The OAuth `state` is signed, expires after 10 minutes, and only completes in the browser that started it, which holds a matching short-lived cookie.
 
@@ -32,6 +32,8 @@ The Worker never sees your Instagram password. Accounts connect through Instagra
 ## Webhooks
 
 Every POST to `/webhook` is checked against its `X-Hub-Signature-256` HMAC before the body is parsed. Meta signs Instagram Login webhooks with the Instagram App Secret in some flows and the Facebook App Secret in others, so either is accepted. Both are yours, so accepting either isn't a downgrade.
+
+A body over 256 KB is refused before it's read. A rejected request writes nothing to D1, except one `Wrong secret` row a minute so a misconfigured secret still shows up on Home.
 
 ## The health endpoint
 

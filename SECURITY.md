@@ -43,7 +43,9 @@ factors:
 
 Sessions are stateless cookies signed with HMAC-SHA256 (`SESSION_SIGNING_KEY`),
 marked `HttpOnly`, `SameSite=Strict`, and `Secure` on HTTPS. Every mutating form
-carries a CSRF token bound to the session.
+carries a CSRF token bound to the session. The signature also covers the
+password's salt and a logout counter, so logging out ends every session on every
+device, and setting a new password ends every session from before it.
 
 Connecting an Instagram account needs the same logged-in session. The OAuth
 `state` is signed, expires after 10 minutes, and only completes in the browser

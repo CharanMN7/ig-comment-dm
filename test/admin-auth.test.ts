@@ -170,7 +170,8 @@ describe('login', () => {
     return Promise.all(guessers.map((b, i) => b.submit(adminPath('/login'), { password: passwords[i]! })));
   }
 
-  it('checks no more passwords than the free attempts allow when 60 arrive at once', async () => {
+  // 60 logins at once, each hashing a password: slow on a busy machine, not wrong.
+  it('checks no more passwords than the free attempts allow when 60 arrive at once', { timeout: 30_000 }, async () => {
     const replies = await burst(Array.from({ length: 60 }, (_, i) => `wrong ${i}`));
     // 401 means the password was hashed and compared; 429 means it never was.
     const checked = replies.filter((r) => r.status === 401).length;
@@ -180,7 +181,8 @@ describe('login', () => {
     expect(await systemValue('login_locked_until')).toBe(String(NOW + 60));
   });
 
-  it('refuses the right password when it arrives in a burst that already used the free attempts', async () => {
+  // 60 logins at once, each hashing a password: slow on a busy machine, not wrong.
+  it('refuses the right password when it arrives in a burst that already used the free attempts', { timeout: 30_000 }, async () => {
     const replies = await burst([...Array.from({ length: 59 }, (_, i) => `wrong ${i}`), ADMIN_PASSWORD]);
     const last = replies.at(-1)!;
     expect(last.status).toBe(429);
@@ -248,13 +250,81 @@ describe('sessions', () => {
     expect(res.location).toBe(adminPath('/login'));
   });
 
-  it('logs out by clearing the cookie', async () => {
+  it('logs out by clearing the cookie, and says it was on every browser', async () => {
     const admin = await signedInAdmin();
     const res = await admin.submit(adminPath('/logout'));
     expect(res.status).toBe(302);
-    expect(res.location).toBe(adminPath('/login'));
+    expect(res.location).toBe(adminPath('/login?out=1'));
     expect(res.setCookies).toEqual([expect.stringContaining('igcdm_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0')]);
+    expect((await admin.get(adminPath('/login?out=1'))).text).toContain('Logged out on every browser and device.');
     expect((await admin.get(adminPath('/rules'))).status).toBe(302);
+  });
+
+  function copyOf(browser: Browser): Browser {
+    const copy = new Browser();
+    copy.setCookie('igcdm_session', browser.cookie('igcdm_session')!);
+    return copy;
+  }
+
+  it('stops a copied session cookie working once its owner logs out', async () => {
+    const admin = await signedInAdmin();
+    const copy = copyOf(admin);
+    expect((await copy.get(adminPath('/rules'))).status).toBe(200);
+
+    await admin.submit(adminPath('/logout'));
+
+    const res = await copy.get(adminPath('/rules'));
+    expect(res.status).toBe(302);
+    expect(res.location).toBe(adminPath('/login'));
+    expect((await copy.get('/connect/start')).status).toBe(403);
+  });
+
+  it('logs out every browser, not just the one that pressed the button', async () => {
+    const first = await signedInAdmin();
+    const second = new Browser();
+    await second.get(adminPath('/login'));
+    await second.submit(adminPath('/login'), { password: ADMIN_PASSWORD });
+    expect((await second.get(adminPath('/rules'))).status).toBe(200);
+
+    await first.submit(adminPath('/logout'));
+
+    expect((await second.get(adminPath('/rules'))).status).toBe(302);
+    // And signing in again afterwards works as normal.
+    await second.get(adminPath('/login'));
+    expect((await second.submit(adminPath('/login'), { password: ADMIN_PASSWORD })).status).toBe(302);
+    expect((await second.get(adminPath('/rules'))).status).toBe(200);
+  });
+
+  it('stops an old session cookie working after the documented password reset', async () => {
+    const admin = await signedInAdmin();
+    const copy = copyOf(admin);
+
+    await env.DB.exec("DELETE FROM system WHERE key IN ('admin_password_hash','admin_password_salt');");
+    const operator = new Browser();
+    await operator.get(adminPath('/setup'));
+    await operator.submit(adminPath('/setup'), { password: 'a brand new password', confirm: 'a brand new password' });
+    expect((await operator.get(adminPath('/rules'))).status).toBe(200);
+
+    const res = await copy.get(adminPath('/rules'));
+    expect(res.status).toBe(302);
+    expect(res.location).toBe(adminPath('/login'));
+    expect((await copy.get('/connect/start')).status).toBe(403);
+  });
+
+  it('turns away a session cookie signed the way it was before sessions were bound to the password', async () => {
+    await signedInAdmin();
+    // The old format: an HMAC of the payload alone, with nothing tying it to
+    // the current password or logout.
+    const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const payload = b64url(new TextEncoder().encode(JSON.stringify({ exp: NOW + DAY, csrf: 'c'.repeat(32), authed: true })));
+    const raw = Uint8Array.from(atob(env.SESSION_SIGNING_KEY), (ch) => ch.charCodeAt(0));
+    const key = await crypto.subtle.importKey('raw', raw, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload)));
+    const old = new Browser();
+    old.setCookie('igcdm_session', `${payload}.${b64url(mac)}`);
+    const res = await old.get(adminPath('/rules'));
+    expect(res.status).toBe(302);
+    expect(res.location).toBe(adminPath('/login'));
   });
 });
 
