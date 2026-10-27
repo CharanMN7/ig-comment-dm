@@ -1,6 +1,5 @@
 import { defineConfig } from 'astro/config';
 import inkform from '@inkform/astro';
-import { siteRootLinks } from './integrations/site-root-links.ts';
 
 // Where the site is served. Everything else (Astro's `site` and `base`, every
 // link on the landing page and in the docs) is derived from this one URL.
@@ -22,7 +21,10 @@ export default defineConfig({
       contentRoot: './content',
       theme: './src/styles/docs-theme.css',
       mermaid: true,
+      // The <Screenshot> slots in the setup guides.
+      components: './src/mdx-components.tsx',
+      // "Built with Inkform" under each docs page.
+      credits: true,
     }),
-    siteRootLinks(),
   ],
 });

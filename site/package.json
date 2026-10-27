@@ -10,7 +10,7 @@
     "check-links": "node scripts/check-links.mjs dist"
   },
   "dependencies": {
-    "@inkform/astro": "0.1.0",
+    "@inkform/astro": "0.2.0",
     "astro": "^7.4.2",
     "mermaid": "^12.2.0",
     "react": "^19.3.1",

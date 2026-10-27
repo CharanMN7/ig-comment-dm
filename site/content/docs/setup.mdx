@@ -36,9 +36,7 @@ Keep a password manager or a private note open. `npm run setup` prints your admi
 5. On the app dashboard, find **Add products** (or **Add use case**) and add **Instagram**.
 6. Open **Instagram → API setup with Instagram login**. The wording may be "Business login".
 
-<Frame caption="Create app: use case Other, app type Business.">
-  <div className="shot" data-shot="meta-01-create-app.png">Screenshot coming</div>
-</Frame>
+<Screenshot file="meta-01-create-app.png" caption="Create app: use case Other, app type Business." />
 
 You'll publish the app in Part 5. Until then it's in Development mode, and Meta delivers only the dashboard's **Test** button, never real comments. Your own tester accounts can go Live without App Review. Don't submit for App Review unless strangers will connect their own Instagram accounts.
 
@@ -55,9 +53,7 @@ Then open **App settings → Basic** in the left sidebar:
 
 These are not your Instagram password. They identify this app to Instagram.
 
-<Frame caption="Business login settings. The Instagram App ID is on this screen, not at the top of the dashboard.">
-  <div className="shot" data-shot="meta-02-business-login-settings.png">Screenshot coming</div>
-</Frame>
+<Screenshot file="meta-02-business-login-settings.png" caption="Business login settings. The Instagram App ID is on this screen, not at the top of the dashboard." />
 
 <Warning>
 **The number at the top of the Meta dashboard is the Facebook App ID**, not the Instagram App ID. Put it in `META_APP_ID` and Connect fails with **Invalid redirect_uri**.
@@ -67,9 +63,7 @@ These are not your Instagram password. They identify this app to Instagram.
 
 Don't paste the token from **Generate access tokens** into Cloudflare. Connecting through the admin panel stores a token for each account. That screen matters for one thing only: the per-account **Webhook subscription** toggle in Part 4.
 
-<Frame caption="App settings → Basic. The App secret here is FACEBOOK_APP_SECRET, a different value from the Instagram App Secret.">
-  <div className="shot" data-shot="meta-03-basic-settings.png">Screenshot coming</div>
-</Frame>
+<Screenshot file="meta-03-basic-settings.png" caption="App settings → Basic. The App secret here is FACEBOOK_APP_SECRET, a different value from the Instagram App Secret." />
 
 ### Where every secret comes from
 
@@ -97,13 +91,9 @@ For **each** account:
 3. Type the account's Instagram **username**, select it, and click Add.
 4. On a phone or browser **logged into that same Instagram account**, open [instagram.com/accounts/manage_access](https://www.instagram.com/accounts/manage_access/) → **Tester invites** → **Accept**.
 
-<Frame caption="App roles → Roles → Add people → Instagram Tester.">
-  <div className="shot" data-shot="meta-04-add-instagram-tester.png">Screenshot coming</div>
-</Frame>
+<Screenshot file="meta-04-add-instagram-tester.png" caption="App roles → Roles → Add people → Instagram Tester." />
 
-<Frame caption="instagram.com/accounts/manage_access → Tester invites → Accept, logged in as the account you invited.">
-  <div className="shot" data-shot="ig-05-accept-tester-invite.png">Screenshot coming</div>
-</Frame>
+<Screenshot file="ig-05-accept-tester-invite.png" caption="instagram.com/accounts/manage_access → Tester invites → Accept, logged in as the account you invited." />
 
 Skip step 4 and Connect fails with **Insufficient developer role**.
 
@@ -127,9 +117,7 @@ It's safe to re-run. Deploys are idempotent, migrations the database has already
 
 It prints your admin URL and webhook verify token as soon as it saves them, before the final deploy, so save them right away. If a run stops after that, the next run makes a new admin URL and verify token and prints them, because Cloudflare can't show you the old ones again. The ones the stopped run printed stop working.
 
-<Frame caption="The end of npm run setup: the values to paste into Meta, and your admin URL.">
-  <div className="shot" data-shot="cli-06-npm-run-setup.png">Screenshot coming</div>
-</Frame>
+<Screenshot file="cli-06-npm-run-setup.png" caption="The end of npm run setup: the values to paste into Meta, and your admin URL." />
 
 Your admin panel is at:
 
@@ -167,9 +155,7 @@ Meta doesn't show a field called just "oauth". Do this:
    https://ig-comment-dm.YOURNAME.workers.dev/connect/callback/
    ```
 
-<Frame caption="Business login settings → OAuth redirect URIs, with and without the trailing slash.">
-  <div className="shot" data-shot="meta-07-redirect-uris.png">Screenshot coming</div>
-</Frame>
+<Screenshot file="meta-07-redirect-uris.png" caption="Business login settings → OAuth redirect URIs, with and without the trailing slash." />
 
 Both lines matter, one with the trailing slash and one without. Meta requires an exact match to a listed URI, and the dashboard often adds the trailing slash on its own, so a login that works from one entry point and not another is usually missing a line.
 
@@ -190,9 +176,7 @@ Save. You'll click **Connect** from the admin panel in Part 6. If it says **Inva
 2. Verify token: paste your `WEBHOOK_VERIFY_TOKEN`.
 3. Click **Save**. Subscribe to **comments** and leave **Include values** on. You can turn the other fields off.
 
-<Frame caption="Configure webhooks: callback URL, verify token, and the comments field subscribed with Include values on.">
-  <div className="shot" data-shot="meta-08-webhook.png">Screenshot coming</div>
-</Frame>
+<Screenshot file="meta-08-webhook.png" caption="Configure webhooks: callback URL, verify token, and the comments field subscribed with Include values on." />
 
 If verification fails, either the Worker isn't deployed or `WEBHOOK_VERIFY_TOKEN` doesn't match what you typed into Meta.
 
@@ -204,9 +188,7 @@ The callback URL isn't enough on its own. On the same **API setup with Instagram
 2. On that row, set **Webhook subscription** to **On**. Leave it Off and Instagram never tells your Worker about comments.
 3. Don't click **Generate token** for this, and never paste that token into Cloudflare: Connect stores its own. If Meta won't let you flip the switch until you generate a token, generate it, flip the switch, and ignore the token it shows you.
 
-<Frame caption="Generate access tokens: Webhook subscription On for every account you connect.">
-  <div className="shot" data-shot="meta-09-webhook-subscription.png">Screenshot coming</div>
-</Frame>
+<Screenshot file="meta-09-webhook-subscription.png" caption="Generate access tokens: Webhook subscription On for every account you connect." />
 
 The person who **comments** doesn't need to be in this list. The account that **owns the post or reel** does.
 
@@ -226,9 +208,7 @@ Real comment notifications are only delivered once the app is **Live**. Developm
 3. Click **Publish** so the app is Live.
 4. Keep your Instagram accounts as **Instagram Testers**, and keep **Webhook subscription** On.
 
-<Frame caption="Publish, with the three legal URLs from your Worker filled in.">
-  <div className="shot" data-shot="meta-10-publish.png">Screenshot coming</div>
-</Frame>
+<Screenshot file="meta-10-publish.png" caption="Publish, with the three legal URLs from your Worker filled in." />
 
 You don't need App Review while only tester accounts connect. App Review is for other people's Instagram accounts.
 
@@ -239,9 +219,7 @@ You don't need App Review while only tester accounts connect. App Review is for 
 3. Go to **Rules → New rule**, add a keyword such as `guide` and the message to send. [Using it](/using#write-a-rule) explains every field.
 4. Go to **Test**, paste a sample comment and check the right rule lights up. This sends nothing to anyone.
 
-<Frame caption="Admin → Accounts → Connect a new account.">
-  <div className="shot" data-shot="admin-11-connect.png">Screenshot coming</div>
-</Frame>
+<Screenshot file="admin-11-connect.png" caption="Admin → Accounts → Connect a new account." />
 
 Open **Home** once after connecting. In Meta, **Generate access tokens → Webhook subscription** must be **On** for each connected account.
 
