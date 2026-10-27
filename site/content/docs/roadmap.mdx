@@ -8,8 +8,8 @@ The roadmap lives in GitHub issues, so it's never out of date the way a page wou
 
 | Area | What's open |
 |---|---|
-| [Automation](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+automation%22) | Triggers, DM content and delivery: button templates, follow gates, follow-up DMs, tracked links, per-account rate limits, CSV import |
-| [Analytics](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+analytics%22) | Charts, per-rule performance, top keywords, follower history, post insights, a shareable report page |
+| [Automation](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+automation%22) | Triggers, DM content and delivery: button templates, follow gates, follow-up DMs, tracked links, CSV import |
+| [Analytics](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+analytics%22) | Charts, a paginated logs page, per-rule performance, top keywords, follower history, post insights, a shareable report page |
 | [Instagram API](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+instagram-api%22) | More of Meta's Graph API: the `messages` webhook, a DM inbox, typed Meta errors |
 | [Operations](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+ops%22) | Exporting and re-importing rules and logs, an operational event log |
 | [Admin panel](https://github.com/CharanMN7/ig-comment-dm/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+ux%22) | Dark mode |
@@ -31,8 +31,11 @@ These have shipped:
 - An admin panel you can install on a phone ([#51](https://github.com/CharanMN7/ig-comment-dm/issues/51)).
 - `/health` for uptime monitors ([#46](https://github.com/CharanMN7/ig-comment-dm/issues/46)).
 - Database migrations tracked by Wrangler, so an update can change existing tables ([#45](https://github.com/CharanMN7/ig-comment-dm/issues/45)).
+- A send queue that keeps each account under Instagram's hourly limit, with retries for DMs Instagram turns down for now ([#35](https://github.com/CharanMN7/ig-comment-dm/issues/35)).
+- Public replies from the other rules a comment matches, for rules set to post one without their own DM ([#36](https://github.com/CharanMN7/ig-comment-dm/issues/36)).
+- Comments on a boosted post's ad matching the rule for the original post ([#34](https://github.com/CharanMN7/ig-comment-dm/issues/34)).
 
-[Using it](/using) explains each one, and [Updating your copy](/updating#database-migrations) covers migrations.
+[Using it](/using) explains each one, and [Updating your copy](/updating#database-migrations) covers migrations. The [changelog](/docs/changelog/) lists every release.
 
 ## Picking one up
 

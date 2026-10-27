@@ -8,7 +8,7 @@ Thanks for wanting to help. These rules keep the project manageable for the peop
 2. Wait for a maintainer to assign it to you.
 3. Open your PR and link the issue with `Closes #123`.
 
-PRs that aren't linked to an issue assigned to their author are closed automatically, however good the code is. If you're assigned and go quiet for 7 days, the issue may be reassigned.
+PRs that aren't linked to an issue assigned to their author are closed automatically, however good the code is. The check runs again whenever the description is edited, so keep the `Closes` line. If you're assigned and go quiet for 7 days, the issue may be reassigned.
 
 ## Good first issues are for first-timers
 

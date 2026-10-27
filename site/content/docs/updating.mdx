@@ -17,7 +17,7 @@ In order, it:
 3. Fetches the latest version and lists what's new: how many changes, with their titles. New files in `migrations/` are called out, because they change your database.
 4. Asks before going further. `--yes` skips the question.
 5. Merges `upstream/master` into your branch: a fast-forward when you have no commits of your own, a merge commit when you do. If your own edits clash with the new version, it backs the merge out, leaves your files exactly as they were, and lists the files with two ways to fix it.
-6. Runs `npm install`, then `npm run deploy`, which applies new migrations before the new code goes live, and then checks your Worker's `/health`.
+6. Runs `npm install`, then `npm run deploy`, which applies new migrations before the new code goes live and registers the cron triggers in `wrangler.toml`, and then checks your Worker's `/health`.
 
 To see what it would do without changing anything:
 

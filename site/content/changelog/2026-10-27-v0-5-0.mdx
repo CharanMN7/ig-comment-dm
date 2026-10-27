@@ -1,0 +1,38 @@
+---
+title: A queue past the hourly limit
+date: 2026-10-27
+version: 0.5.0
+---
+
+On a reel that takes off, DMs past Instagram's hourly limit now wait their turn instead of failing. Before this release, a DM over the limit was refused and never tried again, so that comment's one private reply never arrived. Each account now sends at most 12 DMs a minute, refusals that Instagram means as "not now" are tried again, and the comment poll reaches every post your rules cover.
+
+<Warning>
+**Upgrading from 0.4.0**
+
+- Run `npm run update`, or `npm run deploy` after pulling by hand. Migrations 010 (the send queue) and 011 (a hold on an account whose token stopped working) run before the new code goes live. ([#139], [#141])
+- The second cron trigger in `wrangler.toml` changes from every 5 minutes to every minute. The deploy registers it, so there's nothing to change in Cloudflare's dashboard. A copy that keeps the old `*/5 * * * *` line still works, and sends its queue every 5 minutes. ([#139])
+- Comments that no rule matches no longer appear under **Last 20 sends** on Home, because they're no longer written to the database. Use the Test page to see why a comment didn't match. Comments skipped for an exclusion, for being over 7 days old or for a paused account are still listed. ([#139])
+</Warning>
+
+### Added
+
+- The send queue. Each account makes at most 12 DM calls a minute, which keeps every hour under Instagram's limit of about 750, and a comment past that waits as **Queued**. A job every minute sends the queue oldest comment first, with the rule's text as it is then: turning a rule off or deleting it skips its queued DMs. A comment still waiting an hour before Instagram's 7-day limit is skipped as **Expired**. A backlog of 5,000 on one account takes about 7 hours. ([#139])
+- Retries. A DM that Instagram turns down because the account is sending too fast, or because of a temporary error on its side, shows as **Retrying** and is tried again after 1, 5 and 20 minutes. The fourth refusal is final. A rate limit also holds the account's other DMs for 15 minutes. A DM refused because the token stopped working stays queued without using up a try, and goes out once you reconnect. ([#141])
+- **Send again**, on a DM marked **May have been delivered**, for when you've checked that it didn't arrive. ([#141])
+- A **Logs** page: every send, newest first, paginated and filterable by status, account, rule and date range, with **Send again** on DMs that may have been delivered. Thanks to [@ranita872](https://github.com/ranita872). ([#64])
+- A **Sending** table on Home while DMs wait: queued and retrying counts for each account, the oldest comment's age, roughly how long the rest will take, and how many DMs went out in the last hour. The Accounts page says how many waiting DMs pausing an account will skip. ([#141])
+
+### Changed
+
+- A DM whose answer from Instagram never arrived (a timeout, a server error, a dropped connection) is recorded as **May have been delivered** instead of failed. It still counts as failed in the totals, and the Worker still never sends it again by itself. ([#141])
+- The comment poll now runs on every fifth minute of the minute job, and what it finds goes out in the same run, under the same limit. ([#139])
+- A webhook delivery carrying many comments sends the first ones straight away and queues the rest, so it stays inside Cloudflare's 50 subrequests per invocation. ([#139])
+
+### Fixed
+
+- The poll read only the first 3 posts your rules covered. A rule on a fourth post relied on the webhook alone, and with three rules on single posts, rules on all posts weren't polled at all. It now takes turns through every one, 3 posts per account each time: with 4 to 6 posts, each is read every 10 minutes, and with 7 to 9, every 15. ([#140])
+
+[#64]: https://github.com/CharanMN7/ig-comment-dm/pull/64
+[#139]: https://github.com/CharanMN7/ig-comment-dm/pull/139
+[#140]: https://github.com/CharanMN7/ig-comment-dm/pull/140
+[#141]: https://github.com/CharanMN7/ig-comment-dm/pull/141

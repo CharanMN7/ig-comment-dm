@@ -47,9 +47,35 @@ carries a CSRF token bound to the session. The signature also covers the
 password's salt and a logout counter, so logging out ends every session on every
 device, and setting a new password ends every session from before it.
 
+Logins are rate limited in D1. Five wrong passwords are free; after that each wait
+doubles from one minute, up to an hour. Each attempt is counted before its password
+is checked, so guesses sent in parallel get no more tries than guesses sent one at a
+time. The limit is shared by every browser rather than tracked per IP, so someone
+guessing locks you out too, but only someone who already has the secret URL can try.
+
 Connecting an Instagram account needs the same logged-in session. The OAuth
 `state` is signed, expires after 10 minutes, and only completes in the browser
-that started it, which holds a matching short-lived cookie.
+that started it, which holds a matching short-lived cookie. The callback shows
+Instagram's error text only in that browser; anyone else opening the same link
+gets a fixed message, so the page can't be made to show someone else's words.
+
+### Webhooks
+
+Every POST to `/webhook` is checked against `X-Hub-Signature-256` over the raw body
+before it is parsed. A body declared or found to be over 256 KB gets a `413` before
+the rest is read. A POST with no signature writes nothing, and a wrong signature is
+logged at most once a minute, so a flood of forged requests can't use up D1's daily
+writes and stop real sends.
+
+### The code and its pipeline
+
+- One runtime dependency (`hono`), and no client-side JavaScript: the CSP is
+  `default-src 'none'` with no `script-src`.
+- Every GitHub Action is pinned to a commit SHA, with its version in a comment.
+  Dependabot keeps the pins and the npm packages current.
+- `npm run selftest` requires `ADMIN_PASSWORD`. It creates a first password only on
+  `localhost` unless `--allow-setup` is passed, so it never leaves a known password
+  on a deployed Worker, and it deletes its fake account when it finishes.
 
 ### Installing the panel on a phone
 
@@ -120,4 +146,7 @@ Accounts page, which takes about 20 seconds each.
 
 ## Supported versions
 
-The `master` branch is the only supported version. There are no backports.
+The latest version on `master` is the only supported one; there are no backports.
+`npm run update` brings a copy up to date, and the
+[changelog](https://charanmn7.github.io/ig-comment-dm/docs/changelog/) lists security
+fixes under each version.

@@ -285,7 +285,7 @@ If the DM says it succeeded but the recipient sees nothing, have them check **Me
 
 ## Sends say Queued
 
-The account has made its 12 DM calls for this minute, Instagram's hourly limit spread evenly, and the comment is waiting its turn. Nothing needs doing: every minute, the Worker sends the oldest waiting comments first, about 700 an hour for one account, fewer each when several have DMs waiting. If it has said **Queued** for more than a few minutes on a quiet account, check that the minute trigger is registered (see [the daily check hasn't run](#red-banner-the-daily-check-hasnt-run)) and that the account isn't paused.
+The account has made its 12 DM calls for this minute, Instagram's hourly limit spread evenly, and the comment is waiting its turn. Nothing needs doing: every minute, the Worker sends the oldest waiting comments first, about 700 an hour for one account, fewer each when several have DMs waiting. If it has said **Queued** for more than a few minutes on a quiet account, check that the minute trigger is registered (see [the daily check hasn't run](#red-banner-the-daily-check-hasnt-run)) and whether Home says Instagram asked the account to slow down. A queued row that says it's waiting for Instagram to be reconnected goes out once you [reconnect the account](#red-banner-an-account-needs-reconnecting). Pausing an account doesn't leave DMs queued: it skips them.
 
 **Expired** means a comment waited until an hour before Instagram's 7-day limit and was given up on, without calling Instagram.
 

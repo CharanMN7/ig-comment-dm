@@ -93,7 +93,7 @@ Allowing developers.facebook.com for the session saves a lot of prompts in Parts
 
 **Handle your secrets.** Anything Claude reads goes into the conversation. The app secrets go from Meta's page straight into the `npm run setup` prompt in your own terminal; the verify token goes from that terminal into Meta's Verify token field. If a secret does end up in the chat, rotate it: [Rotating a secret](/security#rotating-a-secret) has the commands, and for an app secret, reset it in Meta's dashboard first.
 
-**Run `npm run setup` for you.** It reads the Meta values from interactive prompts, and its last screen prints your admin URL and verify token. Both belong in your terminal, not in a transcript.
+**Run `npm run setup` for you.** It reads the Meta values from interactive prompts, and it prints your admin URL and verify token as soon as it saves them, then again on its last screen. Both belong in your terminal, not in a transcript.
 
 **Grant permissions on your behalf.** Accepting a tester invite gives the app access to that Instagram account. Clicking **Allow** on Cloudflare's login page gives `wrangler` access to your Cloudflare account. **Publish** makes the app Live. Each of these is your click.
 
