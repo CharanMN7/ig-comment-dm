@@ -12,13 +12,22 @@ const CSS = `
 body { margin: 0; }
 main { max-width: 44rem; margin: 0 auto; padding: 1.25rem 1rem 4rem; }
 header.top { border-bottom: 1px solid #ddd; background: #fff; }
-header.top nav { max-width: 44rem; margin: 0 auto; padding: 0.65rem 1rem; display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+header.top nav { max-width: 44rem; margin: 0 auto; padding: 0.65rem 1rem; display: flex; gap: 0.4rem; align-items: center; flex-wrap: nowrap; overflow-x: auto; }
+header.top nav > * { flex: none; }
 header.top nav a { color: #111; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; min-height: 44px; min-width: 44px; padding: 0 0.5rem; }
 header.top nav a:hover { text-decoration: underline; }
 /* Bold and underlined, so the current page doesn't rely on colour. */
 header.top nav a[aria-current=page] { font-weight: 650; text-decoration: underline; text-underline-offset: 0.3em; }
 header.top .brand { font-weight: 650; margin-right: 0.5rem; }
 header.top form { margin-left: auto; }
+/* The name and five tap targets don't fit across a 375px phone. The name goes,
+   since the tab title and the installed app already say it, and anything still
+   too wide (a larger text size) scrolls inside the nav rather than wrapping. */
+@media (max-width: 34rem) {
+  header.top .brand { display: none; }
+  header.top nav { gap: 0.25rem; }
+  header.top nav a { padding: 0 0.35rem; }
+}
 h1 { font-size: 1.35rem; margin: 0 0 0.75rem; }
 h2 { font-size: 1.05rem; margin: 1.5rem 0 0.5rem; }
 h3 { font-size: 0.95rem; margin: 1rem 0 0.25rem; }
@@ -39,6 +48,8 @@ input[type=text], input[type=password], textarea, select {
   width: 100%; padding: 0.4rem 0.5rem; font: inherit; border: 1px solid #888; background: #fff;
 }
 input[type=text], input[type=password], select { min-height: 44px; }
+/* Browser defaults go as pale as 2.3:1 on white, and Firefox fades any colour set here unless opacity is 1. */
+::placeholder { color: #666; opacity: 1; }
 textarea { min-height: 6rem; }
 fieldset { min-width: 0; margin: 1.25rem 0 0; padding: 0.3rem 0.85rem 0.9rem; border: 1px solid #e4e4e0; background: #fff; }
 legend { font-weight: 650; padding: 0 0.3rem; }
@@ -171,6 +182,11 @@ export function fmtWhen(unix: number): string {
 
 export function daysUntil(expiresAt: number, now: number): number {
   return Math.floor((expiresAt - now) / 86400);
+}
+
+/** Takes both forms because the words that need it here aren't all regular: person, people. */
+export function plural(n: number, one: string, many: string): string {
+  return n === 1 ? one : many;
 }
 
 export function statusWords(dm: string): string {

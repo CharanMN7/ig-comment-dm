@@ -35,6 +35,21 @@ function ungroupedRadios(page: string): string[] {
   return found;
 }
 
+/** WCAG relative luminance of a #rgb or #rrggbb colour. */
+function luminance(hex: string): number {
+  const digits = hex.length === 4 ? [...hex.slice(1)].map((c) => c + c) : [hex.slice(1, 3), hex.slice(3, 5), hex.slice(5, 7)];
+  const [r, g, b] = digits.map((h) => {
+    const c = parseInt(h, 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+}
+
+function contrast(a: string, b: string): number {
+  const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (light! + 0.05) / (dark! + 0.05);
+}
+
 async function everyAdminPage(): Promise<Array<[string, string]>> {
   meta.on('GET', '/me/media', {
     json: { data: [{ id: '18000000000000001', caption: 'A reel', permalink: 'https://www.instagram.com/reel/abc/', media_product_type: 'REELS' }] },
@@ -95,6 +110,23 @@ describe('admin pages for assistive technology', () => {
     const form = pages.find(([name]) => name === 'edit rule')![1];
     expect([...form.matchAll(FIELD)].length).toBeGreaterThanOrEqual(12);
     expect(form).toContain('type="radio"');
+  });
+
+  it('says DM on every page, never private message', async () => {
+    for (const [name, page] of await everyAdminPage()) expect(page, name).not.toMatch(/private message/i);
+  });
+
+  it('makes placeholder text at least 4.5:1 against the field behind it', async () => {
+    const page = (await (await signedInAdmin()).get(adminPath('/'))).text;
+    const css = page.match(/<style>([\s\S]*?)<\/style>/)![1]!;
+    const placeholder = css.match(/::placeholder \{([^}]*)\}/)?.[1];
+    expect(placeholder, 'with no colour set, Safari draws placeholders at 2.3:1').toBeDefined();
+    // Firefox fades placeholders to 54% unless told otherwise.
+    expect(placeholder).toContain('opacity: 1');
+    const color = placeholder!.match(/color: (#[0-9a-f]{3,6});/i)![1]!;
+    const field = css.match(/input\[type=text\], input\[type=password\], textarea, select \{([^}]*)\}/)![1]!;
+    const background = field.match(/background: (#[0-9a-f]{3,6});/i)![1]!;
+    expect(contrast(color, background)).toBeGreaterThanOrEqual(4.5);
   });
 
   it.each([

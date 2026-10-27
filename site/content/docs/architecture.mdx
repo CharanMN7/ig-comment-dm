@@ -49,7 +49,8 @@ Follow-up DMs are out of scope. They need the person to reply first (a 24-hour w
 | POST | `/webhook` | Verify the signature (either secret), log the event, return **200 immediately**, process in `waitUntil` |
 | GET | `/connect` | Logged-in admin session required, else a plain `403` page. Checklist with the exact OAuth redirect URIs and Instagram App ID, then continue. Passes `?reconnect=1` through. |
 | GET | `/connect/start` | Logged-in admin session required, else `403`. Sets a signed, 10-minute `state` and a matching `igcdm_connect` cookie, then 302 to Instagram Business Login (`force_reauth` when `?reconnect=1`). |
-| GET | `/connect/callback` | Requires a valid, unexpired `state` and the `igcdm_connect` cookie that matches it, before any call to Instagram. Code → short-lived token → long-lived token, fetch `user_id` and `username`, encrypt, **upsert** the account. |
+| GET | `/connect/callback` | Requires a valid, unexpired `state` and the `igcdm_connect` cookie that matches it, before any call to Instagram. Code → short-lived token → long-lived token, fetch `user_id` and `username`, encrypt, **upsert** the account. `error=access_denied` (Cancel on Instagram's screen) gets a plain "Not connected" page linking to `/connect/accounts`. |
+| GET | `/connect/accounts` | Logged-in admin session required, else `403`. 302 to the admin Accounts page, so public pages can offer a way back without naming the admin path. |
 | GET, HEAD | `/a/:secret/manifest.webmanifest`, `/a/:secret/icon.svg`, `/a/:secret/icon-192.png`, `/a/:secret/icon-512.png` | The web app manifest and home-screen icons. No login, because browsers fetch them without cookies; a wrong secret still gets 404, and they're `no-store`. Mounted ahead of the admin routes so the login middleware never sees these four GETs. |
 | GET/POST | `/a/:secret/*` | Admin. `:secret` is `ADMIN_URL_SECRET` (32 characters). A wrong secret gets 404. |
 

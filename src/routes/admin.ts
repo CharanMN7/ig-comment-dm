@@ -38,7 +38,7 @@ import {
   upsertAccount,
 } from '../db.ts';
 import { findConfigProblems } from '../config.ts';
-import { type Section, csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
+import { type Section, csrfField, daysUntil, fmtWhen, layout, pageError, plural, statusWords } from '../html.ts';
 import {
   EXCLUSION_TOO_SHORT_MESSAGE,
   KEYWORD_TOO_SHORT_MESSAGE,
@@ -382,9 +382,9 @@ function totalsTiles(totals: SendTotals[]) {
         return html`<div class="kpi">
           <span class="muted">${w.label}</span>
           <b>${fmtCount(t.reached)}</b>
-          people reached
+          ${plural(t.reached, 'person', 'people')} reached
           <div class="muted">
-            ${fmtCount(t.sent)} DMs sent<br />${fmtCount(t.skipped)} skipped<br />
+            ${fmtCount(t.sent)} ${plural(t.sent, 'DM', 'DMs')} sent<br />${fmtCount(t.skipped)} skipped<br />
             ${t.failed ? html`<span class="err">${failed}</span>` : failed}
           </div>
         </div>`;
@@ -548,7 +548,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                 <tbody>
                   ${accounts.map((a) => {
                     const days = daysUntil(a.token_expires_at, now);
-                    let token = days < 0 ? 'Expired' : `${days} day${days === 1 ? '' : 's'} left`;
+                    let token = days < 0 ? 'Expired' : `${days} ${plural(days, 'day', 'days')} left`;
                     if (a.needs_reconnect) token = 'Needs reconnect';
                     const status = a.active ? 'Watching comments' : 'Paused';
                     return html`<tr>
@@ -894,19 +894,19 @@ function ruleForm(opts: {
 
       <fieldset class="group">
         <legend>What to send</legend>
-        <label for="dm_text">Private message</label>
+        <label for="dm_text">DM</label>
         <textarea id="dm_text" name="dm_text" required maxlength="${String(DM_TEXT_MAX)}">${v.dm_text}</textarea>
         <p class="muted">
-          Up to 1,000 characters. Instagram allows one private message per comment, so put everything they
+          Up to 1,000 characters. Instagram allows one DM per comment, so put everything they
           need in this one, link included.
           <code>{username}</code> puts in their Instagram name and counts as 30. It’s the only placeholder for now.
         </p>
         <label for="public_reply_text">Public reply under their comment (optional)</label>
         <textarea id="public_reply_text" name="public_reply_text" maxlength="${String(PUBLIC_REPLY_MAX)}">${mainReply}</textarea>
         <p class="muted">
-          Everyone reading the comments sees this, for example “Sent you a DM!”. Leave it blank to reply
-          privately only. If the private message fails, the public reply is not posted either. Up to 1,000
-          characters, and <code>{username}</code> works here too.
+          Everyone reading the comments sees this, for example “Sent you a DM!”. Leave it blank to send
+          only the DM. If the DM fails, the public reply is not posted either. Up to 1,000 characters, and
+          <code>{username}</code> works here too.
         </p>
         <details ${variations.some((r) => r.trim()) ? 'open' : ''}>
           <summary>Add variations (optional)</summary>
@@ -961,7 +961,7 @@ adminRoutes.get('/rules', async (c) => {
       body: html`
         ${doneNote(c)}
         <h1>Rules</h1>
-        <p class="muted">When a comment matches a keyword, we send that person one private message.</p>
+        <p class="muted">When a comment matches a keyword, we send that person one DM.</p>
         <div class="row">
           <a class="btn" href="${base}/rules/new">New rule</a>
           ${rules.length ? html`<a class="btn secondary" href="#templates">Start from a template</a>` : html``}
@@ -1136,9 +1136,9 @@ export function readRuleFields(form: Record<string, string>) {
       error: `The keyword “${swallowed.keyword}” could never get a message, because it contains the exclusion “${swallowed.exclusion}”. Remove one of them.`,
     };
   }
-  if (!dm) return { error: 'Write the private message to send.' };
+  if (!dm) return { error: 'Write the DM to send.' };
   const dmProblem =
-    messageProblem('The private message', dm, DM_TEXT_MAX) ?? placeholderLinkProblem('The private message', dm);
+    messageProblem('The DM', dm, DM_TEXT_MAX) ?? placeholderLinkProblem('The DM', dm);
   if (dmProblem) return { error: dmProblem };
   for (const [i, reply] of replies.entries()) {
     const what = i === 0 ? 'The public reply' : `Reply ${String(i + 1)}`;
@@ -1280,7 +1280,7 @@ adminRoutes.get('/rules/:id/delete', async (c) => {
           </tr>
         </table></div>
         <p>
-          Matching comments will stop getting a private message. This cannot be undone. To stop it for now
+          Matching comments will stop getting a DM. This cannot be undone. To stop it for now
           and keep it, pause it instead.
         </p>
         <form method="post" action="${base}/rules/${String(rule.id)}/delete">
@@ -1398,7 +1398,7 @@ adminRoutes.post('/test', async (c) => {
                     messages use the name of whoever commented.
                   </p>`
                 : html``}
-              <h2>Private message that would be sent</h2>
+              <h2>DM that would be sent</h2>
               <p class="message">${fillPlaceholders(match.rule.dm_text, SAMPLE_USERNAME)}</p>
               ${replies.length === 0
                 ? html`<p class="muted">No public reply for this rule.</p>`
@@ -1483,7 +1483,7 @@ ${callback}/</pre>
                       <td>@${a.username}</td>
                       <td>
                         ${a.active ? 'Watching comments' : 'Paused'}
-                        · ${expired ? html`<span class="err">needs reconnect</span>` : `${days} days left`}
+                        · ${expired ? html`<span class="err">needs reconnect</span>` : `${days} ${plural(days, 'day', 'days')} left`}
                       </td>
                       <td class="actions">
                         <a class="btn${expired ? '' : ' secondary'}" href="/connect?reconnect=1">Reconnect</a>

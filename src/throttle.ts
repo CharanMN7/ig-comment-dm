@@ -1,5 +1,6 @@
 import { nowSeconds } from './crypto.ts';
 import { systemGet, systemSet } from './db.ts';
+import { plural } from './html.ts';
 
 /**
  * The admin panel is on the open internet and its second factor is a password a
@@ -85,5 +86,5 @@ export async function clearFailures(db: D1Database): Promise<void> {
 export function describeLock(seconds: number): string {
   if (seconds >= 120) return `${Math.ceil(seconds / 60)} minutes`;
   if (seconds > 60) return 'a minute';
-  return `${seconds} seconds`;
+  return `${seconds} ${plural(seconds, 'second', 'seconds')}`;
 }
