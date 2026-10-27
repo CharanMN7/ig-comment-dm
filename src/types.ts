@@ -59,7 +59,11 @@ export type Sent = {
   ig_user_id: string;
   rule_id: number | null;
   commenter_id: string | null;
-  /** `queued` or `retry`, waiting; `pending`, being sent; then `ok`, `failed` or `skipped`. */
+  /**
+   * `queued` or `retry`, waiting; `pending`, being sent; then `ok`, `failed`,
+   * `skipped`, or `unsure` when Instagram never confirmed the DM, which may
+   * have been delivered.
+   */
   dm_status: string;
   reply_status: string | null;
   error: string | null;

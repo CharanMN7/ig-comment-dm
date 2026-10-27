@@ -12,8 +12,10 @@ import {
   claimDueSends,
   claimQueuedExtraReply,
   extraReplyInsert,
+  flagNeedsReconnectStatement,
   insertSend,
   insertSettled,
+  holdSendsStatement,
   queuedExtraReplies,
   recordSend,
   refundSendsStatement,
@@ -24,7 +26,7 @@ import {
   updateExtraReply,
 } from './db.ts';
 import { exclusionSkipReason, matchComment } from './match.ts';
-import { type SendResult, hasTimeForCall, sendPrivateReply, sendPublicReply } from './meta.ts';
+import { type SendResult, classifyRefusal, hasTimeForCall, sendPrivateReply, sendPublicReply } from './meta.ts';
 import { EXTRA_REPLY_NO_DM, EXTRA_REPLY_RULE_GONE, otherRuleSkipReason, planOtherRules } from './other-replies.ts';
 import { fillPlaceholders } from './placeholders.ts';
 import { parsePublicReplies, pickReply } from './replies.ts';
@@ -61,8 +63,19 @@ export const EXPIRED_ERROR =
   'Expired: the DM was still waiting its turn when the comment neared Instagram’s 7-day limit for private replies.';
 export const LEASE_ERROR =
   "DM: the Worker stopped before this send finished, so it may have been delivered. It wasn't sent again, so it can't arrive twice.";
+export const TOKEN_WAIT_NOTE = 'Waiting for Instagram to be reconnected: the access token stopped working.';
 export const RULE_DELETED_ERROR = 'Skipped: the rule was deleted before its DM went out.';
 export const RULE_OFF_ERROR = 'Skipped: the rule was turned off before its DM went out.';
+
+/**
+ * Tries for a DM Instagram turned down for now: rate limits and its own
+ * temporary errors. Each waits longer than the last, and the fourth refusal
+ * is final.
+ */
+export const MAX_ATTEMPTS = 4;
+export const RETRY_BACKOFF_SECONDS = [60, 5 * 60, 20 * 60];
+/** How long an account's DMs are held after Instagram says it's sending too fast, or its token stops working. */
+export const PAUSE_SECONDS = 15 * 60;
 
 export function minuteOf(seconds: number): number {
   return Math.floor(seconds / 60);
@@ -191,18 +204,27 @@ export async function admitComment(
         public_reply_text: rule.public_reply_text,
         rule_active: rule.active,
         extra_replies: posting,
-      }, sendBy!));
+        attempts: 0,
+      }, sendBy!)).called;
     if (!called) await refundSendsStatement(env.DB, account.ig_user_id, minute, 1).run();
   }
   return claimed;
 }
 
 /**
- * Sends the DM, and the public reply after it, for a row the caller moved to
- * `pending`, and records how it went. Resolves whether the DM call was made,
- * which is what the budget counts.
+ * Whether the DM call was made, which is what the budget counts, and
+ * whether Instagram's answer means the account should send nothing more for
+ * now.
  */
-async function deliver(db: D1Database, token: string, row: ClaimedSend, deadline: number): Promise<boolean> {
+type Delivery = { called: boolean; stop: boolean };
+
+/**
+ * Sends the DM, and the public reply after it, for a row the caller moved to
+ * `pending`, and records how it went. A refusal that proves Instagram didn't
+ * act, and that might not hold later, puts the row back in the queue to try
+ * again; anything that leaves it unsure whether the DM went out never does.
+ */
+async function deliver(db: D1Database, token: string, row: ClaimedSend, deadline: number): Promise<Delivery> {
   const now = nowSeconds();
   const skip =
     row.dm_text == null
@@ -213,9 +235,9 @@ async function deliver(db: D1Database, token: string, row: ClaimedSend, deadline
           ? EXPIRED_ERROR
           : null;
   if (skip || row.dm_text == null) {
-    await recordSend(db, row.comment_id, { dm_status: 'skipped', reply_status: null, error: skip, called: false, next_attempt_at: null, now });
+    await recordSend(db, row.comment_id, { dm_status: 'skipped', reply_status: null, error: skip, attempted: false, next_attempt_at: null, now });
     if (row.extra_replies > 0) await skipQueuedExtraReplies(db, row.comment_id, EXTRA_REPLY_NO_DM, now);
-    return false;
+    return { called: false, stop: false };
   }
 
   // Both webhook and poll payloads carry the name on `from`, and the queue
@@ -229,11 +251,47 @@ async function deliver(db: D1Database, token: string, row: ClaimedSend, deadline
   const dm = await sendPrivateReply(row.ig_user_id, token, row.comment_id, dmText, deadline);
   if (dm.outcome === 'not_started') {
     await releaseSendsStatement(db, [row.comment_id], nowSeconds()).run();
-    return false;
+    return { called: false, stop: false };
   }
+  const tries = row.attempts + 1;
+  let gaveUp = false;
+  if (dm.outcome === 'refused') {
+    const refusal = classifyRefusal(dm.status, dm.body);
+    const at = nowSeconds();
+    if (refusal === 'token') {
+      // Not counted as a try, since the token failed, not the send. It goes
+      // back where it was, the account is held until it's reconnected, and
+      // the queue's expiry still applies.
+      await recordSend(db, row.comment_id, {
+        dm_status: row.attempts > 0 ? 'retry' : 'queued',
+        reply_status: null,
+        error: `${TOKEN_WAIT_NOTE}\n${sendError('DM', dm)}`,
+        attempted: false,
+        next_attempt_at: row.comment_at ?? at,
+        now: at,
+      });
+      await db.batch([flagNeedsReconnectStatement(db, row.ig_user_id), holdSendsStatement(db, row.ig_user_id, at + PAUSE_SECONDS, 'token')]);
+      return { called: true, stop: true };
+    }
+    if ((refusal === 'rate' || refusal === 'transient') && tries < MAX_ATTEMPTS) {
+      await recordSend(db, row.comment_id, {
+        dm_status: 'retry',
+        reply_status: null,
+        error: sendError('DM', dm),
+        attempted: true,
+        next_attempt_at: at + RETRY_BACKOFF_SECONDS[tries - 1]!,
+        now: at,
+      });
+      if (refusal === 'rate') await holdSendsStatement(db, row.ig_user_id, at + PAUSE_SECONDS, 'rate').run();
+      return { called: true, stop: refusal === 'rate' };
+    }
+    gaveUp = refusal !== 'final';
+  }
+
   const dmSent = dm.outcome === 'sent';
   let replyStatus: string | null = null;
   const errors: string[] = [];
+  if (gaveUp) errors.push(`DM: Instagram turned it down ${MAX_ATTEMPTS} times, so it was given up on.`);
   if (!dmSent) errors.push(sendError('DM', dm));
 
   if (publicText) {
@@ -255,15 +313,15 @@ async function deliver(db: D1Database, token: string, row: ClaimedSend, deadline
   }
 
   await recordSend(db, row.comment_id, {
-    dm_status: dmSent ? 'ok' : 'failed',
+    dm_status: dmSent ? 'ok' : dm.outcome === 'unknown' ? 'unsure' : 'failed',
     reply_status: replyStatus,
     error: errors.length ? errors.join('\n') : null,
-    called: true,
+    attempted: true,
     next_attempt_at: null,
     now: nowSeconds(),
   });
   if (row.extra_replies > 0) await replyForOtherRules(db, row, dmSent ? token : null, deadline);
-  return true;
+  return { called: true, stop: false };
 }
 
 /**
@@ -379,7 +437,11 @@ async function drainAccount(
       // The call is counted before it's made: if anything below throws, it
       // may have gone out, and its slot stays used.
       calls++;
-      if (!(await deliver(env.DB, token, row, deadline))) calls--;
+      const delivery = await deliver(env.DB, token, row, deadline);
+      if (!delivery.called) calls--;
+      // Instagram asked this account to slow down, or its token died: the
+      // rest wait in the queue, without spending a call each to hear it again.
+      if (delivery.stop) break;
     }
   } finally {
     // Whatever stopped the loop, a row it never started goes straight back

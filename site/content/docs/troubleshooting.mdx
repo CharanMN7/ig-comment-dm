@@ -266,7 +266,9 @@ npm run db:migrate
 
 The **Last 20 sends** row shows the exact error from Meta. When the DM fails, the public reply isn't posted either, because a reply like "Sent you a DM!" would be false; the row says so. A public reply can still fail on its own after a DM went through.
 
-"So it may have been delivered" means Instagram got the request but its answer never arrived in a usable form: it didn't answer within 10 seconds, the connection dropped, or it answered with a server error. Instagram may have sent the DM anyway, so it isn't sent again: a second try could reach the same person twice. Ask the commenter, or check the conversation in the Instagram app, before sending anything by hand. A public reply in the same situation says "so it may have been posted", and isn't posted again either; look under the comment.
+**May have been delivered** means Instagram got the request but its answer never arrived in a usable form: it didn't answer within 10 seconds, the connection dropped, or it answered with a server error. Instagram may have sent the DM anyway, so the Worker never sends it again by itself: a second try could reach the same person twice. Check the conversation in the Instagram app, or ask the commenter. If it didn't arrive, press **Send again** on that row, and it goes out within a minute or two, with four fresh tries. A public reply in the same situation says "so it may have been posted", and isn't posted again; look under the comment.
+
+**Retrying** means Instagram turned the DM down for now: the account was sending too fast (other apps on the same account count towards the same limit), or Instagram had a temporary problem. It's tried again after 1, 5 and 20 minutes, and the row says which try is next and when. After a fourth refusal it's **Failed**, "Instagram turned it down 4 times". When Instagram says the account is sending too fast, Home also notes that its DMs wait 15 minutes. A DM refused because the token stopped working stays **Queued** and doesn't use up a try: reconnect the account, and it goes out.
 
 A comment from a webhook has 25 seconds for its DM and public reply, so when Instagram is slow its timeout can be shorter than 10 seconds. If the DM got through but used up that time, the public reply is recorded as failed with "no time was left to post it".
 
@@ -277,7 +279,7 @@ Common DM failures:
 | a closed messaging window | The comment is older than 7 days |
 | the reply was already sent | Instagram allows one private reply per comment, ever |
 | permissions or scope | The token predates a scope change: click **Reconnect** |
-| rate limit | Meta's cap on private replies; the Worker keeps under it, so this means another app is sending from the same account too |
+| rate limit | Meta's cap on private replies. The Worker keeps under it and retries, so this means another app is sending from the same account too |
 
 If the DM says it succeeded but the recipient sees nothing, have them check **Message requests**. Instagram files DMs there when the recipient doesn't follow you.
 
@@ -287,7 +289,9 @@ The account has made its 12 DM calls for this minute, Instagram's hourly limit s
 
 **Expired** means a comment waited until an hour before Instagram's 7-day limit and was given up on, without calling Instagram.
 
-"The Worker stopped before this send finished, so it may have been delivered" means a send was cut off, by a deploy or Cloudflare stopping the Worker. Within 2 minutes it's recorded and never sent again, since the DM may already have arrived.
+"The Worker stopped before this send finished, so it may have been delivered" means a send was cut off, by a deploy or Cloudflare stopping the Worker. Within 2 minutes it's recorded as **May have been delivered** and never sent again by itself, since the DM may already have arrived. **Send again** is there if you've checked it didn't.
+
+The **Sending** table on Home shows how many wait, how old the oldest is, roughly how long they'll take, and how many DMs went out in the last hour; Instagram allows about 750. The time is rough: one Worker run a minute shares its sends between the accounts with DMs waiting.
 
 ## Red banner: an account needs reconnecting
 

@@ -30,17 +30,20 @@ const CAROL = '9100000000000003';
 async function byHand(since: number, igUserId?: string, before?: number): Promise<SendTotals> {
   const account = igUserId ? ' AND ig_user_id = ?' : '';
   const until = before != null ? ' AND sent_at < ?' : '';
-  const one = async (select: string, status: string) => {
-    const binds: unknown[] = [status, since, ...(igUserId ? [igUserId] : []), ...(before != null ? [before] : [])];
-    const row = await env.DB.prepare(`SELECT ${select} AS n FROM sent WHERE dm_status = ? AND sent_at >= ?${account}${until}`)
+  const one = async (select: string, ...statuses: string[]) => {
+    const binds: unknown[] = [...statuses, since, ...(igUserId ? [igUserId] : []), ...(before != null ? [before] : [])];
+    const row = await env.DB.prepare(
+      `SELECT ${select} AS n FROM sent WHERE dm_status IN (${statuses.map(() => '?').join(', ')}) AND sent_at >= ?${account}${until}`,
+    )
       .bind(...binds)
       .first<{ n: number }>();
     return row!.n;
   };
+  // A DM Instagram never confirmed counts as failed: nobody can say it arrived.
   return {
     sent: await one('COUNT(*)', 'ok'),
     skipped: await one('COUNT(*)', 'skipped'),
-    failed: await one('COUNT(*)', 'failed'),
+    failed: await one('COUNT(*)', 'failed', 'unsure'),
     reached: await one('COUNT(DISTINCT commenter_id)', 'ok'),
   };
 }
@@ -261,9 +264,10 @@ describe('all-time totals from the nightly snapshot', () => {
 
     await runScheduled(DAILY);
 
-    // The sweep ran first, so the stuck send is in the snapshot as failed,
-    // and the one still in flight is left for the live count.
-    expect(await sentRow('stuck-before')).toMatchObject({ dm_status: 'failed', sent_at: CUTOFF - 1 });
+    // The sweep ran first, so the stuck send is in the snapshot as failed
+    // (unsure whether its DM went out), and the one still in flight is left
+    // for the live count.
+    expect(await sentRow('stuck-before')).toMatchObject({ dm_status: 'unsure', sent_at: CUTOFF - 1 });
     expect(await sentRow('today-pending')).toMatchObject({ dm_status: 'pending' });
     expect(await readTotalsSnapshot(env.DB)).toEqual({
       cutoff: CUTOFF,
@@ -293,7 +297,7 @@ describe('all-time totals from the nightly snapshot', () => {
     vi.setSystemTime(FROZEN_NOW_MS + DAY * 1000);
     await runScheduled(DAILY);
 
-    expect(await sentRow('stuck-tonight')).toMatchObject({ dm_status: 'failed' });
+    expect(await sentRow('stuck-tonight')).toMatchObject({ dm_status: 'unsure' });
     expect(await readTotalsSnapshot(env.DB)).toMatchObject({ cutoff: CUTOFF + DAY, all: await byHand(0, undefined, CUTOFF + DAY) });
 
     await seedSent({ commentId: 'grace-again', status: 'ok', at: NOW + DAY, commenterId: GRACE });

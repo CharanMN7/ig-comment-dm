@@ -40,7 +40,7 @@ Meta webhook (signed) ───▶ your Worker ◀─── poll every 5 minutes
           one private DM, then an optional public reply
 ```
 
-There are two ways in because Instagram silently drops webhooks for collapsed and low-signal comments. Every five minutes the Worker reads the last 72 hours of comments on up to 3 posts per account and answers up to 10 per run that the webhook missed. Both paths claim the comment with `INSERT … ON CONFLICT DO NOTHING` before sending, so a duplicate delivery can't produce a second DM, and each DM gets one attempt: one whose answer is lost is logged as "may have been delivered", never sent twice.
+There are two ways in because Instagram silently drops webhooks for collapsed and low-signal comments. Every five minutes the Worker reads the last 72 hours of comments on up to 3 posts per account and answers up to 10 per run that the webhook missed. Both paths claim the comment with `INSERT … ON CONFLICT DO NOTHING` before sending, so a duplicate delivery can't produce a second DM, and each DM call gets one attempt: one whose answer is lost is logged as "may have been delivered", never sent twice. A DM Instagram turns down for now (rate limits, its own temporary errors) is tried again after 1, 5 and 20 minutes.
 
 The whole thing is about 5,000 lines of TypeScript, with one runtime dependency (`hono`) and no client-side JavaScript. Instagram tokens are encrypted with AES-256-GCM under a key that exists only in your Cloudflare account.
 

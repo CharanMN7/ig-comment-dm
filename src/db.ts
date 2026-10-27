@@ -124,6 +124,9 @@ export async function upsertAccount(
       row.last_refreshed_at,
     )
     .run();
+  // A new token is what a send held back by a dead one was waiting for. A
+  // rate-limit pause stays: the account sent just as fast with the old token.
+  await db.prepare('UPDATE send_budget SET token_held_until = 0 WHERE ig_user_id = ?').bind(row.ig_user_id).run();
 }
 
 export async function setAccountActive(db: D1Database, igUserId: string, active: number): Promise<void> {
@@ -150,7 +153,11 @@ export async function updateAccountToken(
 }
 
 export async function flagNeedsReconnect(db: D1Database, igUserId: string): Promise<void> {
-  await db.prepare('UPDATE accounts SET needs_reconnect = 1 WHERE ig_user_id = ?').bind(igUserId).run();
+  await flagNeedsReconnectStatement(db, igUserId).run();
+}
+
+export function flagNeedsReconnectStatement(db: D1Database, igUserId: string): D1PreparedStatement {
+  return db.prepare('UPDATE accounts SET needs_reconnect = 1 WHERE ig_user_id = ?').bind(igUserId);
 }
 
 export async function accountsNeedingRefresh(db: D1Database, expiresBefore: number): Promise<Account[]> {
@@ -435,7 +442,8 @@ export async function extraRepliesFor(
 }
 
 /**
- * Fails `pending` rows claimed in [claimedFrom, claimedBefore). Only `pending`
+ * Gives up on `pending` rows claimed in [claimedFrom, claimedBefore), as
+ * `unsure`: the DM may have gone out. Only `pending`
  * is touched, so a send that does finish late still records its real outcome.
  * The lower bound keeps this a range read on idx_sent_time: rows older than
  * the last totals snapshot were already swept. A row the queue claimed keeps
@@ -451,7 +459,7 @@ export async function failStalePending(
 ): Promise<void> {
   await db
     .prepare(
-      `UPDATE sent SET dm_status = 'failed', error = ?
+      `UPDATE sent SET dm_status = 'unsure', error = ?
        WHERE dm_status = 'pending' AND sent_at >= ? AND sent_at < ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)`,
     )
     .bind(error, claimedFrom, claimedBefore, now)
@@ -526,7 +534,7 @@ function totalsQuery(spans: Span[], perAccount: boolean): { sql: string; binds: 
     return [
       `COUNT(CASE WHEN ${inSpan} AND dm_status = 'ok' THEN 1 END) AS sent_${i}`,
       `COUNT(CASE WHEN ${inSpan} AND dm_status = 'skipped' THEN 1 END) AS skipped_${i}`,
-      `COUNT(CASE WHEN ${inSpan} AND dm_status = 'failed' THEN 1 END) AS failed_${i}`,
+      `COUNT(CASE WHEN ${inSpan} AND dm_status IN ('failed', 'unsure') THEN 1 END) AS failed_${i}`,
       `COUNT(DISTINCT CASE WHEN ${inSpan} AND dm_status = 'ok'${firstTime} THEN commenter_id END) AS reached_${i}`,
     ];
   });
@@ -783,6 +791,7 @@ export type ClaimedSend = {
   public_reply_text: string | null;
   rule_active: number | null;
   extra_replies: number;
+  attempts: number;
 };
 
 /**
@@ -877,7 +886,8 @@ export async function reserveSends(
          ON CONFLICT(ig_user_id) DO UPDATE SET
            used = MIN(?4, CASE WHEN minute = excluded.minute THEN used ELSE 0 END + ?3),
            minute = excluded.minute
-         WHERE paused_until <= ?5 AND (excluded.minute > minute OR (excluded.minute = minute AND used < ?4))
+         WHERE paused_until <= ?5 AND token_held_until <= ?5
+           AND (excluded.minute > minute OR (excluded.minute = minute AND used < ?4))
          RETURNING minute, used`,
       )
       .bind(igUserId, minute, want, cap, now),
@@ -924,7 +934,7 @@ export async function claimDueSends(
          ORDER BY next_attempt_at
          LIMIT ?4
        ) AND ${IN_QUEUE}
-       RETURNING comment_id, ig_user_id, rule_id, username, comment_at,
+       RETURNING comment_id, ig_user_id, rule_id, username, comment_at, attempts,
                  (SELECT dm_text FROM rules WHERE rules.id = sent.rule_id) AS dm_text,
                  (SELECT public_reply_text FROM rules WHERE rules.id = sent.rule_id) AS public_reply_text,
                  (SELECT active FROM rules WHERE rules.id = sent.rule_id) AS rule_active,
@@ -947,8 +957,8 @@ export async function recordSend(
     dm_status: string;
     reply_status: string | null;
     error: string | null;
-    /** Whether the DM call was made, whatever Instagram answered. */
-    called: boolean;
+    /** Whether this was one of the comment's tries: a DM call whatever the answer, except a dead token. */
+    attempted: boolean;
     next_attempt_at: number | null;
     now: number;
   },
@@ -959,7 +969,7 @@ export async function recordSend(
                        attempts = attempts + ?
        WHERE comment_id = ? AND dm_status = 'pending'`,
     )
-    .bind(patch.dm_status, patch.reply_status, patch.error, patch.now, patch.next_attempt_at, patch.called ? 1 : 0, commentId)
+    .bind(patch.dm_status, patch.reply_status, patch.error, patch.now, patch.next_attempt_at, patch.attempted ? 1 : 0, commentId)
     .run();
 }
 
@@ -1004,7 +1014,7 @@ export async function sweepQueue(
   const results = await db.batch<DrainAccount>([
     db
       .prepare(
-        `UPDATE sent SET dm_status = 'failed', error = ?1, next_attempt_at = NULL, attempts = attempts + 1, sent_at = ?2
+        `UPDATE sent SET dm_status = 'unsure', error = ?1, next_attempt_at = NULL, attempts = attempts + 1, sent_at = ?2
          WHERE dm_status = 'pending' AND next_attempt_at <= ?2`,
       )
       .bind(errors.lease, now),
@@ -1024,7 +1034,8 @@ export async function sweepQueue(
       .prepare(
         `SELECT a.ig_user_id, a.username, a.access_token_enc, a.token_iv, a.token_expires_at,
                 a.active, a.connected_at, a.last_refreshed_at, a.needs_reconnect,
-                b.minute AS budget_minute, b.used AS budget_used, b.paused_until,
+                b.minute AS budget_minute, b.used AS budget_used,
+                MAX(COALESCE(b.paused_until, 0), COALESCE(b.token_held_until, 0)) AS paused_until,
                 EXISTS (
                   SELECT 1 FROM sent
                   WHERE sent.ig_user_id = a.ig_user_id AND ${IN_QUEUE} AND next_attempt_at <= ?
@@ -1036,4 +1047,119 @@ export async function sweepQueue(
       .bind(now),
   ]);
   return results[3]?.results ?? [];
+}
+
+/**
+ * Holds an account's DMs back until `until`, or longer if it's already held:
+ * `rate` after Instagram says it's sending too fast, `token` after its token
+ * stopped working, which reconnecting lifts.
+ */
+export function holdSendsStatement(db: D1Database, igUserId: string, until: number, why: 'rate' | 'token'): D1PreparedStatement {
+  const column = why === 'rate' ? 'paused_until' : 'token_held_until';
+  return db
+    .prepare(
+      `INSERT INTO send_budget (ig_user_id, minute, used, ${column}) VALUES (?, 0, 0, ?)
+       ON CONFLICT(ig_user_id) DO UPDATE SET ${column} = MAX(${column}, excluded.${column})`,
+    )
+    .bind(igUserId, until);
+}
+
+/**
+ * Puts a send Instagram never confirmed back in the queue, because the
+ * operator checked that the DM didn't arrive, with a fresh set of tries.
+ * Only an `unsure` row, so a second press, or one on a row that has moved
+ * on, does nothing.
+ *
+ * Home counts the row as failed until now. sent_at moves to now, so its next
+ * outcome is counted after any totals snapshot's cutoff, and if the snapshot
+ * already counted it as failed, that count comes off in the same batch.
+ * changes() is the UPDATE's own count, so a second press takes nothing off.
+ */
+export async function retryUnsureSend(db: D1Database, commentId: string, now: number): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT ig_user_id, sent_at FROM sent WHERE comment_id = ? AND dm_status = 'unsure'")
+    .bind(commentId)
+    .first<{ ig_user_id: string; sent_at: number }>();
+  if (!row) return false;
+  const [result] = await db.batch([
+    db
+      .prepare(
+        `UPDATE sent SET dm_status = 'retry', attempts = 0, next_attempt_at = ?1, sent_at = ?1, error = NULL, reply_status = NULL
+         WHERE comment_id = ?2 AND dm_status = 'unsure'`,
+      )
+      .bind(now, commentId),
+    db
+      .prepare(
+        `UPDATE system SET value = json_replace(value,
+           '$.all.failed', MAX(0, json_extract(value, '$.all.failed') - 1),
+           ?1, MAX(0, json_extract(value, ?1) - 1))
+         WHERE key = ?2 AND changes() = 1 AND json_extract(value, '$.cutoff') > ?3`,
+      )
+      .bind(`$.accounts."${row.ig_user_id}".failed`, TOTALS_SNAPSHOT_KEY, row.sent_at),
+  ]);
+  return changedRows(result!) > 0;
+}
+
+/** What Home's Sending card shows for one account. */
+export type QueueOverview = {
+  ig_user_id: string;
+  queued: number;
+  retrying: number;
+  oldest_comment_at: number | null;
+  next_retry_at: number | null;
+  calls_last_hour: number;
+  paused_until: number;
+};
+
+/**
+ * The queue per account, in one batch. Reads every waiting row, through
+ * idx_sent_queue, and the last hour of sends, through idx_sent_account_time:
+ * the backlog, not the history. A send's DM calls in the last hour are
+ * counted once per row, which is close: a row is retried minutes apart at
+ * the soonest.
+ */
+export async function queueOverview(db: D1Database, now: number): Promise<QueueOverview[]> {
+  const [waiting, recent, budgets] = await db.batch<Record<string, number | string | null>>([
+    db.prepare(
+      `SELECT ig_user_id,
+              COUNT(CASE WHEN dm_status = 'queued' THEN 1 END) AS queued,
+              COUNT(CASE WHEN dm_status = 'retry' THEN 1 END) AS retrying,
+              MIN(comment_at) AS oldest_comment_at,
+              MIN(CASE WHEN dm_status = 'retry' THEN next_attempt_at END) AS next_retry_at
+       FROM sent
+       WHERE ig_user_id IN (SELECT ig_user_id FROM accounts) AND ${IN_QUEUE}
+       GROUP BY ig_user_id`,
+    ),
+    db
+      .prepare(
+        `SELECT ig_user_id, COUNT(*) AS calls
+         FROM sent
+         WHERE ig_user_id IN (SELECT ig_user_id FROM accounts) AND sent_at >= ? AND attempts > 0
+           AND dm_status IN ('ok', 'failed', 'unsure', 'retry')
+         GROUP BY ig_user_id`,
+      )
+      .bind(now - 60 * 60),
+    db.prepare('SELECT ig_user_id, paused_until FROM send_budget WHERE paused_until > ?').bind(now),
+  ]);
+  const byId = new Map<string, QueueOverview>();
+  const get = (id: string) => {
+    let o = byId.get(id);
+    if (!o) {
+      o = { ig_user_id: id, queued: 0, retrying: 0, oldest_comment_at: null, next_retry_at: null, calls_last_hour: 0, paused_until: 0 };
+      byId.set(id, o);
+    }
+    return o;
+  };
+  const num = (v: number | string | null | undefined) => (v == null ? null : Number(v));
+  for (const r of waiting?.results ?? []) {
+    Object.assign(get(String(r.ig_user_id)), {
+      queued: num(r.queued) ?? 0,
+      retrying: num(r.retrying) ?? 0,
+      oldest_comment_at: num(r.oldest_comment_at),
+      next_retry_at: num(r.next_retry_at),
+    });
+  }
+  for (const r of recent?.results ?? []) get(String(r.ig_user_id)).calls_last_hour = num(r.calls) ?? 0;
+  for (const r of budgets?.results ?? []) get(String(r.ig_user_id)).paused_until = num(r.paused_until) ?? 0;
+  return [...byId.values()];
 }

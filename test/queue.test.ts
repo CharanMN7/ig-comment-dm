@@ -298,13 +298,13 @@ describe('sending from the queue', () => {
       .run();
 
     await runMinutes();
-    expect(await sentRow('stopped')).toMatchObject({ dm_status: 'failed', error: LEASE_ERROR, attempts: 1, next_attempt_at: null });
+    expect(await sentRow('stopped')).toMatchObject({ dm_status: 'unsure', error: LEASE_ERROR, attempts: 1, next_attempt_at: null });
     expect(LEASE_ERROR).toContain('may have been delivered');
     expect(await sentRow('in-flight')).toMatchObject({ dm_status: 'pending' });
 
     nextMinute();
     await runMinutes(2);
-    expect(await sentRow('in-flight')).toMatchObject({ dm_status: 'failed', error: LEASE_ERROR });
+    expect(await sentRow('in-flight')).toMatchObject({ dm_status: 'unsure', error: LEASE_ERROR });
     expect(dmTargets()).toEqual([]);
   });
 
@@ -414,10 +414,11 @@ describe('sending from the queue', () => {
 
     const rows = await sentRows();
     const count = (status: string) => rows.filter((r) => r.dm_status === status).length;
-    // Claimed = sent + skipped + failed + queued + retrying + in flight, with nothing left waiting.
+    // Claimed = sent + skipped + failed + unsure + queued + retrying + in flight, with nothing left waiting.
     expect(rows).toHaveLength(ids.length + 1);
-    expect(count('ok') + count('skipped') + count('failed') + count('queued') + count('retry') + count('pending')).toBe(rows.length);
-    expect([count('ok'), count('skipped'), count('failed'), count('queued'), count('retry'), count('pending')]).toEqual([12, 1, 3, 0, 0, 0]);
+    const states = ['ok', 'skipped', 'failed', 'unsure', 'queued', 'retry', 'pending'];
+    expect(states.reduce((sum, state) => sum + count(state), 0)).toBe(rows.length);
+    expect(states.map(count)).toEqual([12, 1, 2, 1, 0, 0, 0]);
     expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(rows.reduce((sum, r) => sum + r.attempts, 0));
     expect(meta.callsTo('POST', '/:id/replies')).toHaveLength(12);
   });
