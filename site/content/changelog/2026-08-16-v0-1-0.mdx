@@ -1,0 +1,33 @@
+---
+title: First working Worker
+date: 2026-08-16
+version: 0.1.0
+---
+
+The first version that answers real comments: one Cloudflare Worker and one D1 database on your own account. Someone comments a keyword, the Worker sends them one DM (Instagram's private reply), and it can post a public reply under the comment as well. Getting from the first deploy to live comments took eight pull requests, all on the same day.
+
+### Added
+
+- Rules: the keywords to watch for, the DM to send, an optional public reply, and either one post or all of them. Each comment is claimed in the database before anything is sent, so it gets one DM even when Instagram delivers it twice. ([#1])
+- An admin panel behind a secret URL and a password. Home shows your accounts, the last 20 sends and whether Instagram is reaching the Worker. The Test page shows which rule a comment would trigger without sending anything. ([#1])
+- A nightly job that refreshes each account's Instagram token before it expires. ([#1])
+- Connect subscribes the account to comment notifications, and Home and the nightly job subscribe it again. Turning the field on in Meta's dashboard isn't enough for live comments to arrive. ([#5])
+- The rule and Test forms list your recent posts and reels to pick from, instead of asking for a Graph media ID. ([#6])
+- `/privacy`, `/terms` and `/data-deletion` pages, which Meta asks for before it lets you publish the app. Only a Live app receives real comments. ([#8])
+- A poll every 5 minutes that picks up recent comments the webhook missed. ([#8])
+- Setup notes for inviting every creator account as an Instagram Tester ([#2]), and for where each secret comes from and the per-account Webhook subscription toggle ([#7]).
+
+### Fixed
+
+- Connect builds its redirect address from the Worker's own address, so Instagram stops answering "Invalid redirect_uri" while `PUBLIC_BASE_URL` is still a placeholder. Before sending you to Instagram, Connect shows the exact addresses to list in Meta, with and without a trailing slash, and the App ID it's using. ([#3], [#4])
+- Webhooks signed with the Facebook app secret are accepted as well as ones signed with the Instagram app secret. Meta often signs live comments with the Facebook one, so it's stored as a second secret, `FACEBOOK_APP_SECRET`. A rejected signature is logged, so Home shows it instead of staying empty. ([#8])
+- Instagram IDs too long for a JavaScript number keep every digit when the webhook is read, so the account lookup and the DM go to the right place. ([#5])
+
+[#1]: https://github.com/CharanMN7/ig-comment-dm/pull/1
+[#2]: https://github.com/CharanMN7/ig-comment-dm/pull/2
+[#3]: https://github.com/CharanMN7/ig-comment-dm/pull/3
+[#4]: https://github.com/CharanMN7/ig-comment-dm/pull/4
+[#5]: https://github.com/CharanMN7/ig-comment-dm/pull/5
+[#6]: https://github.com/CharanMN7/ig-comment-dm/pull/6
+[#7]: https://github.com/CharanMN7/ig-comment-dm/pull/7
+[#8]: https://github.com/CharanMN7/ig-comment-dm/pull/8
