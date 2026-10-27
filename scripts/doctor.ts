@@ -170,15 +170,33 @@ function checkDatabase(): void {
     );
   }
 
-  const anyEvent = d1Query("SELECT COUNT(*) AS n FROM webhook_events WHERE status IN ('received', 'bad_sig')");
+  // webhook_events only keeps 7 days, so the time of the last signed delivery,
+  // kept in system, is what says whether Meta has ever got through.
+  const anyEvent = d1Query(
+    "SELECT (SELECT value FROM system WHERE key = 'last_webhook_received_at') AS last, " +
+      "(SELECT COUNT(*) FROM webhook_events WHERE status IN ('received', 'bad_sig')) AS n",
+  );
   if (anyEvent && /"n":\s*0\b/.test(anyEvent)) {
-    record(
-      'warn',
-      'Instagram has never reached this Worker',
-      'No webhook has ever arrived, valid or not. Almost always this means the Meta app is still in ' +
-        'Development mode, or the per-account "Webhook subscription" toggle is off.',
-      'Meta → Publish (make the app Live), and Generate access tokens → Webhook subscription → On',
-    );
+    const last = anyEvent.match(/"last":\s*"(\d+)"/);
+    if (last) {
+      const days = Math.floor((Date.now() / 1000 - Number.parseInt(last[1], 10)) / 86400);
+      record(
+        'warn',
+        'Nothing from Instagram in the last 7 days',
+        `The last notification arrived ${days} days ago. That is normal if nobody has commented since. ` +
+          'If someone has, the Meta app may be back in Development mode, or the per-account ' +
+          '"Webhook subscription" toggle may be off.',
+        'Check Meta → Publish, and Generate access tokens → Webhook subscription → On',
+      );
+    } else {
+      record(
+        'warn',
+        'Instagram has never reached this Worker',
+        'No webhook has ever arrived, valid or not. Almost always this means the Meta app is still in ' +
+          'Development mode, or the per-account "Webhook subscription" toggle is off.',
+        'Meta → Publish (make the app Live), and Generate access tokens → Webhook subscription → On',
+      );
+    }
   }
 }
 

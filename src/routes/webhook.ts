@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { nowSeconds, verifyMetaSignatureAny } from '../crypto.ts';
-import { insertWebhookEvent, logBadSignature } from '../db.ts';
+import { logBadSignature, logVerifiedWebhook } from '../db.ts';
 import { WEBHOOK_SEND_BUDGET_MS, parseWebhookPayload, processWebhook } from '../process.ts';
 import type { Env } from '../types.ts';
 
@@ -41,13 +41,7 @@ webhookRoutes.post('/', async (c) => {
     return c.text('unauthorized', 401);
   }
 
-  await insertWebhookEvent(c.env.DB, {
-    received_at: nowSeconds(),
-    status: 'received',
-    object: objectOf(raw),
-    preview: raw.slice(0, 200),
-    error: null,
-  }).catch((err) => {
+  await logVerifiedWebhook(c.env.DB, nowSeconds(), objectOf(raw), raw.slice(0, 200)).catch((err) => {
     console.error('webhook log failed', err instanceof Error ? err.message : err);
   });
 

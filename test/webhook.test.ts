@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { meta } from './support/meta.ts';
-import { FROZEN_NOW_MS, seedAccount, seedRule, sentRows, webhookEvents } from './support/seed.ts';
+import { FROZEN_NOW_MS, NOW, seedAccount, seedRule, sentRows, systemValue, webhookEvents } from './support/seed.ts';
 import { commentPayload, postWebhook, request, signature } from './support/worker.ts';
 
 describe('GET /webhook verification handshake', () => {
@@ -34,6 +34,16 @@ describe('POST /webhook signature checks', () => {
     expect(res.status).toBe(200);
     expect(await webhookEvents()).toEqual([expect.objectContaining({ status: 'received', object: 'instagram', error: null })]);
     expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
+  });
+
+  it('remembers when a signed delivery last arrived, and never for a rejected one', async () => {
+    await postWebhook(commentPayload(), { secret: 'not-the-app-secret' });
+    await postWebhook(commentPayload(), { signature: null });
+    expect(await systemValue('last_webhook_received_at')).toBeNull();
+
+    vi.setSystemTime(FROZEN_NOW_MS + 90_000);
+    await postWebhook(commentPayload());
+    expect(await systemValue('last_webhook_received_at')).toBe(String(NOW + 90));
   });
 
   it('accepts a body signed with FACEBOOK_APP_SECRET, which Meta uses for live comments', async () => {

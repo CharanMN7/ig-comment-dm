@@ -108,7 +108,9 @@ Keywords under 3 characters are rejected when you save the rule, because they ma
 
 ## "Did Instagram reach us?" is empty
 
-Meta has never POSTed to your Worker. The problem is upstream of the Worker, so nothing in the admin panel will help.
+The list covers the last 7 days. If it says **Nothing in the last 7 days** and gives the date of the last notification, Meta has reached your Worker before and just hasn't sent anything since. That's normal when nobody has commented. If someone has, work through the causes below: the app or the subscription may have been switched off since.
+
+If it says **No notification has arrived yet**, Meta has never POSTed to your Worker. The problem is upstream of the Worker, so nothing in the admin panel will help.
 
 In order of likelihood: the app is in Development ([cause 1](#1-the-meta-app-is-still-in-development)), the per-account webhook subscription is off ([cause 2](#2-the-per-account-webhook-subscription-is-off)), or the webhook was never configured.
 
