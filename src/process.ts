@@ -145,6 +145,10 @@ async function sendOrFail(send: () => Promise<MetaCallResult>): Promise<MetaCall
 /**
  * `deadline` (epoch ms) is when every Meta call for this comment must have
  * ended, so the outcome is written before the runtime stops the Worker.
+ *
+ * Resolves true when this call claimed the comment, and so sent to it or
+ * recorded why not, and false when it left the comment alone. The poll's
+ * per-sweep cap counts only the first.
  */
 export async function processComment(
   env: Env,
@@ -152,21 +156,21 @@ export async function processComment(
   entryTime: number | undefined,
   value: CommentValue,
   deadline: number,
-): Promise<void> {
+): Promise<boolean> {
   const account = await getAccount(env.DB, entryId);
   if (!account || account.active !== 1) {
     console.error('no active account for webhook entry', entryId);
-    return;
+    return false;
   }
 
   const commenterId = asId(value.from?.id) ?? null;
   if (isSelfComment(commenterId, account.ig_user_id)) {
     console.log('ignored self-comment', commentIdOf(value));
-    return;
+    return false;
   }
 
   const commentId = commentIdOf(value);
-  if (!commentId) return;
+  if (!commentId) return false;
 
   const now = nowSeconds();
   const text = value.text ?? '';
@@ -175,7 +179,7 @@ export async function processComment(
   if (entryTime != null) {
     const ts = asUnixSeconds(entryTime);
     if (now - ts > COMMENT_MAX_AGE_SECONDS) {
-      await tryClaimComment(env.DB, {
+      return tryClaimComment(env.DB, {
         comment_id: commentId,
         ig_user_id: account.ig_user_id,
         commenter_id: commenterId,
@@ -183,7 +187,6 @@ export async function processComment(
         error: 'comment older than 7 days — Instagram will not accept a private reply',
         sent_at: now,
       });
-      return;
     }
   }
 
@@ -191,7 +194,7 @@ export async function processComment(
   // to send. Left unclaimed, it is still open to the 5-minute poll.
   if (!hasTimeForCall(deadline)) {
     console.error('no time left to send; leaving the comment for the poll', commentId);
-    return;
+    return false;
   }
 
   const claimed = await tryClaimComment(env.DB, {
@@ -202,7 +205,7 @@ export async function processComment(
     error: null,
     sent_at: now,
   });
-  if (!claimed) return;
+  if (!claimed) return false;
 
   const { match, excluded } = await chooseRule(env.DB, account.ig_user_id, text, mediaId);
   if (!match) {
@@ -216,7 +219,7 @@ export async function processComment(
       error: passedOver ? exclusionSkipReason(passedOver) : 'no matching rule',
       sent_at: nowSeconds(),
     });
-    return;
+    return true;
   }
   const { rule } = match;
 
@@ -238,7 +241,7 @@ export async function processComment(
       error: `could not decrypt access token: ${err instanceof Error ? err.message : 'unknown'}`,
       sent_at: nowSeconds(),
     });
-    return;
+    return true;
   }
 
   const dm = await sendOrFail(() => sendPrivateReply(account.ig_user_id, token, commentId, dmText, deadline));
@@ -272,4 +275,5 @@ export async function processComment(
     error: errors.length ? errors.join('\n') : null,
     sent_at: nowSeconds(),
   });
+  return true;
 }
