@@ -68,7 +68,7 @@ $0. Meta doesn't charge for the API, and it fits Cloudflare's free plan:
 | 10 ms CPU per request | Why passwords use PBKDF2 at 12,000 iterations, not 600,000 |
 | 5 cron triggers per account | This uses 2: the 5-minute poll and the 03:00 UTC token refresh |
 | D1: 100,000 rows written a day | A few per comment |
-| D1: 5 million rows read a day | Home's all-time totals scan the send log on every load: 100 loads a day at 50,000 comments |
+| D1: 5 million rows read a day | Each Home load reads the last 30 days of the send log, never all of it: 80+ loads a day at 1,000 comments a day, however old the log |
 | D1: 500 MB per database | The send log grows a row per comment; webhook logs are pruned after 7 days |
 
 ## Quick start

@@ -7,13 +7,20 @@ import {
   nowSeconds,
 } from './crypto.ts';
 import {
+  NO_SENDS,
+  type TotalsSnapshot,
   accountsNeedingRefresh,
+  addTotals,
   failStalePending,
   flagNeedsReconnect,
   listAccounts,
   pruneWebhookEvents,
+  readTotalsSnapshot,
+  sendTotals,
+  sendTotalsByAccount,
   systemSet,
   updateAccountToken,
+  writeTotalsSnapshot,
 } from './db.ts';
 import { refreshLongLived, subscribeCommentWebhooks } from './meta.ts';
 import type { Env } from './types.ts';
@@ -28,6 +35,32 @@ export const STALE_PENDING_SECONDS = 15 * 60;
 
 export const STALE_PENDING_ERROR =
   'The Worker stopped before this send finished. The DM may or may not have gone out, so it was not tried again.';
+
+export const EMPTY_SNAPSHOT: TotalsSnapshot = { cutoff: 0, all: NO_SENDS, accounts: {} };
+
+/**
+ * Fails stuck sends, then folds every row older than STALE_PENDING_SECONDS
+ * into the stored all-time totals. The sweep comes first because it is the
+ * only thing that changes a row without moving its sent_at forward: once it
+ * has run, nothing before its cutoff can change, so counts up to there stay
+ * true. Both read only the rows since the previous snapshot, so only the first
+ * run reads the whole table.
+ */
+export async function snapshotTotals(db: D1Database, now: number): Promise<TotalsSnapshot> {
+  const previous = (await readTotalsSnapshot(db)) ?? EMPTY_SNAPSHOT;
+  const cutoff = now - STALE_PENDING_SECONDS;
+  if (cutoff <= previous.cutoff) return previous;
+  await failStalePending(db, previous.cutoff, cutoff, STALE_PENDING_ERROR);
+  const span = [{ from: previous.cutoff, to: cutoff, firstReach: true }];
+  const [added = NO_SENDS] = await sendTotals(db, span);
+  const accounts = { ...previous.accounts };
+  for (const [id, [t = NO_SENDS]] of await sendTotalsByAccount(db, span)) {
+    accounts[id] = addTotals(accounts[id] ?? NO_SENDS, t);
+  }
+  const next = { cutoff, all: addTotals(previous.all, added), accounts };
+  await writeTotalsSnapshot(db, next);
+  return next;
+}
 
 export async function ensureCommentSubscriptions(env: Env): Promise<void> {
   const accounts = await listAccounts(env.DB);
@@ -51,15 +84,13 @@ export async function ensureCommentSubscriptions(env: Env): Promise<void> {
  * alone for 60 days can't be refreshed at all.
  */
 export async function runCron(env: Env): Promise<void> {
-  // Daily, not every 5 minutes: `sent` gains a row per comment, is never
-  // pruned and has no index on dm_status, so this is a full scan. Once a day
-  // costs about one Home visit; 288 times a day could use up the free plan's
-  // D1 reads. A stuck row already blocks a resend, so waiting only delays its
-  // label. First, so a slow Meta call can't keep it from running.
+  // Daily is enough: a stuck row already blocks a resend, so waiting only
+  // delays its label, and Home counts the rows since the snapshot live. First,
+  // so a slow Meta call can't keep it from running.
   try {
-    await failStalePending(env.DB, nowSeconds() - STALE_PENDING_SECONDS, STALE_PENDING_ERROR);
+    await snapshotTotals(env.DB, nowSeconds());
   } catch (err) {
-    console.error('fail stale pending sends failed', err instanceof Error ? err.message : err);
+    console.error('snapshot send totals failed', err instanceof Error ? err.message : err);
   }
   await ensureCommentSubscriptions(env);
   const now = nowSeconds();
