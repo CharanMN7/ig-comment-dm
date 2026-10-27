@@ -11,10 +11,22 @@ import {
 } from './db.ts';
 import { isSelfComment } from './guard.ts';
 import { type MatchVerdict, exclusionSkipReason, matchComment } from './match.ts';
-import { type MetaCallResult, sendPrivateReply, sendPublicReply } from './meta.ts';
+import { type MetaCallResult, hasTimeForCall, sendPrivateReply, sendPublicReply } from './meta.ts';
 import { fillPlaceholders } from './placeholders.ts';
 import { parsePublicReplies, pickReply } from './replies.ts';
 import type { Env } from './types.ts';
+
+/**
+ * The webhook answers Meta first and handles the comments in waitUntil, which
+ * Cloudflare stops 30 s after the response. A send cut off there leaves its row
+ * `pending` until the daily job fails it, and one Meta call can take about
+ * 32 s with its retries. So every Meta call for one delivery has to end inside
+ * this, which leaves the last few seconds for writing the outcome.
+ */
+export const WEBHOOK_SEND_BUDGET_MS = 25_000;
+
+export const NO_TIME_FOR_PUBLIC_REPLY_ERROR =
+  'public reply: no time was left to post it, because Instagram was slow to answer';
 
 type CommentValue = {
   id?: string | number;
@@ -79,7 +91,11 @@ function changesOf(entry: Entry): Change[] {
   return [];
 }
 
-export async function processWebhook(env: Env, payload: unknown): Promise<void> {
+/**
+ * `deadline` (epoch ms) is shared by every comment in the delivery, because
+ * waitUntil's limit covers all of them together, not each one.
+ */
+export async function processWebhook(env: Env, payload: unknown, deadline: number): Promise<void> {
   const bodies = Array.isArray(payload) ? payload : [payload];
   for (const item of bodies) {
     const body = item as WebhookBody;
@@ -90,7 +106,7 @@ export async function processWebhook(env: Env, payload: unknown): Promise<void> 
         const entryId = asId(entry.id);
         if (!change.value || !entryId) continue;
         try {
-          await processComment(env, entryId, entry.time, change.value);
+          await processComment(env, entryId, entry.time, change.value, deadline);
         } catch (err) {
           console.error('comment processing failed', err instanceof Error ? err.message : err);
         }
@@ -126,11 +142,16 @@ async function sendOrFail(send: () => Promise<MetaCallResult>): Promise<MetaCall
   }
 }
 
+/**
+ * `deadline` (epoch ms) is when every Meta call for this comment must have
+ * ended, so the outcome is written before the runtime stops the Worker.
+ */
 export async function processComment(
   env: Env,
   entryId: string,
   entryTime: number | undefined,
   value: CommentValue,
+  deadline: number,
 ): Promise<void> {
   const account = await getAccount(env.DB, entryId);
   if (!account || account.active !== 1) {
@@ -164,6 +185,13 @@ export async function processComment(
       });
       return;
     }
+  }
+
+  // A claimed comment is never tried again, so claim only one there is time
+  // to send. Left unclaimed, it is still open to the 5-minute poll.
+  if (!hasTimeForCall(deadline)) {
+    console.error('no time left to send; leaving the comment for the poll', commentId);
+    return;
   }
 
   const claimed = await tryClaimComment(env.DB, {
@@ -213,15 +241,20 @@ export async function processComment(
     return;
   }
 
-  const dm = await sendOrFail(() => sendPrivateReply(account.ig_user_id, token, commentId, dmText));
+  const dm = await sendOrFail(() => sendPrivateReply(account.ig_user_id, token, commentId, dmText, deadline));
   let replyStatus: string | null = null;
   const errors: string[] = [];
 
   if (!dm.ok) errors.push(`DM: ${dm.body}`);
 
   if (publicText) {
-    if (dm.ok) {
-      const reply = await sendOrFail(() => sendPublicReply(commentId, token, publicText));
+    if (dm.ok && !hasTimeForCall(deadline)) {
+      // Started anyway, the reply would be cut off with the Worker, leaving
+      // the row `pending` with no record that the DM went out.
+      replyStatus = 'failed';
+      errors.push(NO_TIME_FOR_PUBLIC_REPLY_ERROR);
+    } else if (dm.ok) {
+      const reply = await sendOrFail(() => sendPublicReply(commentId, token, publicText, deadline));
       replyStatus = reply.ok ? 'ok' : 'failed';
       if (!reply.ok) errors.push(`public reply: ${reply.body}`);
     } else {

@@ -256,7 +256,7 @@ npm run db:migrate
 
 The **Last 20 sends** row shows the exact error from Meta. When the DM fails, the public reply isn't posted either, because a reply like "Sent you a DM!" would be false; the row says so. A public reply can still fail on its own after a DM went through.
 
-"Could not reach Instagram after 3 tries" means Meta never answered, usually a brief network problem. That comment isn't retried automatically.
+"Could not reach Instagram after 3 tries" means Meta never answered, usually a brief network problem. That comment isn't retried automatically. A comment from a webhook has 25 seconds for its DM and public reply, so when Instagram is slow you may see fewer tries, followed by "and there was no time left to try again". If the DM got through but used up that time, the public reply is recorded as failed with "no time was left to post it".
 
 Common DM failures:
 

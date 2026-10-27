@@ -30,28 +30,72 @@ export const META_TIMEOUT_MS = 10_000;
  */
 export const META_CALL_MAX_MS = ATTEMPTS * META_TIMEOUT_MS + 1.5 * BACKOFF_BASE_MS * (2 ** (ATTEMPTS - 1) - 1);
 
-async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+/**
+ * The least time worth giving an attempt that has to end by a deadline. Meta
+ * usually answers well inside it. An attempt given less is likely to be cut
+ * off, and a DM cut off on our side may still have been delivered on Meta's,
+ * so it would be recorded as failed when it wasn't.
+ */
+export const META_MIN_ATTEMPT_MS = 2_000;
+
+/**
+ * How long an attempt starting at `at` (epoch ms) may run so it ends by
+ * `deadline`: its usual limit, or the time left if that is shorter. 0 means
+ * there isn't enough time left to start it. No deadline means no limit
+ * beyond the usual one.
+ */
+export function attemptTimeoutMs(deadline: number | undefined, at: number): number {
+  if (deadline === undefined) return META_TIMEOUT_MS;
+  const left = deadline - at;
+  return left < META_MIN_ATTEMPT_MS ? 0 : Math.min(META_TIMEOUT_MS, left);
+}
+
+/** Whether a Meta call started now could make at least one attempt before `deadline`. */
+export function hasTimeForCall(deadline: number): boolean {
+  return attemptTimeoutMs(deadline, Date.now()) > 0;
+}
+
+async function fetchWithRetry(url: string, init: RequestInit, deadline?: number): Promise<Response> {
   let lastRes: Response | undefined;
   let lastErr: unknown;
+  let tries = 0;
+  let outOfTime = false;
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      const backoff = jitteredDelayMs(BACKOFF_BASE_MS * 2 ** (attempt - 1));
+      // Checked before sleeping: a retry the deadline would cut short is not
+      // worth the wait, and the caller needs the time to record the outcome.
+      if (attemptTimeoutMs(deadline, Date.now() + backoff) === 0) {
+        outOfTime = true;
+        break;
+      }
+      await sleep(backoff);
+    }
+    const timeoutMs = attemptTimeoutMs(deadline, Date.now());
+    if (timeoutMs === 0) {
+      outOfTime = true;
+      break;
+    }
+    tries++;
     try {
-      const res = await fetch(url, { ...init, signal: AbortSignal.timeout(META_TIMEOUT_MS) });
+      const res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
       if (res.status === 429 || res.status >= 500) {
         lastRes = res;
-        if (attempt < ATTEMPTS - 1) await sleep(jitteredDelayMs(BACKOFF_BASE_MS * 2 ** attempt));
         continue;
       }
       return res;
     } catch (err) {
       lastErr = err;
-      if (attempt < ATTEMPTS - 1) await sleep(jitteredDelayMs(BACKOFF_BASE_MS * 2 ** attempt));
     }
   }
   if (lastRes) return lastRes;
   // This message ends up in the send log on Home, so it says what happened in
   // words an operator can act on; the runtime's own text follows for whoever debugs.
+  if (tries === 0) throw new Error('there was no time left to contact Instagram');
   const detail = lastErr instanceof Error ? lastErr.message : String(lastErr);
-  throw new Error(`could not reach Instagram after ${ATTEMPTS} tries (${detail})`);
+  const after = `after ${tries} ${tries === 1 ? 'try' : 'tries'}`;
+  const why = outOfTime ? ', and there was no time left to try again' : '';
+  throw new Error(`could not reach Instagram ${after}${why} (${detail})`);
 }
 
 async function readResult(res: Response): Promise<MetaCallResult> {
@@ -64,6 +108,7 @@ export async function sendPrivateReply(
   token: string,
   commentId: string,
   text: string,
+  deadline?: number,
 ): Promise<MetaCallResult> {
   const url = `${GRAPH}/${encodeURIComponent(igUserId)}/messages`;
   const res = await fetchWithRetry(url, {
@@ -76,7 +121,7 @@ export async function sendPrivateReply(
       recipient: { comment_id: commentId },
       message: { text },
     }),
-  });
+  }, deadline);
   return readResult(res);
 }
 
@@ -145,7 +190,12 @@ export async function listMediaComments(token: string, mediaId: string): Promise
   return items;
 }
 
-export async function sendPublicReply(commentId: string, token: string, message: string): Promise<MetaCallResult> {
+export async function sendPublicReply(
+  commentId: string,
+  token: string,
+  message: string,
+  deadline?: number,
+): Promise<MetaCallResult> {
   const url = `${GRAPH}/${encodeURIComponent(commentId)}/replies`;
   const res = await fetchWithRetry(url, {
     method: 'POST',
@@ -154,7 +204,7 @@ export async function sendPublicReply(commentId: string, token: string, message:
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify({ message }),
-  });
+  }, deadline);
   return readResult(res);
 }
 

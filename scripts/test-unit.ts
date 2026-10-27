@@ -11,10 +11,18 @@ import {
 import { findConfigProblems } from '../src/config.ts';
 import { FREE_ATTEMPTS, lockRemaining, lockSecondsFor } from '../src/throttle.ts';
 import type { Env } from '../src/types.ts';
-import { META_CALL_MAX_MS, META_TIMEOUT_MS, authorizeUrl, oauthRedirectUri } from '../src/meta.ts';
+import {
+  META_CALL_MAX_MS,
+  META_MIN_ATTEMPT_MS,
+  META_TIMEOUT_MS,
+  attemptTimeoutMs,
+  authorizeUrl,
+  oauthRedirectUri,
+} from '../src/meta.ts';
 import { STALE_PENDING_SECONDS } from '../src/cron.ts';
 import { isSelfComment } from '../src/guard.ts';
-import { parseWebhookPayload } from '../src/process.ts';
+import { WEBHOOK_SEND_BUDGET_MS, parseWebhookPayload } from '../src/process.ts';
+import { POLL_BUDGET_MS } from '../src/reconcile.ts';
 import {
   EXCLUSION_TOO_SHORT_MESSAGE,
   KEYWORD_CACHE_MAX,
@@ -847,6 +855,40 @@ describe('stale pending sends', () => {
   it('waits far longer than the slowest possible send before calling a pending row abandoned', () => {
     const slowestSendMs = 2 * META_CALL_MAX_MS;
     assert.ok(STALE_PENDING_SECONDS * 1000 >= 10 * slowestSendMs, `${STALE_PENDING_SECONDS}s vs ${slowestSendMs}ms`);
+  });
+});
+
+describe('send time budget', () => {
+  const deadline = Date.UTC(2026, 9, 1, 12, 0, 25);
+
+  it('gives an attempt its usual timeout when no deadline is set or the deadline is far off', () => {
+    assert.equal(attemptTimeoutMs(undefined, deadline + 60_000), META_TIMEOUT_MS);
+    assert.equal(attemptTimeoutMs(deadline, deadline - 25_000), META_TIMEOUT_MS);
+    assert.equal(attemptTimeoutMs(deadline, deadline - META_TIMEOUT_MS), META_TIMEOUT_MS);
+  });
+
+  it('cuts an attempt down to the time left before the deadline', () => {
+    assert.equal(attemptTimeoutMs(deadline, deadline - META_TIMEOUT_MS + 1), META_TIMEOUT_MS - 1);
+    assert.equal(attemptTimeoutMs(deadline, deadline - 3_500), 3_500);
+    assert.equal(attemptTimeoutMs(deadline, deadline - META_MIN_ATTEMPT_MS), META_MIN_ATTEMPT_MS);
+  });
+
+  it('starts no attempt with less than the minimum left, or once the deadline has passed', () => {
+    assert.equal(attemptTimeoutMs(deadline, deadline - META_MIN_ATTEMPT_MS + 1), 0);
+    assert.equal(attemptTimeoutMs(deadline, deadline), 0);
+    assert.equal(attemptTimeoutMs(deadline, deadline + 5_000), 0);
+  });
+
+  it('ends a webhook\'s Meta calls with seconds to spare before Cloudflare stops waitUntil', () => {
+    const waitUntilLimitMs = 30_000;
+    assert.ok(waitUntilLimitMs - WEBHOOK_SEND_BUDGET_MS >= 5_000, `${WEBHOOK_SEND_BUDGET_MS}ms`);
+    // Enough for two full attempts and the backoff between them, so the
+    // budget only bites on a send that was already going badly.
+    assert.ok(WEBHOOK_SEND_BUDGET_MS > 2 * META_TIMEOUT_MS + 750, `${WEBHOOK_SEND_BUDGET_MS}ms`);
+  });
+
+  it('ends a sweep before the next one starts, even with one more Instagram read begun at its deadline', () => {
+    assert.ok(POLL_BUDGET_MS + META_CALL_MAX_MS < 5 * 60 * 1000, `${POLL_BUDGET_MS}ms`);
   });
 });
 
