@@ -1,7 +1,9 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it, vi } from 'vitest';
 import { insertWebhookEvent, tryClaimComment } from '../src/db.ts';
-import { POLL_BUDGET_MS, reconcileComments } from '../src/reconcile.ts';
+import { DRAIN_BUDGET_MS, drainQueue } from '../src/queue.ts';
+import { reconcileComments } from '../src/reconcile.ts';
+import { Subrequests } from '../src/subrequests.ts';
 import { FAKE_EXPIRES_IN, type MetaCall, meta } from './support/meta.ts';
 import {
   ACCESS_TOKEN,
@@ -19,7 +21,7 @@ import {
 } from './support/seed.ts';
 import { adminPath, commentPayload, commentValue, postWebhook, runScheduled, signedInAdmin } from './support/worker.ts';
 
-const POLL = '*/5 * * * *';
+const POLL = '* * * * *';
 const DAILY = '0 3 * * *';
 
 /** Instagram's own timestamp format, which has no colon in the offset. */
@@ -43,7 +45,7 @@ function commentsByMedia(byMedia: Record<string, unknown[] | { status: number }>
 const dmTargets = () =>
   meta.callsTo('POST', '/:id/messages').map((c) => (c.body as { recipient: { comment_id: string } }).recipient.comment_id);
 
-describe('the 5-minute comment poll', () => {
+describe('the comment poll, every fifth minute', () => {
   it('DMs matching comments the webhook missed, on scoped posts first, then recent ones', async () => {
     await seedAccount();
     await seedRule({ keywords: ['guide'], dmText: 'guide link' });
@@ -271,53 +273,63 @@ describe('the 5-minute comment poll', () => {
     expect(dmTargets()).toHaveLength(10);
   });
 
-  it('counts only the comments it claims towards the 10, not ones the webhook claimed first', async () => {
+  it('counts only the comments it queues towards the 10, not ones the webhook claimed first', async () => {
     await seedAccount();
     await seedRule();
-    // The webhook claims c0 to c9 after the sweep has checked each one and
-    // before the sweep tries to claim it. The DB below stands in for that
-    // timing: its "already handled?" check always answers no.
+    // The webhook claims c0 to c9 after the sweep has checked which comments
+    // it already has, and before the sweep writes their rows. The DB below
+    // stands in for that timing: its check always answers "none".
     for (let i = 0; i < 10; i++) {
       await tryClaimComment(env.DB, { comment_id: `c${i}`, ig_user_id: IG_USER, commenter_id: null, dm_status: 'ok', error: null, sent_at: NOW });
     }
     const racing = {
       prepare: (sql: string) =>
-        env.DB.prepare(sql.startsWith('SELECT COUNT(*) AS n FROM sent WHERE comment_id') ? 'SELECT 0 AS n, ? AS comment_id' : sql),
+        env.DB.prepare(sql.startsWith('SELECT comment_id FROM sent WHERE comment_id IN') ? 'SELECT comment_id FROM sent WHERE 0 AND ? IS NOT NULL' : sql),
       batch: (s: D1PreparedStatement[]) => env.DB.batch(s),
       exec: (sql: string) => env.DB.exec(sql),
     } as unknown as D1Database;
     meta.on('GET', '/me/media', { json: { data: [{ id: 'm1' }] } });
     meta.on('GET', '/:id/comments', commentsByMedia({ m1: Array.from({ length: 12 }, (_, i) => comment(`c${i}`, 'guide')) }));
 
-    await reconcileComments({ ...env, DB: racing });
+    await reconcileComments({ ...env, DB: racing }, new Subrequests());
+    await drainQueue(env, new Subrequests());
 
     expect(dmTargets()).toEqual(['c10', 'c11']);
   });
 
-  it('stops starting sends once the sweep has used its time, and leaves the rest unclaimed for the next sweep', async () => {
+  it('stops starting sends once the minute has used its time, and puts the rest back in the queue', async () => {
     await seedAccount();
     await seedRule();
     meta.on('GET', '/me/media', { json: { data: [{ id: 'm1' }] } });
-    meta.on('GET', '/:id/comments', commentsByMedia({ m1: [comment('c1', 'guide'), comment('c2', 'guide please'), comment('c3', 'guide?')] }));
-    // Stands in for a sweep slowed down by Instagram: the first DM leaves it a
-    // second short of its budget, too little to start another send.
+    meta.on(
+      'GET',
+      '/:id/comments',
+      commentsByMedia({ m1: [comment('c1', 'guide', { at: NOW - 300 }), comment('c2', 'guide please', { at: NOW - 200 }), comment('c3', 'guide?', { at: NOW - 100 })] }),
+    );
+    // Stands in for a minute slowed down by Instagram: the first DM leaves it
+    // a second short of its budget, too little to start another send.
     meta.on('POST', '/:id/messages', () => {
-      vi.setSystemTime(FROZEN_NOW_MS + POLL_BUDGET_MS - 1_000);
+      vi.setSystemTime(FROZEN_NOW_MS + DRAIN_BUDGET_MS - 1_000);
       return { json: { recipient_id: '1234567890', message_id: 'm1' } };
     });
 
     await runScheduled(POLL);
 
     expect(dmTargets()).toEqual(['c1']);
-    expect(await sentRows()).toEqual([expect.objectContaining({ comment_id: 'c1', dm_status: 'ok' })]);
+    expect((await sentRows()).map((r) => [r.comment_id, r.dm_status])).toEqual([
+      ['c1', 'ok'],
+      ['c2', 'queued'],
+      ['c3', 'queued'],
+    ]);
     expect(await systemValue('last_poll_ok_at')).not.toBeNull();
 
     meta.on('POST', '/:id/messages', { json: { recipient_id: '1234567890', message_id: 'm2' } });
     meta.clearCalls();
-    vi.setSystemTime(FROZEN_NOW_MS + 5 * 60 * 1000);
+    vi.setSystemTime(FROZEN_NOW_MS + 60 * 1000);
     await runScheduled(POLL);
 
     expect(dmTargets()).toEqual(['c2', 'c3']);
+    expect(meta.callsTo('GET', '/:id/comments')).toEqual([]);
   });
 
   it('does not refresh tokens or touch subscriptions', async () => {

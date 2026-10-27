@@ -314,8 +314,12 @@ export async function tryClaimComment(
     )
     .bind(row.comment_id, row.ig_user_id, row.commenter_id, row.dm_status, row.error, row.sent_at)
     .run();
+  return changedRows(result) > 0;
+}
+
+function changedRows(result: D1Result): number {
   const meta = result.meta as { changes?: number; rows_written?: number };
-  return (meta.changes ?? meta.rows_written ?? 0) > 0;
+  return meta.changes ?? meta.rows_written ?? 0;
 }
 
 export async function updateSent(
@@ -342,16 +346,58 @@ export async function updateSent(
  * that wrote the row, so that caller alone posts this rule's public reply.
  */
 export async function claimExtraReply(db: D1Database, row: ExtraReply): Promise<boolean> {
-  const result = await db
+  return changedRows(await extraReplyInsert(db, row).run()) > 0;
+}
+
+export function extraReplyInsert(db: D1Database, row: ExtraReply): D1PreparedStatement {
+  return db
     .prepare(
       `INSERT INTO sent_extra_replies (comment_id, rule_id, status, error, sent_at)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(comment_id, rule_id) DO NOTHING`,
     )
-    .bind(row.comment_id, row.rule_id, row.status, row.error, row.sent_at)
+    .bind(row.comment_id, row.rule_id, row.status, row.error, row.sent_at);
+}
+
+/** A comment's other rules still waiting for its DM, with each rule's reply as it is now. */
+export async function queuedExtraReplies(
+  db: D1Database,
+  commentId: string,
+): Promise<Array<{ rule_id: number; public_reply_text: string | null; active: number | null }>> {
+  const { results } = await db
+    .prepare(
+      `SELECT e.rule_id, r.public_reply_text, r.active
+       FROM sent_extra_replies e
+       LEFT JOIN rules r ON r.id = e.rule_id
+       WHERE e.comment_id = ? AND e.status = 'queued'
+       ORDER BY e.rowid`,
+    )
+    .bind(commentId)
+    .all<{ rule_id: number; public_reply_text: string | null; active: number | null }>();
+  return results ?? [];
+}
+
+/** Moves one waiting reply to `pending`; true only for the caller whose statement did. */
+export async function claimQueuedExtraReply(db: D1Database, commentId: string, ruleId: number, now: number): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE sent_extra_replies SET status = 'pending', sent_at = ?
+       WHERE comment_id = ? AND rule_id = ? AND status = 'queued'`,
+    )
+    .bind(now, commentId, ruleId)
     .run();
-  const meta = result.meta as { changes?: number; rows_written?: number };
-  return (meta.changes ?? meta.rows_written ?? 0) > 0;
+  return changedRows(result) > 0;
+}
+
+/** Settles every reply still waiting on a comment whose DM won't be confirmed. */
+export async function skipQueuedExtraReplies(db: D1Database, commentId: string, error: string, now: number): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE sent_extra_replies SET status = 'skipped', error = ?, sent_at = ?
+       WHERE comment_id = ? AND status = 'queued'`,
+    )
+    .bind(error, now, commentId)
+    .run();
 }
 
 export async function updateExtraReply(
@@ -392,20 +438,23 @@ export async function extraRepliesFor(
  * Fails `pending` rows claimed in [claimedFrom, claimedBefore). Only `pending`
  * is touched, so a send that does finish late still records its real outcome.
  * The lower bound keeps this a range read on idx_sent_time: rows older than
- * the last totals snapshot were already swept.
+ * the last totals snapshot were already swept. A row the queue claimed keeps
+ * the sent_at of when it was queued, so one whose lease hasn't run out is
+ * still being sent and is left alone.
  */
 export async function failStalePending(
   db: D1Database,
   claimedFrom: number,
   claimedBefore: number,
+  now: number,
   error: string,
 ): Promise<void> {
   await db
     .prepare(
       `UPDATE sent SET dm_status = 'failed', error = ?
-       WHERE dm_status = 'pending' AND sent_at >= ? AND sent_at < ?`,
+       WHERE dm_status = 'pending' AND sent_at >= ? AND sent_at < ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)`,
     )
-    .bind(error, claimedFrom, claimedBefore)
+    .bind(error, claimedFrom, claimedBefore, now)
     .run();
 }
 
@@ -413,7 +462,7 @@ export async function recentSent(db: D1Database, limit: number): Promise<(Sent &
   const { results } = await db
     .prepare(
       `SELECT s.comment_id, s.ig_user_id, s.rule_id, s.commenter_id, s.dm_status, s.reply_status,
-              s.error, s.sent_at, r.label AS rule_label
+              s.error, s.sent_at, s.attempts, s.next_attempt_at, s.comment_at, s.username, r.label AS rule_label
        FROM sent s
        LEFT JOIN rules r ON r.id = s.rule_id
        ORDER BY s.sent_at DESC, s.comment_id DESC
@@ -683,6 +732,16 @@ export async function pruneWebhookEvents(db: D1Database, olderThan: number): Pro
   await db.prepare('DELETE FROM webhook_events WHERE received_at < ?').bind(olderThan).run();
 }
 
+/** Which of these comments already have a row. */
+export async function knownComments(db: D1Database, commentIds: string[]): Promise<Set<string>> {
+  if (commentIds.length === 0) return new Set();
+  const { results } = await db
+    .prepare('SELECT comment_id FROM sent WHERE comment_id IN (SELECT value FROM json_each(?))')
+    .bind(JSON.stringify(commentIds))
+    .all<{ comment_id: string }>();
+  return new Set((results ?? []).map((r) => r.comment_id));
+}
+
 export async function countSentByComment(db: D1Database, commentId: string): Promise<number> {
   const row = await db
     .prepare('SELECT COUNT(*) AS n FROM sent WHERE comment_id = ?')
@@ -694,9 +753,287 @@ export async function countSentByComment(db: D1Database, commentId: string): Pro
 export async function getSent(db: D1Database, commentId: string): Promise<Sent | null> {
   return await db
     .prepare(
-      `SELECT comment_id, ig_user_id, rule_id, commenter_id, dm_status, reply_status, error, sent_at
+      `SELECT comment_id, ig_user_id, rule_id, commenter_id, dm_status, reply_status, error, sent_at,
+              attempts, next_attempt_at, comment_at, username
        FROM sent WHERE comment_id = ?`,
     )
     .bind(commentId)
     .first<Sent>();
+}
+
+// --- The send queue ----------------------------------------------------------
+
+// Repeated word for word wherever the queue is read: SQLite only uses a
+// partial index (idx_sent_queue) when the query's WHERE has the index's own
+// condition in it.
+const IN_QUEUE = "dm_status IN ('queued', 'retry')";
+
+/**
+ * A row its caller has just moved to `pending`, with what sending its DM
+ * needs: its rule's text as it is now, or nulls once the rule is deleted,
+ * and how many other rules' public replies wait for the DM.
+ */
+export type ClaimedSend = {
+  comment_id: string;
+  ig_user_id: string;
+  rule_id: number | null;
+  username: string | null;
+  comment_at: number | null;
+  dm_text: string | null;
+  public_reply_text: string | null;
+  rule_active: number | null;
+  extra_replies: number;
+};
+
+/**
+ * Writes the row for a comment a rule matched, unless the comment has one.
+ * As `pending`, the insert is the caller's claim: it holds a budget slot and
+ * sends now, before `leaseUntil`. As `queued`, it waits for the cron, in
+ * order of when the comment was made. Resolves true when this call wrote it.
+ */
+export async function insertSend(
+  db: D1Database,
+  row: {
+    comment_id: string;
+    ig_user_id: string;
+    commenter_id: string | null;
+    rule_id: number;
+    username: string | null;
+    comment_at: number;
+    dm_status: 'pending' | 'queued';
+    now: number;
+    leaseUntil: number;
+  },
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `INSERT INTO sent (comment_id, ig_user_id, rule_id, commenter_id, dm_status, reply_status, error, sent_at,
+                         attempts, next_attempt_at, comment_at, username)
+       VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 0, ?, ?, ?)
+       ON CONFLICT(comment_id) DO NOTHING`,
+    )
+    .bind(
+      row.comment_id,
+      row.ig_user_id,
+      row.rule_id,
+      row.commenter_id,
+      row.dm_status,
+      row.now,
+      row.dm_status === 'pending' ? row.leaseUntil : row.comment_at,
+      row.comment_at,
+      row.username,
+    )
+    .run();
+  return changedRows(result) > 0;
+}
+
+/** Records a matched comment that gets no DM, and why, unless the comment already has a row. */
+export async function insertSettled(
+  db: D1Database,
+  row: {
+    comment_id: string;
+    ig_user_id: string;
+    commenter_id: string | null;
+    rule_id: number | null;
+    dm_status: 'skipped' | 'failed';
+    reply_status: string | null;
+    error: string;
+    now: number;
+  },
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `INSERT INTO sent (comment_id, ig_user_id, rule_id, commenter_id, dm_status, reply_status, error, sent_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(comment_id) DO NOTHING`,
+    )
+    .bind(row.comment_id, row.ig_user_id, row.rule_id, row.commenter_id, row.dm_status, row.reply_status, row.error, row.now)
+    .run();
+  return changedRows(result) > 0;
+}
+
+/**
+ * Takes up to `want` of an account's DM calls in `minute` (minutes since the
+ * epoch), never more than `cap` in one minute, and none while Instagram has
+ * the account paused. Resolves how many it took. The window only moves
+ * forward, so a Worker whose clock is a moment behind can't reopen a minute
+ * that's already over. The read and the write are one batch, which D1 runs
+ * with no other write in between.
+ */
+export async function reserveSends(
+  db: D1Database,
+  igUserId: string,
+  minute: number,
+  want: number,
+  cap: number,
+  now: number,
+): Promise<number> {
+  if (want <= 0) return 0;
+  const [before, after] = await db.batch<{ minute: number; used: number }>([
+    db.prepare('SELECT minute, used FROM send_budget WHERE ig_user_id = ?').bind(igUserId),
+    db
+      .prepare(
+        `INSERT INTO send_budget (ig_user_id, minute, used) VALUES (?1, ?2, MIN(?3, ?4))
+         ON CONFLICT(ig_user_id) DO UPDATE SET
+           used = MIN(?4, CASE WHEN minute = excluded.minute THEN used ELSE 0 END + ?3),
+           minute = excluded.minute
+         WHERE paused_until <= ?5 AND (excluded.minute > minute OR (excluded.minute = minute AND used < ?4))
+         RETURNING minute, used`,
+      )
+      .bind(igUserId, minute, want, cap, now),
+  ]);
+  const taken = after?.results?.[0];
+  if (!taken) return 0;
+  const previous = before?.results?.[0];
+  return taken.used - (previous && previous.minute === minute ? previous.used : 0);
+}
+
+/** Gives back slots for DM calls that were never made, while their minute is still the account's current one. */
+export function refundSendsStatement(db: D1Database, igUserId: string, minute: number, n: number): D1PreparedStatement {
+  return db
+    .prepare('UPDATE send_budget SET used = MAX(0, used - ?) WHERE ig_user_id = ? AND minute = ?')
+    .bind(n, igUserId, minute);
+}
+
+/**
+ * Claims up to `limit` of an account's queued sends that are due, oldest
+ * comment first, and returns exactly the rows this statement moved to
+ * `pending`. One statement, so two Workers draining at once can never both
+ * get the same comment. The rules come back with the rows, saving the drain
+ * a query per account.
+ *
+ * sent_at moves only when a row reaches ok, failed or skipped, the states
+ * the totals count, so the claim and a release leave it, and its two
+ * indexes, alone. Each row's final write still moves it past the totals
+ * snapshot's cutoff, so nothing is counted twice or missed.
+ */
+export async function claimDueSends(
+  db: D1Database,
+  igUserId: string,
+  now: number,
+  limit: number,
+  leaseUntil: number,
+): Promise<ClaimedSend[]> {
+  if (limit <= 0) return [];
+  const { results } = await db
+    .prepare(
+      `UPDATE sent SET dm_status = 'pending', next_attempt_at = ?1
+       WHERE comment_id IN (
+         SELECT comment_id FROM sent
+         WHERE ig_user_id = ?3 AND ${IN_QUEUE} AND next_attempt_at <= ?2
+         ORDER BY next_attempt_at
+         LIMIT ?4
+       ) AND ${IN_QUEUE}
+       RETURNING comment_id, ig_user_id, rule_id, username, comment_at,
+                 (SELECT dm_text FROM rules WHERE rules.id = sent.rule_id) AS dm_text,
+                 (SELECT public_reply_text FROM rules WHERE rules.id = sent.rule_id) AS public_reply_text,
+                 (SELECT active FROM rules WHERE rules.id = sent.rule_id) AS rule_active,
+                 (SELECT COUNT(*) FROM sent_extra_replies e
+                  WHERE e.comment_id = sent.comment_id AND e.status = 'queued') AS extra_replies`,
+    )
+    .bind(leaseUntil, now, igUserId, limit)
+    .all<ClaimedSend>();
+  return (results ?? []).sort((a, b) => (a.comment_at ?? 0) - (b.comment_at ?? 0));
+}
+
+/**
+ * Writes how a claimed send ended. Only a row still `pending` is touched, so
+ * a send that outlived its lease leaves the lease's verdict in place.
+ */
+export async function recordSend(
+  db: D1Database,
+  commentId: string,
+  patch: {
+    dm_status: string;
+    reply_status: string | null;
+    error: string | null;
+    /** Whether the DM call was made, whatever Instagram answered. */
+    called: boolean;
+    next_attempt_at: number | null;
+    now: number;
+  },
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE sent SET dm_status = ?, reply_status = ?, error = ?, sent_at = ?, next_attempt_at = ?,
+                       attempts = attempts + ?
+       WHERE comment_id = ? AND dm_status = 'pending'`,
+    )
+    .bind(patch.dm_status, patch.reply_status, patch.error, patch.now, patch.next_attempt_at, patch.called ? 1 : 0, commentId)
+    .run();
+}
+
+/** Puts claimed sends whose DM was never started back in the queue, in their old place. */
+export function releaseSendsStatement(db: D1Database, commentIds: string[], now: number): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE sent SET dm_status = CASE WHEN attempts > 0 THEN 'retry' ELSE 'queued' END,
+                       next_attempt_at = COALESCE(comment_at, ?1)
+       WHERE comment_id IN (SELECT value FROM json_each(?2)) AND dm_status = 'pending'`,
+    )
+    .bind(now, JSON.stringify(commentIds));
+}
+
+/** An account as the drain sees it: its token, its budget this minute, and whether anything is due. */
+export type DrainAccount = Account & {
+  budget_minute: number | null;
+  budget_used: number | null;
+  paused_until: number | null;
+  due: number;
+};
+
+/**
+ * The drain's first step, in one batch: gives up on sends whose lease ran
+ * out (the Worker sending them was stopped, so the DM may have gone out and
+ * is never sent again), skips queued sends for comments made before
+ * `cutoff`, and those of paused accounts, which get no late replies, then
+ * lists the accounts.
+ *
+ * A queued row waits until its comment's own time, and a retry until later
+ * than that, so the expiry's range on idx_sent_queue holds every such row
+ * and nothing else. A retry whose comment is older than its next try is
+ * caught when it's claimed. The IN list has SQLite read that index one
+ * account at a time rather than all of it.
+ */
+export async function sweepQueue(
+  db: D1Database,
+  now: number,
+  cutoff: number,
+  errors: { lease: string; expired: string; paused: string },
+): Promise<DrainAccount[]> {
+  const results = await db.batch<DrainAccount>([
+    db
+      .prepare(
+        `UPDATE sent SET dm_status = 'failed', error = ?1, next_attempt_at = NULL, attempts = attempts + 1, sent_at = ?2
+         WHERE dm_status = 'pending' AND next_attempt_at <= ?2`,
+      )
+      .bind(errors.lease, now),
+    db
+      .prepare(
+        `UPDATE sent SET dm_status = 'skipped', error = ?1, next_attempt_at = NULL, sent_at = ?2
+         WHERE ig_user_id IN (SELECT ig_user_id FROM accounts) AND ${IN_QUEUE} AND next_attempt_at < ?3`,
+      )
+      .bind(errors.expired, now, cutoff),
+    db
+      .prepare(
+        `UPDATE sent SET dm_status = 'skipped', error = ?1, next_attempt_at = NULL, sent_at = ?2
+         WHERE ig_user_id IN (SELECT ig_user_id FROM accounts WHERE active <> 1) AND ${IN_QUEUE}`,
+      )
+      .bind(errors.paused, now),
+    db
+      .prepare(
+        `SELECT a.ig_user_id, a.username, a.access_token_enc, a.token_iv, a.token_expires_at,
+                a.active, a.connected_at, a.last_refreshed_at, a.needs_reconnect,
+                b.minute AS budget_minute, b.used AS budget_used, b.paused_until,
+                EXISTS (
+                  SELECT 1 FROM sent
+                  WHERE sent.ig_user_id = a.ig_user_id AND ${IN_QUEUE} AND next_attempt_at <= ?
+                ) AS due
+         FROM accounts a
+         LEFT JOIN send_budget b ON b.ig_user_id = a.ig_user_id
+         ORDER BY a.username COLLATE NOCASE`,
+      )
+      .bind(now),
+  ]);
+  return results[3]?.results ?? [];
 }

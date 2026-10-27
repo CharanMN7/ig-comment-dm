@@ -1,4 +1,5 @@
 import { jitteredDelayMs, sleep } from './crypto.ts';
+import type { Subrequests } from './subrequests.ts';
 
 export const GRAPH_VERSION = 'v23.0';
 export const GRAPH = `https://graph.instagram.com/${GRAPH_VERSION}`;
@@ -61,13 +62,17 @@ export function hasTimeForCall(deadline: number): boolean {
 
 /**
  * For reads and the other calls that are safe to repeat. Never for a DM or a
- * public reply: those go through sendOnce.
+ * public reply: those go through sendOnce. With `subrequests`, each attempt
+ * spends one, and none is made once they run out.
  */
-async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+async function fetchWithRetry(url: string, init: RequestInit, subrequests?: Subrequests): Promise<Response> {
   let lastRes: Response | undefined;
   let lastErr: unknown;
+  let tries = 0;
   for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    if (subrequests && !subrequests.take(1)) break;
     if (attempt > 0) await sleep(jitteredDelayMs(BACKOFF_BASE_MS * 2 ** (attempt - 1)));
+    tries++;
     try {
       const res = await fetch(url, { ...init, signal: AbortSignal.timeout(META_TIMEOUT_MS) });
       if (res.status === 429 || res.status >= 500) {
@@ -80,8 +85,9 @@ async function fetchWithRetry(url: string, init: RequestInit): Promise<Response>
     }
   }
   if (lastRes) return lastRes;
+  if (tries === 0) throw new Error('no subrequests were left in this run to contact Instagram');
   const detail = lastErr instanceof Error ? lastErr.message : String(lastErr);
-  throw new Error(`could not reach Instagram after ${ATTEMPTS} tries (${detail})`);
+  throw new Error(`could not reach Instagram after ${tries} ${tries === 1 ? 'try' : 'tries'} (${detail})`);
 }
 
 async function readResult(res: Response): Promise<MetaCallResult> {
@@ -194,7 +200,7 @@ export type IgComment = {
 };
 
 /** One page of newest comments. Used by the 5-minute poll when webhooks miss. */
-export async function listMediaComments(token: string, mediaId: string): Promise<IgComment[]> {
+export async function listMediaComments(token: string, mediaId: string, subrequests?: Subrequests): Promise<IgComment[]> {
   const url = new URL(`${GRAPH}/${encodeURIComponent(mediaId)}/comments`);
   url.searchParams.set('fields', 'id,text,timestamp,from');
   url.searchParams.set('order', 'reverse_chronological');
@@ -202,7 +208,7 @@ export async function listMediaComments(token: string, mediaId: string): Promise
   const res = await fetchWithRetry(url.toString(), {
     method: 'GET',
     headers: { Authorization: `Bearer ${token}` },
-  });
+  }, subrequests);
   const text = await res.text();
   let json: {
     data?: Array<{
@@ -363,14 +369,14 @@ export type IgMediaItem = {
   kind: 'reel' | 'post';
 };
 
-export async function listRecentMedia(token: string): Promise<IgMediaItem[]> {
+export async function listRecentMedia(token: string, subrequests?: Subrequests): Promise<IgMediaItem[]> {
   const url = new URL(`${GRAPH}/me/media`);
   url.searchParams.set('fields', 'id,caption,permalink,media_type,media_product_type');
   url.searchParams.set('limit', '25');
   const res = await fetchWithRetry(url.toString(), {
     method: 'GET',
     headers: { Authorization: `Bearer ${token}` },
-  });
+  }, subrequests);
   const text = await res.text();
   let json: {
     data?: Array<{

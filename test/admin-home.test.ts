@@ -24,9 +24,10 @@ describe('the admin home page', () => {
 
   it("counts today's sends, skips, failures and people reached from real webhooks", async () => {
     await seedAccount();
-    await seedRule({ keywords: ['guide'] });
+    await seedRule({ keywords: ['guide'], excludeKeywords: ['price'] });
     await postWebhook(commentPayload({ commentId: 'ok-1', text: 'guide' }));
-    await postWebhook(commentPayload({ commentId: 'skip-1', text: 'hello' }));
+    await postWebhook(commentPayload({ commentId: 'skip-1', text: 'guide price?' }));
+    await postWebhook(commentPayload({ commentId: 'no-rule', text: 'hello' }));
     meta.on('POST', '/:id/messages', { status: 400, json: { error: { message: 'nope' } } });
     await postWebhook(commentPayload({ commentId: 'fail-1', text: 'guide' }));
 

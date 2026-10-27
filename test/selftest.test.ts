@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { meta } from './support/meta.ts';
 import { accountRow, seedAccount, seedRule, sentRows, webhookEvents } from './support/seed.ts';
 import { adminPath, commentPayload, postWebhook, signedInAdmin } from './support/worker.ts';
 
@@ -13,10 +14,11 @@ describe('the endpoints scripts/selftest.ts drives', () => {
     await admin.get(adminPath('/'));
 
     expect((await admin.submit(adminPath('/selftest/seed'))).status).toBe(200);
-    await postWebhook(commentPayload({ igUserId: SELFTEST_USER, commentId: 'selftest-1', fromId: 'someone_else' }));
+    await postWebhook(commentPayload({ igUserId: SELFTEST_USER, commentId: 'selftest-1', fromId: 'someone_else', text: 'hello there' }));
     await postWebhook({ object: 'instagram', entry: [{ id: SELFTEST_USER }] }, { secret: 'wrong' });
     expect(await accountRow(SELFTEST_USER)).not.toBeNull();
     expect((await sentRows()).map((r) => r.comment_id).sort()).toEqual(['real-1', 'selftest-1']);
+    expect(meta.callsTo('POST', '/:id/messages')).toHaveLength(1);
 
     const res = await admin.submit(adminPath('/selftest/cleanup'));
 

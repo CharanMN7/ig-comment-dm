@@ -1,8 +1,7 @@
 import { Hono } from 'hono';
-import { runCron } from './cron.ts';
+import { MINUTE_CRONS, runCron, runMinute } from './cron.ts';
 import { securityHeaders } from './headers.ts';
 import { ICON_SVG } from './icons.ts';
-import { reconcileComments } from './reconcile.ts';
 import { adminRoutes } from './routes/admin.ts';
 import { connectRoutes } from './routes/connect.ts';
 import { healthRoutes } from './routes/health.ts';
@@ -34,8 +33,8 @@ app.route('/a/:secret', adminRoutes);
 export default {
   fetch: app.fetch,
   async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
-    if (event.cron === '*/5 * * * *') {
-      await reconcileComments(env);
+    if (MINUTE_CRONS.includes(event.cron)) {
+      await runMinute(env, event.scheduledTime);
       return;
     }
     await runCron(env);

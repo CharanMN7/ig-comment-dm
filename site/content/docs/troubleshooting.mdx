@@ -18,13 +18,13 @@ Most confusing symptoms make sense once you know there are two.
 
 | | The webhook | The poll |
 |---|---|---|
-| Speed | About two seconds | Up to five minutes |
+| Speed | About two seconds, or a minute or more when queued | Up to five minutes |
 | How it starts | Meta POSTs to `/webhook` | The Worker asks Instagram for recent comments |
 | Needs the app to be Live | Yes | **No** |
 | Sees Hidden Words comments | No | No |
 | Covers old posts | Yes | Only the 3 most recent posts, last 72 hours |
 
-They share the same rule matching and the same duplicate protection, so a comment is never answered twice, whichever path finds it first.
+They share the same rule matching, the same send queue and the same duplicate protection, so a comment is never answered twice, whichever path finds it first.
 
 That explains the two most common confusing reports:
 
@@ -91,6 +91,8 @@ Meta notifies you about your own comments on your own posts. Acting on them woul
 Instagram refuses a private reply to a comment older than seven days. Those are logged as skipped, with the reason.
 
 ### 7. No rule matched
+
+A comment no rule matches isn't listed under **Last 20 sends** at all.
 
 **Confirm:** admin → **Test**, paste the exact comment text, and see which rule lights up. This sends nothing.
 
@@ -275,9 +277,17 @@ Common DM failures:
 | a closed messaging window | The comment is older than 7 days |
 | the reply was already sent | Instagram allows one private reply per comment, ever |
 | permissions or scope | The token predates a scope change: click **Reconnect** |
-| rate limit | You're near Meta's cap of 750 private replies per hour |
+| rate limit | Meta's cap on private replies; the Worker keeps under it, so this means another app is sending from the same account too |
 
 If the DM says it succeeded but the recipient sees nothing, have them check **Message requests**. Instagram files DMs there when the recipient doesn't follow you.
+
+## Sends say Queued
+
+The account has made its 12 DM calls for this minute, Instagram's hourly limit spread evenly, and the comment is waiting its turn. Nothing needs doing: every minute, the Worker sends the oldest waiting comments first, about 700 an hour for one account, fewer each when several have DMs waiting. If it has said **Queued** for more than a few minutes on a quiet account, check that the minute trigger is registered (see [the daily check hasn't run](#red-banner-the-daily-check-hasnt-run)) and that the account isn't paused.
+
+**Expired** means a comment waited until an hour before Instagram's 7-day limit and was given up on, without calling Instagram.
+
+"The Worker stopped before this send finished, so it may have been delivered" means a send was cut off, by a deploy or Cloudflare stopping the Worker. Within 2 minutes it's recorded and never sent again, since the DM may already have arrived.
 
 ## Red banner: an account needs reconnecting
 
@@ -303,7 +313,7 @@ npx wrangler deployments list
 
 ```toml
 [triggers]
-crons = ["0 3 * * *", "*/5 * * * *"]
+crons = ["0 3 * * *", "* * * * *"]
 ```
 
 If it does, redeploy. Cron triggers are registered at deploy time, and a deploy from an older config can drop them.
@@ -336,7 +346,7 @@ To run it right now, click **Check connections now** on the admin Home page, or 
 |---|---|---|
 | `"database": "error"` | The Worker couldn't read D1, or the tables are missing. | Run `npm run db:migrate`. If the tables exist, check [Cloudflare's status page](https://www.cloudflarestatus.com) and `npx wrangler tail`. |
 | `"cron": "stale"` | The nightly token refresh hasn't succeeded in over 3 days, or hasn't run at all in the 26 hours since `/health` was first checked. | See [the daily check hasn't run](#red-banner-the-daily-check-hasnt-run). |
-| `"poll": "stale"` | The 5-minute comment poll hasn't finished in over an hour. | Usually the cron triggers were dropped. Redeploy with `npx wrangler deploy`. |
+| `"poll": "stale"` | The comment poll, which runs every fifth minute, hasn't finished in over an hour. | Usually the cron triggers were dropped. Redeploy with `npx wrangler deploy`. |
 
 `"starting"` means a job hasn't run yet on a new deploy. It counts as healthy, but only until the job is overdue: a day and two hours for the nightly refresh, an hour for the poll. Press **Check connections now** on Home to run the nightly job straight away.
 
