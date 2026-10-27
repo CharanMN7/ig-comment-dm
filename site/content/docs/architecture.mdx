@@ -1,0 +1,188 @@
+---
+description: Stack, Meta's constraints, routes, the processing pipeline, cron jobs, crypto, admin auth, and the places the code deliberately departs from the original spec.
+---
+
+One deployment serves one person. Each operator has their own Cloudflare account, Worker, D1 database and Meta app. There's no signup, no multi-user model and no billing. A deployment can manage several Instagram accounts, and they all belong to the same person, who uses the admin panel and never needs to see the code.
+
+The Meta app must be **Live** (published) for real comment webhooks; in Development, Meta only delivers the dashboard's Test button. Tester accounts can usually go Live without App Review.
+
+## Stack
+
+- Cloudflare Workers, TypeScript, ESM.
+- Hono with the default Workers export (`fetch` and `scheduled`), not `hono/vercel`. Hono runs with `{ strict: false }`, so `/a/:secret` and `/a/:secret/` both work.
+- D1 through the `DB` binding, with raw parameterised SQL (`.prepare().bind()`) and no ORM.
+- Schema in numbered [`migrations/*.sql`](https://github.com/CharanMN7/ig-comment-dm/tree/master/migrations) files, applied in order by Wrangler's tracked runner (`wrangler d1 migrations apply`), which records each one in `d1_migrations` and never runs it again. `npm run deploy` applies them before deploying.
+- Server-rendered HTML through `hono/html`. No React, no Tailwind, no bundler, no client framework, and one `<style>` block in the layout.
+- One runtime dependency, `hono`. `wrangler`, `typescript` and `@cloudflare/workers-types` are dev dependencies.
+- `nodejs_compat` is off and nothing imports `node:crypto`.
+
+## What happens to a comment
+
+1. Meta POSTs a signed webhook when someone comments on a connected account's post. In Development this usually never happens, except for the Test button.
+2. After Connect, and again on Home and in the daily cron, the Worker POSTs `/{ig_user_id}/subscribed_apps` with JSON `{ subscribed_fields: ["comments"] }`. The Meta dashboard's **Generate access tokens → Webhook subscription** toggle must also be **On** for each Instagram account.
+3. The Worker verifies the signature against both app secrets, logs a `webhook_events` row, routes on `entry.id` to an account, and matches the comment text against that account's rules.
+4. On a match it sends **one** DM through Private Replies (`recipient.comment_id`, not the commenter's user ID), and optionally a public reply on the comment.
+5. A 5-minute cron polls recent comments on recent media (and on media that rules are scoped to) and reuses the same send path. That covers missed webhooks and Development mode.
+6. Everything is logged. The operator manages accounts and rules at `/a/:secret`. The legal pages at `/privacy`, `/terms` and `/data-deletion` exist so Meta will allow the app to be published.
+
+Follow-up DMs are out of scope. They need the person to reply first (a 24-hour window) or App Review for the 7-day human-agent extension. One DM, with everything in it.
+
+## Meta's hard constraints
+
+- **Self-comment guard.** Never act when `from.id === account.ig_user_id`: webhooks include the operator's own comments. `isSelfComment` in `src/guard.ts` runs before any send or dedupe work, after the account lookup, and is unit-tested in `scripts/test-unit.ts`.
+- **One private reply per comment, ever.** Meta rejects a second attempt; the Worker deduplicates anyway.
+- **At-least-once delivery.** Duplicate POSTs are normal. Dedupe is `INSERT … ON CONFLICT DO NOTHING` on `sent.comment_id`; if `meta.changes` is 0, stop. The Worker claims a `pending` row first, then `UPDATE`s the outcome. Never SELECT-then-INSERT.
+- **Private replies only work on comments up to 7 days old.** Older ones are skipped without calling Meta.
+- **Verify every POST** against `X-Hub-Signature-256` using the **raw body text**, before `JSON.parse`; re-serialising breaks the HMAC. Either app secret is accepted. A mismatch gets a 401 and still inserts a `webhook_events` row, so Home isn't silent. A POST with no signature header is never Meta, so it's logged as `unsigned` and can't raise Home's "signing secret did not match" banner, which goes by the newest signed delivery.
+- **Long-lived tokens expire in 60 days**, and an unrefreshed token dies permanently. A refresh needs the token to be at least 24 hours old and not yet expired.
+- **About 200 calls per account per hour.** No tight retry loops: 5xx and 429 get exponential backoff, 3 attempts, jittered. Each attempt times out after 10 seconds, and a timeout is retried like any network failure. Other 4xx responses are never retried, and the body is logged verbatim. A send has a deadline (see the pipeline below): an attempt never runs past it, and a retry that wouldn't get at least 2 seconds before it isn't started.
+
+## Routes
+
+| Method | Path | Role |
+|---|---|---|
+| GET | `/` | `ok`, a deploy smoke check |
+| GET, HEAD | `/health` | For uptime monitors. No auth, `no-store`, `noindex`. One D1 read: account counts and the two job timestamps. `200` healthy, `503` if D1 fails or a job is stale. No IDs, usernames or secrets. |
+| GET | `/privacy`, `/terms`, `/data-deletion` | Static HTML for Meta's Publish step |
+| GET | `/webhook` | Meta's verify handshake. The right `hub.verify_token` echoes `hub.challenge`; a wrong one gets 403. |
+| POST | `/webhook` | Verify the signature (either secret), log the event, return **200 immediately**, process in `waitUntil` |
+| GET | `/connect` | Logged-in admin session required, else a plain `403` page. Checklist with the exact OAuth redirect URIs and Instagram App ID, then continue. Passes `?reconnect=1` through. |
+| GET | `/connect/start` | Logged-in admin session required, else `403`. Sets a signed, 10-minute `state` and a matching `igcdm_connect` cookie, then 302 to Instagram Business Login (`force_reauth` when `?reconnect=1`). |
+| GET | `/connect/callback` | Requires a valid, unexpired `state` and the `igcdm_connect` cookie that matches it, before any call to Instagram. Code → short-lived token → long-lived token, fetch `user_id` and `username`, encrypt, **upsert** the account. |
+| GET, HEAD | `/a/:secret/manifest.webmanifest`, `/a/:secret/icon.svg`, `/a/:secret/icon-192.png`, `/a/:secret/icon-512.png` | The web app manifest and home-screen icons. No login, because browsers fetch them without cookies; a wrong secret still gets 404, and they're `no-store`. Mounted ahead of the admin routes so the login middleware never sees these four GETs. |
+| GET/POST | `/a/:secret/*` | Admin. `:secret` is `ADMIN_URL_SECRET` (32 characters). A wrong secret gets 404. |
+
+Admin pages, with a password and CSRF on every POST: `/` (dashboard), `/logs` (every `sent` row, keyset-paginated on `sent_at` then `comment_id`, with its filters in the query string), `/rules`, `/rules/:id/delete` (a confirmation page, then a POST), `/test` (a dry run that sends nothing, choosing the rule through the same `chooseRule` as the pipeline), `/accounts`, the first-run `/setup`, `/login`, `/logout` and `POST /run-cron`.
+
+Two unlisted, session-gated endpoints are used by `scripts/selftest.ts`: `POST /a/:secret/selftest/seed` and `GET /a/:secret/selftest/status`.
+
+## Processing pipeline
+
+For each comment change. Only `field === "comments"` is handled. Instagram Login sometimes puts `field` and `value` on the entry instead of in `changes[]`, and both shapes are handled. Oversized numeric IDs in the JSON are quoted before `JSON.parse`, so they aren't rounded.
+
+1. Look up the account by `entry.id`. Unknown or inactive: drop silently.
+2. Self-comment guard. Stop, with no `sent` row.
+3. Age check. Older than 7 days: claim the `sent` row as `skipped` and stop.
+4. Atomic claim: `INSERT INTO sent … ON CONFLICT DO NOTHING`. `changes === 0` means it's already handled: stop. If less than 2 seconds of the send deadline is left, stop before claiming, so the comment stays open to the 5-minute poll.
+5. Active rules, oldest first (`chooseRule` in `src/process.ts`, which calls `matchComment` in `src/match.ts`; the 5-minute sweep calls `matchComment` too). A rule with `media_id` set applies to that post only; `NULL` applies to all posts. The order is keyword rules for this post, keyword rules for all posts, then `match_all` rules for this post (no keyword; every comment matches). A `match_all` rule without `media_id` is refused by the admin form and skipped by the matcher. The first match wins. A rule whose `exclude_keywords` also match is passed over and matching continues, so exclusions are per rule. If nothing fires because of an exclusion, the `sent` row is `skipped`, with the `rule_id` of the first rule passed over and `Skipped: matched exclusion “…”` as the error.
+6. Normalise the comment: fold accents, lowercase, strip emoji, punctuation and symbols, collapse whitespace.
+7. Apply the rule's `match_mode`. `word` (the default) matches each keyword on Unicode letter and digit boundaries, with regex metacharacters escaped; scripts written without spaces (Han, Hiragana, Katakana, Thai, Lao, Khmer, Myanmar) don't count as a boundary. `contains` is a substring test on the normalised text. Both normalise the keyword the same way, once per isolate. Keywords under 3 characters after normalising (2 when every character is Han, Hiragana or Katakana), or with no letter or digit, are rejected when a rule is **saved**, not here.
+8. Decrypt the token.
+9. `POST https://graph.instagram.com/v23.0/{ig_user_id}/messages` with `{ recipient: { comment_id }, message: { text } }`. `{username}` in the DM and public reply becomes `from.username` (`src/placeholders.ts`). With no username, the token is removed along with the space or comma touching it, and nothing else in the text moves.
+10. If the rule has `public_reply_text` and the DM went through, `POST /{comment-id}/replies`. The column holds one reply as plain text, or two or more as a JSON array of strings (`src/replies.ts`), and one is picked per send with `crypto.getRandomValues`. Any stored value that isn't a JSON array of non-empty strings, such as a multi-line reply from before variations, is one reply and is sent whole. If the DM failed, the public reply isn't posted and `reply_status` is `skipped`: "Sent you a DM!" would be false.
+11. `UPDATE sent` with both outcomes: `ok`, `failed` or `skipped`. A send that never reaches Meta (a network failure or timeout on every retry) is `failed`, never left `pending`. If the Worker is stopped mid-send, the daily job marks the row `failed` once it has been `pending` for 15 minutes, and never sends it again, because the DM may have gone out.
+
+Every Meta call in steps 9 and 10 ends by a deadline, so step 11 always runs. The webhook sets it 25 seconds after it starts processing a delivery, shared by every comment in that delivery: Cloudflare stops `waitUntil` 30 seconds after the response, and one call with its retries can take about 32 seconds. Each attempt's timeout is the smaller of its usual 10 seconds and the time left. If the DM leaves less than 2 seconds, the public reply isn't attempted and `reply_status` is `failed`, with an error saying there was no time left to post it.
+
+## Cron jobs
+
+Cloudflare cron has **no retries**. A missed tick is gone.
+
+**Token refresh, `0 3 * * *`:**
+
+1. Select accounts with `token_expires_at < now + 10 days`, which gives about ten chances if a run is missed. Paused accounts are included: pausing stops DMs, not token upkeep.
+2. Skip tokens younger than 24 hours (by `last_refreshed_at`, or `connected_at`).
+3. `GET https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=…`
+4. On success: re-encrypt, update `token_expires_at` and `last_refreshed_at`, clear `needs_reconnect`.
+5. On failure with under 14 days left: set `needs_reconnect`. The admin panel shows a red banner with Reconnect, which goes to `/connect`.
+6. On a clean run, whether or not there was work, write `last_cron_ok_at`. The admin panel shows a banner if it's more than 72 hours old, or if the job has never run 26 hours after the deployment was first seen (`health_first_seen_at`, the clock `/health` uses). Until then, Home says the first run is still on its way.
+
+It's idempotent: running it five times a day is harmless.
+
+Before refreshing, the daily job marks `sent` rows that are still `pending` 15 minutes after their claim as `failed` ("The Worker stopped before this send finished…"). A send takes at most about 65 seconds (25 from a webhook), so such a row belongs to a Worker that was stopped mid-send. This runs daily rather than in the poll because it's a full scan of `sent`, which grows by a row per comment and has no index on `dm_status`.
+
+**Comment poll, `*/5 * * * *`:** `src/reconcile.ts` lists a few recent media per active account, fetches the newest comments, and calls `processComment` for comments a rule matches or excludes that aren't already in `sent`. The caps are 3 media per account, the 25 newest comments per media, 10 processed comments per sweep (across all accounts) and a 72-hour lookback. CPU on the free plan is tight, so keep them. The poll runs in the scheduled handler, which Cloudflare allows 15 minutes rather than `waitUntil`'s 30 seconds, so its sends keep their full retries. It stops starting sends 4 minutes in, which ends a slow sweep before the next one begins and well inside those 15 minutes. Comments it doesn't reach stay unclaimed for the next sweep. A `match_all` rule added to an older post therefore also answers that post's unhandled comments from the last 72 hours, 10 per sweep; the rule form says so.
+
+## Crypto
+
+Web Crypto only.
+
+- All randomness comes from `crypto.getRandomValues`, never `Math.random`.
+- **Webhook signatures** (`X-Hub-Signature-256`): `crypto.subtle.importKey` and `crypto.subtle.verify` (HMAC-SHA256). Verify; don't sign and compare with `===`. `FACEBOOK_APP_SECRET` (App settings → Basic) is tried first, then `META_APP_SECRET` (the Instagram App Secret), because Meta often signs with the Facebook one.
+- **Token encryption**: AES-256-GCM with a random 96-bit IV per encryption. The IV is stored in `accounts.token_iv` and the ciphertext in `accounts.access_token_enc`. The key is `TOKEN_ENCRYPTION_KEY`, 32 random bytes in base64.
+- **Password hashing**: PBKDF2-HMAC-SHA256 through `crypto.subtle.deriveBits`, **12,000** iterations, with a 16-byte random salt. Hash and salt live in the `system` table. (The original spec asked for 600,000 iterations, which exceeds free-plan CPU and returns a 500 on the first password save.)
+- **Session cookie**: HMAC-signed, `HttpOnly`, `SameSite=Strict`, 30-day expiry. The CSRF token lives inside the session, and every mutating admin POST must send it.
+
+## Admin auth
+
+The panel is mounted at `/a/:secret`. The unguessable URL is one layer, not the whole of the auth.
+
+- First visit: create a password (PBKDF2). There's no email reset; recovery is deleting `admin_password_hash` and `admin_password_salt` with `wrangler d1 execute` (see [Troubleshooting](/troubleshooting#forgotten-password)).
+- A signed session cookie lasts 30 days.
+- CSRF protection on every mutating form, including logout.
+- Connect needs the same logged-in session. The session cookie is `SameSite=Strict`, so the browser leaves it off Instagram's cross-site redirect to `/connect/callback`. `/connect/start` checks the session instead, then issues a signed `state` (10-minute expiry) and an `igcdm_connect` cookie (`HttpOnly`, `SameSite=Lax`, `Path=/connect`) holding an HMAC of the state's nonce. The callback refuses unless both verify, and clears the cookie. Neither the refusal page nor the callback's error pages link to the admin path.
+- The keyword-save error is exactly: `Keywords need at least 3 characters, or 2 in Chinese and Japanese. Shorter ones match inside other words — 'AI' would fire on 'again' and 'email'.`
+- Admin pages, login and setup included, link the manifest, so the panel installs to a phone's home screen. Public pages never do, because the manifest's URL contains the secret. The CSP allows `manifest-src 'self'` and `img-src 'self'` for this, since Chrome checks the manifest and its icons against them. There's no service worker. The PNG icons are base64 in `src/icons.ts`, drawn by `npm run icons` (`scripts/icons.ts`).
+- The DM text field has `maxlength="1000"` and a static hint (no client JavaScript runs under the CSP). The server rejects anything longer and says how long the text was. Line breaks count as one character on both sides, though browsers submit them as CRLF. Each `{username}` counts as 30 characters, Instagram's longest username, so a rule that saves always fits once the name is in. The public reply has the same 1,000-character limit.
+
+## Tests
+
+`scripts/test-unit.ts` covers the guard, matching and HMAC verification with no network. `test/*.test.ts` runs the real Worker in workerd against a fresh local D1 for each test, with every Meta host faked (`npm run test:integration`). `npm test` runs both.
+
+`scripts/selftest.ts` drives a deployed Worker or a `wrangler dev` URL. Its live checks: the handshake returns 200, a wrong verify token gets 403, a bad signature gets 401, a synthetic comment creates one `sent` row, a duplicate delivery still leaves one row, a self-comment creates no row, the admin login page loads and rejects a wrong password, and the cron writes `last_cron_ok_at`. [Contributing](/contributing#tests) has the commands.
+
+## Reference
+
+### Bindings and secrets
+
+Every name the Worker reads, as `env.*` or `c.env.*` (from `Env` in `src/types.ts`):
+
+| Name | Kind |
+|---|---|
+| `DB` | D1 binding |
+| `META_APP_ID` | Worker secret |
+| `META_APP_SECRET` | Worker secret |
+| `FACEBOOK_APP_SECRET` | Worker secret. Optional in the type so an existing deployment still boots, but live comment POSTs usually fail with 401 until it's set. |
+| `WEBHOOK_VERIFY_TOKEN` | Worker secret |
+| `TOKEN_ENCRYPTION_KEY` | Worker secret |
+| `ADMIN_URL_SECRET` | Worker secret |
+| `SESSION_SIGNING_KEY` | Worker secret |
+| `PUBLIC_BASE_URL` | Worker secret |
+
+Never put these in `wrangler.toml`. Local copies go in `.dev.vars`, which is gitignored; see `.dev.vars.example`. Where each value comes from is in the [self-setup guide](/setup#where-every-secret-comes-from), and what leaking each one costs is in [Security](/security).
+
+### Keys in the `system` table
+
+Not Worker environment:
+
+| Key | What |
+|---|---|
+| `last_cron_ok_at` | When the daily job last finished cleanly |
+| `last_poll_ok_at` | When the 5-minute poll last finished |
+| `health_first_seen_at` | When `/health` was first checked, the start of its grace period for jobs that haven't run yet |
+| `admin_password_hash`, `admin_password_salt` | The admin password |
+| `login_fail_count`, `login_locked_until` | Login rate limiting |
+
+### Selftest environment
+
+Read by `scripts/selftest.ts` only:
+
+| Variable | |
+|---|---|
+| `BASE_URL` | Optional; otherwise the first argument, or `http://localhost:8787` |
+| `WEBHOOK_VERIFY_TOKEN` | |
+| `META_APP_SECRET` | |
+| `ADMIN_URL_SECRET` | |
+| `ADMIN_PASSWORD` | Optional; defaults to `selftest-password-change-me` |
+
+### Graph API version
+
+`GRAPH_VERSION = 'v23.0'` in `src/meta.ts`, as originally specified. Meta's current docs show v26.0; bump the constant if calls start failing.
+
+## Deliberate departures from the original spec
+
+- An `accounts.needs_reconnect` column, which the cron and the reconnect banner need.
+- `001` and `002` use only `CREATE … IF NOT EXISTS`. Deployments from before migration tracking applied them by hand, so the first tracked run replays both, and that replay changes nothing.
+- A transient `dm_status = 'pending'` on the claim row, updated with the outcome.
+- Graph API version kept at **v23.0**.
+- Instagram Login's flattened webhook shape (`field` and `value` on the entry) is handled.
+- Hono `{ strict: false }`.
+- No `[limits] cpu_ms` in `wrangler.toml`: it's for paid Workers only, and a Free-plan deploy rejects it.
+- PBKDF2 at **12,000** iterations instead of 600,000, so first-time password setup fits free-plan CPU.
+- The unlisted selftest admin endpoints.
+- First-run password setup; there's no `ADMIN_PASSWORD` Worker secret.
+- The OAuth `redirect_uri` is built from the request host (`/connect/callback`), HTTPS except on localhost, not from `PUBLIC_BASE_URL`. Accounts and `/connect` show that URI plus a trailing-slash variant for Meta's dashboard, and `/connect/start` sends the no-slash URI, the same string the token exchange uses.
+- `FACEBOOK_APP_SECRET` as well as the Instagram `META_APP_SECRET` for webhook HMAC.
+- The `webhook_events` table and the 5-minute comment poll.
+
+The original Phase 1 contract (schema, secrets, bindings and CLI commands as first specified) is kept in git history: [docs/phase-1.md at ace7ae9](https://github.com/CharanMN7/ig-comment-dm/blob/ace7ae9/docs/phase-1.md).

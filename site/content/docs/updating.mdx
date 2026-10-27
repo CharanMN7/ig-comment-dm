@@ -1,0 +1,135 @@
+---
+description: One command pulls the latest version into your copy, applies any database changes and deploys it. Your secrets and data stay in Cloudflare and aren't touched.
+---
+
+Meta renames dashboard screens, retires OAuth hosts and changes how it signs webhooks often enough that you'll want fixes from upstream. Nothing in the code differs between deployments: your per-copy values are Cloudflare secrets and rows in your D1 database, and neither lives in the repository. Updating is pulling code and deploying it, and one command does both:
+
+```bash
+npm run update
+```
+
+Note the `run`: plain `npm update` is npm's own command, which upgrades dependencies instead.
+
+In order, it:
+
+1. Stops if you have edits that aren't saved in git, and says how to save or drop them. The D1 `database_id` line Wrangler may have written into `wrangler.toml` is the exception: it's kept as it is.
+2. Adds a remote called `upstream` for `CharanMN7/ig-comment-dm` if you don't have one. It never touches `origin`.
+3. Fetches the latest version and lists what's new: how many changes, with their titles. New files in `migrations/` are called out, because they change your database.
+4. Asks before going further. `--yes` skips the question.
+5. Merges `upstream/master` into your branch: a fast-forward when you have no commits of your own, a merge commit when you do. If your own edits clash with the new version, it backs the merge out, leaves your files exactly as they were, and lists the files with two ways to fix it.
+6. Runs `npm install`, then `npm run deploy`, which applies new migrations before the new code goes live, and then checks your Worker's `/health`.
+
+To see what it would do without changing anything:
+
+```bash
+npm run update -- --dry-run
+```
+
+What's different depends on how you got your copy.
+
+## If you cloned or forked this repository
+
+This is the setup from the [self-setup guide](/setup#3-deploy). Run `npm run update` in your copy and you're done.
+
+If you forked, push afterwards so your fork on GitHub matches what's live; the command offers to. That matters most if Cloudflare also builds your fork with Workers Builds: its next build from GitHub would otherwise put the old version back.
+
+## If you used the Deploy to Cloudflare button
+
+The button copied this repository into a new one in your GitHub account, and Workers Builds deploys every push to that repository. That changes two things: the deploy happens on Cloudflare after a push rather than on your computer, and the copy starts with fresh history, so git can't tell on its own what has changed since.
+
+Once, on your computer, clone the repository Cloudflare made:
+
+```bash
+git clone https://github.com/YOUR-NAME/YOUR-REPO.git
+cd YOUR-REPO
+npm install
+```
+
+Then, every time you want the latest version:
+
+```bash
+npm run update -- --push
+```
+
+On the first run it works out which version Cloudflare copied and records that as a commit that changes no files, so it merges only what's new since. Then it pushes to GitHub, and Workers Builds runs your deploy command: `npm run deploy`, which Cloudflare picked up from `package.json` when it set the build up, so migrations are applied first. Watch the build in the Cloudflare dashboard under **Workers & Pages → your Worker → Deployments → View build history**.
+
+Forget `--push` and the command notices the copy came from the button and stops to suggest it, rather than deploying from your computer and leaving GitHub behind.
+
+<Note>
+**Doing it by hand?** Add the remote once with `git remote add upstream https://github.com/CharanMN7/ig-comment-dm.git` and run `git fetch upstream`. Find the upstream commit Cloudflare copied, and record it once with `git merge -s ours --allow-unrelated-histories <that commit>`. From then on, `git merge upstream/master` and `git push` work like on any fork.
+</Note>
+
+## If your copy has no `npm run update` yet
+
+Copies made before the command existed don't have it. Fetch just the script from upstream once, then run it directly; the update itself brings in the `npm run update` shortcut for next time:
+
+```bash
+git remote add upstream https://github.com/CharanMN7/ig-comment-dm.git
+git fetch upstream
+git checkout upstream/master -- scripts/update.ts scripts/update-lib.ts
+git commit -m "Add the update script"
+node --experimental-strip-types scripts/update.ts
+```
+
+Add `--push` to the last line if Cloudflare deploys your copy from GitHub (the Deploy to Cloudflare button).
+
+## If you downloaded a ZIP
+
+A ZIP has no git history, so `npm run update` stops and offers two ways forward.
+
+**Start from a fresh copy.** Download the [latest ZIP](https://github.com/CharanMN7/ig-comment-dm/archive/refs/heads/master.zip), unzip it into a new folder, and run `npm install` and `npm run deploy` there. Your secrets and database live in Cloudflare, so nothing is lost. If you changed any files in the old folder, copy them across first.
+
+**Or make the folder a git repository once**, and use `npm run update` from then on. It works out which version you downloaded:
+
+```bash
+git init
+git add .
+git commit -m "My copy"
+npm run update
+```
+
+## When the update stops
+
+Every stop leaves your copy as it was and says what to do next. The common ones:
+
+| It says | What to do |
+|---|---|
+| You have edits that aren't saved in git | Save them with `git commit -am "My changes"` and run it again, or throw them away with `git checkout -- <file>`. |
+| The new version changes lines you have also changed | It lists the files. To take the new version of them, run the `git checkout upstream/master -- …` line it prints, commit, and run it again. To keep your edits, merge by hand as it describes. |
+| You aren't logged in to Cloudflare | Run `npx wrangler login`. If Cloudflare deploys your copy from GitHub, use `--push` instead. |
+| The new version adds files that already exist in this folder | Move those files out of the folder, then run it again. |
+| Git doesn't know your name and email | Set them once with `git config --global user.name "Your Name"` and `git config --global user.email "you@example.com"`. |
+| Your copy is closest to an official version, but it is not an exact match | It found no exact match for where your copy started. It lists the files that differ, anything missing from your copy (a folder you deleted, say), and the official changes it will treat as already in your copy, then asks, even with `--yes`. Answer no if your copy is missing one of those changes. |
+
+If it stops after merging, because installing or deploying failed, the update is already merged. Fix what the output says, then run `npm run deploy`. With `--push`, running `npm run update -- --push` again notices GitHub is behind and offers to push.
+
+## Database migrations
+
+When an update changes the database, it adds a numbered file to `migrations/`. `npm run deploy` applies the new ones before the new code goes live. Wrangler records each file it applies in a `d1_migrations` table, so each migration runs once per database:
+
+```bash
+npm run db:migrate:list   # what's pending
+npm run db:migrate        # apply it without deploying
+```
+
+If your copy predates migration tracking, the first tracked run applies `001` and `002` again. That's harmless: both only create tables and indexes if they don't exist, so the replay changes nothing and just records them.
+
+If you deployed with `npx wrangler deploy` and the admin panel now reports "no such column", see [Troubleshooting](/troubleshooting#errors-mention-no-such-column-after-an-update).
+
+## Doing it by hand
+
+`npm run update` runs these for you. If you'd rather run them yourself in a clone:
+
+```bash
+git pull
+npm install
+npm run deploy
+```
+
+In a fork, sync first: on GitHub click **Sync fork → Update branch**, or `git fetch upstream` and `git merge upstream/master`. If `git pull` refuses because `wrangler.toml` holds your `database_id`, set it aside with `git stash`, pull, and bring it back with `git stash pop`.
+
+Use `npm run deploy` rather than `npx wrangler deploy`, which would put new code live without the tables and columns it needs. If Wrangler lists migrations and asks to continue, say yes.
+
+## After updating
+
+Run `npm run doctor` to check the deployment, then open your admin panel's Home page. If it shows a table of secrets needing attention, each row names the problem and the command that fixes it.

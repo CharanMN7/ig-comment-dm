@@ -1,0 +1,816 @@
+/*
+ * The landing page. Instagram's own neutrals and one violet-blue from its
+ * brand palette; the story-ring gradient appears once, on the creator's
+ * avatar in the demo. The docs theme (docs-theme.css) uses the same values.
+ */
+
+:root {
+  --paper: #ffffff;
+  --surface: #fafafa;
+  --line: #dbdbdb;
+  --ink: #000000;
+  --text: #262626;
+  --muted: #6b6b6b;
+  --accent: #5851db;
+  --bubble: #5851db;
+  --on-bubble: #ffffff;
+  --btn-bg: #000000;
+  --btn-fg: #ffffff;
+  --ring: linear-gradient(45deg, #fcb045, #fd1d1d 50%, #833ab4);
+
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  --radius: 10px;
+  --wrap: 68rem;
+  --gutter: clamp(1rem, 4vw, 2.5rem);
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --paper: #000000;
+    --surface: #0e0e0f;
+    --line: #262626;
+    --ink: #f5f5f5;
+    --text: #e3e3e3;
+    --muted: #a8a8a8;
+    --accent: #a29dff;
+    --btn-bg: #f5f5f5;
+    --btn-fg: #000000;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --paper: #000000;
+  --surface: #0e0e0f;
+  --line: #262626;
+  --ink: #f5f5f5;
+  --text: #e3e3e3;
+  --muted: #a8a8a8;
+  --accent: #a29dff;
+  --btn-bg: #f5f5f5;
+  --btn-fg: #000000;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--text);
+  font: 400 1.0625rem/1.6 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--accent);
+  text-underline-offset: 0.18em;
+  text-decoration-thickness: 1px;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+code,
+pre {
+  font-family: var(--mono);
+  font-size: 0.875em;
+}
+
+p,
+ul,
+ol,
+pre,
+table {
+  margin: 0;
+}
+
+* + p,
+* + ul,
+* + pre,
+* + .table-wrap {
+  margin-top: 1rem;
+}
+
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.skip {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  border-radius: var(--radius);
+}
+
+.skip:focus {
+  top: 1rem;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+
+.bar,
+main,
+.foot {
+  max-width: var(--wrap);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 4rem;
+}
+
+.mark {
+  display: inline-flex;
+  white-space: nowrap;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+}
+
+.bar nav {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.bar nav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding-inline: 0.5rem;
+  color: var(--text);
+  font-size: 0.9375rem;
+  text-decoration: none;
+}
+
+.bar nav a:hover {
+  color: var(--ink);
+}
+
+@media (max-width: 420px) {
+  .bar {
+    gap: 0.5rem;
+  }
+  .bar nav a {
+    padding-inline: 0.375rem;
+  }
+  .mark {
+    font-size: 0.9375rem;
+  }
+}
+
+.gh img {
+  display: block;
+  height: 20px;
+  width: auto;
+  border-radius: 4px;
+}
+
+/* ── Hero ───────────────────────────────────────────────────────────────── */
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem 2.5rem;
+  padding-block: clamp(2rem, 7vw, 5rem) clamp(3rem, 8vw, 6rem);
+}
+
+.demo {
+  margin-top: 1rem;
+}
+
+@media (min-width: 900px) {
+  .hero {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 27rem);
+    grid-template-areas:
+      'title title'
+      'pitch demo';
+    column-gap: clamp(2.5rem, 6vw, 5rem);
+    row-gap: 2.5rem;
+    align-items: start;
+  }
+  .hero h1 {
+    grid-area: title;
+  }
+  .pitch {
+    grid-area: pitch;
+    padding-top: 0.5rem;
+  }
+  .demo {
+    grid-area: demo;
+    margin-top: 0;
+  }
+}
+
+h1 {
+  margin: 0;
+  max-width: 15em;
+  color: var(--ink);
+  font-size: clamp(2.375rem, 1.3rem + 4.4vw, 4.5rem);
+  font-weight: 700;
+  line-height: 1.04;
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+
+.lede {
+  margin: 0;
+  max-width: 30em;
+  font-size: clamp(1.0625rem, 1rem + 0.35vw, 1.25rem);
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.ctas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 2rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 48px;
+  padding: 0 1.375rem;
+  border: 1px solid var(--btn-bg);
+  border-radius: var(--radius);
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.btn.quiet {
+  border-color: var(--line);
+  background: transparent;
+  color: var(--ink);
+}
+
+.btn:hover {
+  text-decoration: none;
+  opacity: 0.86;
+}
+
+.btn.quiet:hover {
+  opacity: 1;
+  border-color: var(--muted);
+}
+
+.fine {
+  margin-top: 1.25rem;
+  max-width: 34em;
+  color: var(--muted);
+  font-size: 0.9375rem;
+}
+
+/* ── The demo: one comment, the three things the Worker does, one DM ───── */
+
+.demo {
+  margin-inline: 0;
+  margin-bottom: 0;
+  width: 100%;
+  max-width: 27rem;
+  justify-self: center;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  font-size: 0.9375rem;
+  line-height: 1.4;
+  overflow: hidden;
+}
+
+.pane {
+  padding: 1rem 1.125rem 1.125rem;
+  background: var(--paper);
+}
+
+.pane-label {
+  margin: 0 0 0.75rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.comment,
+.thread {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+}
+
+.comment p {
+  margin: 0.25rem 0 0;
+  color: var(--ink);
+}
+
+.comment b,
+.from {
+  font-weight: 650;
+  color: var(--ink);
+}
+
+.av {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.av-maya {
+  background: #3f8f7a;
+}
+
+/* Instagram's story ring: the one place the brand gradient appears. */
+.av-you {
+  padding: 2px;
+  background: var(--ring);
+}
+
+.av-you span {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border: 2px solid var(--paper);
+  border-radius: 50%;
+  background: #262626;
+}
+
+.pipe {
+  list-style: none;
+  margin: 0;
+  padding: 0.875rem 1.125rem 0.875rem 2.375rem;
+  border-block: 1px solid var(--line);
+  color: var(--text);
+  font-size: 0.875rem;
+}
+
+.pipe li {
+  position: relative;
+}
+
+.pipe li + li {
+  margin-top: 0.375rem;
+}
+
+.pipe li::before {
+  content: '';
+  position: absolute;
+  left: -1.25rem;
+  top: 0.45em;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.pipe li:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  left: calc(-1.25rem + 0.25rem - 0.5px);
+  top: calc(0.45em + 0.5rem);
+  width: 1px;
+  height: calc(100% - 0.5rem + 0.375rem);
+  background: var(--line);
+}
+
+.msgs {
+  display: grid;
+  justify-items: start;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.slot {
+  position: relative;
+}
+
+.bubble,
+.typing {
+  margin: 0;
+  border-radius: 20px;
+}
+
+.bubble {
+  padding: 0.625rem 0.875rem;
+  background: var(--bubble);
+  color: var(--on-bubble);
+  overflow-wrap: anywhere;
+}
+
+.typing {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  gap: 4px;
+  padding: 0.85rem 0.9rem;
+  background: var(--line);
+  opacity: 0;
+}
+
+.typing i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.when {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+/*
+ * The sequence takes as long as the real thing: the comment lands at 0.3s
+ * and the DM at 2.3s. Everything starts visible, so with motion reduced (or
+ * animations unsupported) the demo is simply the finished exchange.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .comment {
+    animation: arrive 0.35s ease-out 0.3s both;
+  }
+  .pipe li::before {
+    animation: light 0.25s ease-out both;
+  }
+  .pipe li {
+    animation: step 0.25s ease-out both;
+  }
+  .pipe li:nth-child(1),
+  .pipe li:nth-child(1)::before {
+    animation-delay: 0.8s;
+  }
+  .pipe li:nth-child(2),
+  .pipe li:nth-child(2)::before {
+    animation-delay: 1.15s;
+  }
+  .pipe li:nth-child(3),
+  .pipe li:nth-child(3)::before {
+    animation-delay: 1.5s;
+  }
+  .typing {
+    animation: typing 0.75s linear 1.55s both;
+  }
+  .typing i {
+    animation: dot 0.6s ease-in-out 1.55s 2 alternate;
+  }
+  .typing i:nth-child(2) {
+    animation-delay: 1.65s;
+  }
+  .typing i:nth-child(3) {
+    animation-delay: 1.75s;
+  }
+  .bubble {
+    animation: pop 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.2) 2.3s both;
+  }
+  .when {
+    animation: arrive 0.3s ease-out 2.5s both;
+  }
+}
+
+@keyframes arrive {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@keyframes step {
+  from {
+    opacity: 0.35;
+  }
+}
+
+@keyframes light {
+  from {
+    background: var(--line);
+    transform: scale(0.6);
+  }
+}
+
+@keyframes typing {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  12%,
+  88% {
+    opacity: 1;
+  }
+}
+
+@keyframes dot {
+  to {
+    transform: translateY(-3px);
+    opacity: 0.5;
+  }
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+    transform-origin: left bottom;
+  }
+}
+
+/* ── Rows below the fold: heading on the left, content on the right ────── */
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem 2.5rem;
+  padding-block: 2.5rem;
+  border-top: 1px solid var(--line);
+}
+
+@media (min-width: 800px) {
+  .row {
+    grid-template-columns: 14rem minmax(0, 1fr);
+    padding-block: 3.5rem;
+  }
+}
+
+h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1.25rem;
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -0.015em;
+}
+
+.body {
+  max-width: 44rem;
+}
+
+.intro {
+  color: var(--muted);
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.compare {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9375rem;
+  line-height: 1.45;
+}
+
+.compare th,
+.compare td {
+  padding: 0.75rem 1rem 0.75rem 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.compare thead th {
+  padding-top: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.compare tbody th {
+  width: 26%;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.compare td:first-of-type {
+  color: var(--muted);
+}
+
+.compare td:last-of-type {
+  color: var(--ink);
+}
+
+.compare tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+@media (max-width: 560px) {
+  .compare thead {
+    display: none;
+  }
+  .compare tr {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.25rem 1rem;
+    padding-block: 0.875rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .compare tbody tr:last-child {
+    border-bottom: 0;
+  }
+  .compare th,
+  .compare td {
+    padding: 0;
+    border: 0;
+  }
+  .compare tbody th {
+    grid-column: 1 / -1;
+    width: auto;
+  }
+  .compare td::before {
+    display: block;
+    color: var(--muted);
+    font-size: 0.8125rem;
+  }
+  .compare td:first-of-type::before {
+    content: 'Hosted tools';
+  }
+  .compare td:last-of-type::before {
+    content: 'Comment to DM';
+  }
+}
+
+.cmd {
+  padding: 1rem 1.125rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  line-height: 1.7;
+  overflow-x: auto;
+}
+
+.cmd .c {
+  color: var(--muted);
+}
+
+.body p code {
+  padding: 0.1em 0.3em;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 0.85em;
+}
+
+.paths {
+  padding-left: 1.125rem;
+}
+
+.paths li + li {
+  margin-top: 0.5rem;
+}
+
+.paths a {
+  font-weight: 600;
+}
+
+.limits {
+  list-style: none;
+  padding: 0;
+}
+
+.limits li {
+  padding-block: 0.875rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.limits li:last-child {
+  border-bottom: 0;
+}
+
+.limits b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* ── FAQ ────────────────────────────────────────────────────────────────── */
+
+.faq details {
+  border-bottom: 1px solid var(--line);
+}
+
+.faq details:first-child {
+  border-top: 1px solid var(--line);
+}
+
+.faq summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 48px;
+  padding-block: 0.625rem;
+  color: var(--ink);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.faq summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq summary::after {
+  content: '+';
+  flex: none;
+  color: var(--muted);
+  font-size: 1.25rem;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.faq details[open] summary::after {
+  content: '−';
+}
+
+.faq details p {
+  margin: 0 0 1.125rem;
+  max-width: 40em;
+}
+
+/* ── Footer ─────────────────────────────────────────────────────────────── */
+
+.foot {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.foot-in {
+  padding-block: 2rem 3rem;
+  border-top: 1px solid var(--line);
+}
+
+.foot nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 1.25rem;
+}
+
+.foot nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.foot nav a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.foot p {
+  margin-top: 0.75rem;
+  max-width: 40em;
+}
+
+/* ── 404 ────────────────────────────────────────────────────────────────── */
+
+.missing {
+  padding-block: clamp(4rem, 15vh, 9rem);
+}
+
+.missing p {
+  margin-top: 1.25rem;
+}

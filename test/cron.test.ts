@@ -1,10 +1,12 @@
 import { env } from 'cloudflare:workers';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { insertWebhookEvent, tryClaimComment } from '../src/db.ts';
+import { POLL_BUDGET_MS } from '../src/reconcile.ts';
 import { FAKE_EXPIRES_IN, type MetaCall, meta } from './support/meta.ts';
 import {
   ACCESS_TOKEN,
   DAY,
+  FROZEN_NOW_MS,
   IG_USER,
   NOW,
   accountRow,
@@ -24,8 +26,9 @@ function igTime(unix: number): string {
   return new Date(unix * 1000).toISOString().replace(/\.\d{3}Z$/, '+0000');
 }
 
-function comment(id: string, text: string, opts: { from?: string; at?: number } = {}) {
-  return { id, text, timestamp: igTime(opts.at ?? NOW - 120), from: { id: opts.from ?? '9100000000000001', username: 'a_fan' } };
+function comment(id: string, text: string, opts: { from?: string; at?: number; username?: string | null } = {}) {
+  const from = { id: opts.from ?? '9100000000000001', ...(opts.username === null ? {} : { username: opts.username ?? 'a_fan' }) };
+  return { id, text, timestamp: igTime(opts.at ?? NOW - 120), from };
 }
 
 function commentsByMedia(byMedia: Record<string, unknown[] | { status: number }>) {
@@ -78,6 +81,72 @@ describe('the 5-minute comment poll', () => {
     expect(await systemValue('last_poll_ok_at')).toBe(String(NOW));
   });
 
+  it('matches each rule the way it is set to, as the webhook does', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['launch'], matchMode: 'contains' });
+    await seedRule({ keywords: ['guide'], matchMode: 'word' });
+    meta.on('GET', '/me/media', { json: { data: [{ id: 'm1' }] } });
+    meta.on('GET', '/:id/comments', commentsByMedia({ m1: [comment('c-tag', '#launch2026'), comment('c-plural', 'guides?')] }));
+    await runScheduled(POLL);
+    expect(dmTargets()).toEqual(['c-tag']);
+    expect((await sentRows()).map((r) => r.comment_id)).toEqual(['c-tag']);
+  });
+
+  it('records an excluded comment as skipped, exactly as the webhook would, and never revisits it', async () => {
+    await seedAccount();
+    const ruleId = await seedRule({ keywords: ['guide'], excludeKeywords: ['how much'] });
+    meta.on('GET', '/me/media', { json: { data: [{ id: 'm1' }] } });
+    meta.on(
+      'GET',
+      '/:id/comments',
+      commentsByMedia({ m1: [comment('c-price', 'how much is the guide?'), comment('c-guide', 'guide please'), comment('c-other', 'lovely')] }),
+    );
+
+    await runScheduled(POLL);
+
+    expect(dmTargets()).toEqual(['c-guide']);
+    expect(await sentRows()).toEqual([
+      expect.objectContaining({ comment_id: 'c-guide', dm_status: 'ok', rule_id: ruleId }),
+      expect.objectContaining({ comment_id: 'c-price', dm_status: 'skipped', rule_id: ruleId, error: 'Skipped: matched exclusion “how much”' }),
+    ]);
+
+    meta.clearCalls();
+    await runScheduled(POLL);
+    expect(dmTargets()).toEqual([]);
+    expect(await sentRows()).toHaveLength(2);
+  });
+
+  it('lets another rule answer a comment one rule excludes, as the webhook does', async () => {
+    await seedAccount();
+    await seedRule({ keywords: ['guide'], mediaId: 'm1', excludeKeywords: ['how much'], dmText: 'reel guide' });
+    const fallback = await seedRule({ keywords: ['guide'], dmText: 'price list' });
+    meta.on('GET', '/:id/comments', commentsByMedia({ m1: [comment('c-price', 'how much is the guide?')] }));
+    await runScheduled(POLL);
+    expect(meta.callsTo('POST', '/:id/messages').map((c) => c.body)).toEqual([
+      { recipient: { comment_id: 'c-price' }, message: { text: 'price list' } },
+    ]);
+    expect(await sentRows()).toEqual([expect.objectContaining({ dm_status: 'ok', rule_id: fallback })]);
+  });
+
+  it('answers recent comments on a match-all post, inside the lookback and the per-sweep cap', async () => {
+    await seedAccount();
+    await seedRule({ keywords: [], matchAll: true, mediaId: 'giveaway-reel' });
+    meta.on(
+      'GET',
+      '/:id/comments',
+      commentsByMedia({
+        'giveaway-reel': [
+          ...Array.from({ length: 11 }, (_, i) => comment(`c${String(i).padStart(2, '0')}`, `entry ${i}`)),
+          comment('c-self', 'thanks everyone', { from: IG_USER }),
+          comment('c-old', 'me too', { at: NOW - 73 * 60 * 60 }),
+        ],
+      }),
+    );
+    await runScheduled(POLL);
+    expect(dmTargets()).toEqual(Array.from({ length: 10 }, (_, i) => `c${String(i).padStart(2, '0')}`));
+    expect(meta.callsTo('GET', '/me/media')).toEqual([]);
+  });
+
   it('does not DM a comment the webhook already handled', async () => {
     await seedAccount();
     await seedRule();
@@ -86,6 +155,28 @@ describe('the 5-minute comment poll', () => {
     await runScheduled(POLL);
     await runScheduled(POLL);
     expect(dmTargets()).toEqual(['c1']);
+  });
+
+  it('puts the username from the comment listing into the DM and public reply', async () => {
+    await seedAccount();
+    await seedRule({ dmText: 'Hi {username}, here you go', publicReply: 'Sent, {username}!' });
+    meta.on('GET', '/me/media', { json: { data: [{ id: 'm1' }] } });
+    meta.on(
+      'GET',
+      '/:id/comments',
+      commentsByMedia({ m1: [comment('c-named', 'guide', { username: 'polled_fan' }), comment('c-anon', 'guide', { username: null })] }),
+    );
+
+    await runScheduled(POLL);
+
+    expect(meta.callsTo('POST', '/:id/messages').map((c) => c.body)).toEqual([
+      { recipient: { comment_id: 'c-named' }, message: { text: 'Hi polled_fan, here you go' } },
+      { recipient: { comment_id: 'c-anon' }, message: { text: 'Hi, here you go' } },
+    ]);
+    expect(meta.callsTo('POST', '/:id/replies').map((c) => [c.path, c.body])).toEqual([
+      ['/c-named/replies', { message: 'Sent, polled_fan!' }],
+      ['/c-anon/replies', { message: 'Sent!' }],
+    ]);
   });
 
   it('skips accounts with no active rules without calling Instagram', async () => {
@@ -119,6 +210,32 @@ describe('the 5-minute comment poll', () => {
     meta.on('GET', '/:id/comments', commentsByMedia({ m1: Array.from({ length: 12 }, (_, i) => comment(`c${i}`, 'guide')) }));
     await runScheduled(POLL);
     expect(dmTargets()).toHaveLength(10);
+  });
+
+  it('stops starting sends once the sweep has used its time, and leaves the rest unclaimed for the next sweep', async () => {
+    await seedAccount();
+    await seedRule();
+    meta.on('GET', '/me/media', { json: { data: [{ id: 'm1' }] } });
+    meta.on('GET', '/:id/comments', commentsByMedia({ m1: [comment('c1', 'guide'), comment('c2', 'guide please'), comment('c3', 'guide?')] }));
+    // Stands in for a sweep slowed down by Instagram: the first DM leaves it a
+    // second short of its budget, too little to start another send.
+    meta.on('POST', '/:id/messages', () => {
+      vi.setSystemTime(FROZEN_NOW_MS + POLL_BUDGET_MS - 1_000);
+      return { json: { recipient_id: '1234567890', message_id: 'm1' } };
+    });
+
+    await runScheduled(POLL);
+
+    expect(dmTargets()).toEqual(['c1']);
+    expect(await sentRows()).toEqual([expect.objectContaining({ comment_id: 'c1', dm_status: 'ok' })]);
+    expect(await systemValue('last_poll_ok_at')).not.toBeNull();
+
+    meta.on('POST', '/:id/messages', { json: { recipient_id: '1234567890', message_id: 'm2' } });
+    meta.clearCalls();
+    vi.setSystemTime(FROZEN_NOW_MS + 5 * 60 * 1000);
+    await runScheduled(POLL);
+
+    expect(dmTargets()).toEqual(['c2', 'c3']);
   });
 
   it('does not refresh tokens or touch subscriptions', async () => {
@@ -176,6 +293,40 @@ describe('the daily token refresh', () => {
 
     const admin = await signedInAdmin();
     expect((await admin.get(adminPath('/'))).text).toContain('Instagram needs reconnecting');
+  });
+
+  it('refreshes a paused account too, since pausing stops DMs and not token upkeep', async () => {
+    await seedAccount({ token: 'token-paused', expiresAt: NOW + 5 * DAY, lastRefreshedAt: NOW - 55 * DAY, active: false });
+
+    await runScheduled(DAILY);
+
+    expect(meta.callsTo('GET', '/refresh_access_token')).toEqual([expect.objectContaining({ query: expect.objectContaining({ access_token: 'token-paused' }) })]);
+    expect(meta.callsTo('POST', '/:id/subscribed_apps')).toEqual([]);
+    expect(await storedToken()).toBe('refreshed-token');
+    expect(await accountRow()).toMatchObject({ active: 0, token_expires_at: NOW + FAKE_EXPIRES_IN, last_refreshed_at: NOW });
+  });
+
+  it('marks sends the Worker never finished as failed, without sending them again', async () => {
+    await seedAccount();
+    await seedRule();
+    const claim = (comment_id: string, dm_status: string, sent_at: number) =>
+      tryClaimComment(env.DB, { comment_id, ig_user_id: IG_USER, commenter_id: '9100000000000001', dm_status, error: null, sent_at });
+    await claim('c-stuck', 'pending', NOW - 2 * DAY);
+    await claim('c-stuck-recently', 'pending', NOW - 16 * 60);
+    await claim('c-in-flight', 'pending', NOW - 60);
+    await claim('c-sent', 'ok', NOW - 2 * DAY);
+
+    await runScheduled(DAILY);
+
+    const stopped = 'The Worker stopped before this send finished. The DM may or may not have gone out, so it was not tried again.';
+    expect((await sentRows()).map((r) => [r.comment_id, r.dm_status, r.error, r.sent_at])).toEqual([
+      ['c-in-flight', 'pending', null, NOW - 60],
+      ['c-sent', 'ok', null, NOW - 2 * DAY],
+      ['c-stuck', 'failed', stopped, NOW - 2 * DAY],
+      ['c-stuck-recently', 'failed', stopped, NOW - 16 * 60],
+    ]);
+    expect(meta.callsTo('POST', '/:id/messages')).toEqual([]);
+    expect(meta.callsTo('POST', '/:id/replies')).toEqual([]);
   });
 
   it('prunes webhook events older than 7 days', async () => {

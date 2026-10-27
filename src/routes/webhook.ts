@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { nowSeconds, verifyMetaSignatureAny } from '../crypto.ts';
 import { insertWebhookEvent } from '../db.ts';
-import { parseWebhookPayload, processWebhook } from '../process.ts';
+import { WEBHOOK_SEND_BUDGET_MS, parseWebhookPayload, processWebhook } from '../process.ts';
 import type { Env } from '../types.ts';
 
 export const webhookRoutes = new Hono<{ Bindings: Env }>();
@@ -23,9 +23,12 @@ webhookRoutes.post('/', async (c) => {
     header,
   );
   if (!ok) {
+    // Meta signs every delivery, so a POST with no signature at all is a
+    // scanner or a hand-made request, not Meta with a secret we lack. It is
+    // logged apart so it can't raise the "secret did not match" banner.
     await insertWebhookEvent(c.env.DB, {
       received_at: nowSeconds(),
-      status: 'bad_sig',
+      status: header ? 'bad_sig' : 'unsigned',
       object: null,
       preview: raw.slice(0, 200),
       error: header ? 'signature did not match Instagram or Facebook app secret' : 'missing X-Hub-Signature-256',
@@ -47,8 +50,9 @@ webhookRoutes.post('/', async (c) => {
 
   c.executionCtx.waitUntil(
     (async () => {
+      const deadline = Date.now() + WEBHOOK_SEND_BUDGET_MS;
       const payload: unknown = parseWebhookPayload(raw);
-      await processWebhook(c.env, payload);
+      await processWebhook(c.env, payload, deadline);
     })().catch((err) => {
       console.error('webhook waitUntil', err instanceof Error ? err.message : err);
     }),

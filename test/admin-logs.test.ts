@@ -24,7 +24,7 @@ function pad(n: number): string {
 
 async function seedMany(count: number, sentAt: (i: number) => number): Promise<string[]> {
   for (let i = 0; i < count; i++) {
-    await seedSent({ commentId: `c${pad(i)}`, error: `row-${pad(i)}`, sentAt: sentAt(i) });
+    await seedSent({ commentId: `c${pad(i)}`, error: `row-${pad(i)}`, status: 'ok', at: sentAt(i) });
   }
   return Array.from({ length: count }, (_, i) => pad(count - 1 - i));
 }
@@ -78,10 +78,10 @@ describe('the logs page', () => {
     const guide = await seedRule({ label: 'Free guide' });
     const promo = await seedRule({ label: 'Promo code', keywords: ['promo'] });
     const at = (month: number, day: number, h: number, m: number, s: number) => Date.UTC(2026, month - 1, day, h, m, s) / 1000;
-    await seedSent({ commentId: 'c1', error: 'row-1', status: 'ok', ruleId: guide, sentAt: at(9, 29, 23, 59, 59) });
-    await seedSent({ commentId: 'c2', error: 'row-2', status: 'failed', ruleId: promo, sentAt: at(9, 30, 0, 0, 0) });
-    await seedSent({ commentId: 'c3', error: 'row-3', status: 'skipped', igUserId: OTHER_USER, sentAt: at(9, 30, 23, 59, 59) });
-    await seedSent({ commentId: 'c4', error: 'row-4', status: 'ok', ruleId: guide, sentAt: at(10, 1, 0, 0, 0) });
+    await seedSent({ commentId: 'c1', error: 'row-1', status: 'ok', ruleId: guide, at: at(9, 29, 23, 59, 59) });
+    await seedSent({ commentId: 'c2', error: 'row-2', status: 'failed', ruleId: promo, at: at(9, 30, 0, 0, 0) });
+    await seedSent({ commentId: 'c3', error: 'row-3', status: 'skipped', igUserId: OTHER_USER, at: at(9, 30, 23, 59, 59) });
+    await seedSent({ commentId: 'c4', error: 'row-4', status: 'ok', ruleId: guide, at: at(10, 1, 0, 0, 0) });
     const admin = await signedInAdmin();
     const rows = async (qs: string) => rowsOn((await admin.get(adminPath(`/logs?${qs}`))).text);
 
@@ -103,7 +103,7 @@ describe('the logs page', () => {
   it('keeps the filters on the Older and Newer links', async () => {
     await seedAccount();
     for (let i = 0; i < 120; i++) {
-      await seedSent({ commentId: `c${pad(i)}`, error: `row-${pad(i)}`, status: i % 2 ? 'failed' : 'ok', sentAt: NOW - 60 });
+      await seedSent({ commentId: `c${pad(i)}`, error: `row-${pad(i)}`, status: i % 2 ? 'failed' : 'ok', at: NOW - 60 });
     }
     const admin = await signedInAdmin();
     const first = (await admin.get(adminPath('/logs?status=failed'))).text;
@@ -117,7 +117,7 @@ describe('the logs page', () => {
 
   it('ignores a date that is not real, says so, and still shows the sends', async () => {
     await seedAccount();
-    await seedSent({ commentId: 'c1', error: 'row-1' });
+    await seedSent({ commentId: 'c1', error: 'row-1', status: 'ok', at: NOW });
     const admin = await signedInAdmin();
     const page = (await admin.get(adminPath('/logs?from=2026-02-30&to=garbage'))).text;
     expect(rowsOn(page)).toEqual(['1']);
@@ -132,7 +132,7 @@ describe('the logs page', () => {
     const admin = await signedInAdmin();
     expect((await admin.get(adminPath('/logs'))).text).toContain('Nothing logged yet.');
 
-    await seedSent({ commentId: 'c1', error: 'row-1', status: 'ok' });
+    await seedSent({ commentId: 'c1', error: 'row-1', status: 'ok', at: NOW });
     const filtered = (await admin.get(adminPath('/logs?status=failed'))).text;
     expect(filtered).toContain('No sends match these filters.');
     expect(filtered).not.toContain('<table>');
@@ -145,7 +145,7 @@ describe('the logs page', () => {
   it('escapes hostile text from Meta, rule names, usernames and the URL', async () => {
     await seedAccount({ username: '<b>creator</b>' });
     const rule = await seedRule({ label: '<script>alert(1)</script>' });
-    await seedSent({ commentId: 'c1', ruleId: rule, status: 'failed', error: '<img src=x onerror=alert(1)>' });
+    await seedSent({ commentId: 'c1', ruleId: rule, status: 'failed', error: '<img src=x onerror=alert(1)>', at: NOW });
     const admin = await signedInAdmin();
 
     const page = (await admin.get(adminPath('/logs'))).text;

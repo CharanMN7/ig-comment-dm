@@ -1,0 +1,22 @@
+{
+  "name": "ig-comment-dm-site",
+  "private": true,
+  "description": "The landing page and docs for ig-comment-dm. Static Astro site, deployed to GitHub Pages.",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check-links": "node scripts/check-links.mjs dist"
+  },
+  "dependencies": {
+    "@inkform/astro": "0.1.0",
+    "astro": "^7.4.2",
+    "mermaid": "^12.2.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "engines": {
+    "node": ">=22.23.4"
+  }
+}

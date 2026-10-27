@@ -11,6 +11,9 @@ export const CRON_STALE_SECONDS = 72 * 60 * 60;
 export const POLL_STALE_SECONDS = 60 * 60;
 export const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 export const DM_TEXT_MAX = 1000;
+// Meta documents no length limit for replies posted through the API. The DM's
+// limit is far above any real public reply and keeps the two fields alike.
+export const PUBLIC_REPLY_MAX = 1000;
 
 export function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
@@ -18,6 +21,21 @@ export function nowSeconds(): number {
 
 export function randomBytes(n: number): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(n));
+}
+
+/**
+ * A whole number from 0 to n - 1, each equally likely. Draws past the largest
+ * multiple of n are thrown away, because taking them modulo n would favour the
+ * low numbers.
+ */
+export function randomIndex(n: number): number {
+  if (!Number.isInteger(n) || n < 1 || n > 0x1_0000_0000) throw new RangeError(`randomIndex needs 1 to 2^32 choices, got ${n}`);
+  const limit = Math.floor(0x1_0000_0000 / n) * n;
+  const draw = new Uint32Array(1);
+  for (;;) {
+    crypto.getRandomValues(draw);
+    if (draw[0] < limit) return draw[0] % n;
+  }
 }
 
 export function bytesToHex(bytes: Uint8Array): string {

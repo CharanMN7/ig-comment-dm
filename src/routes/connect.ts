@@ -1,7 +1,7 @@
-import { Hono } from 'hono';
+import { Hono, type MiddlewareHandler } from 'hono';
 import { html } from 'hono/html';
 import { encryptAesGcm, nowSeconds } from '../crypto.ts';
-import { upsertAccount } from '../db.ts';
+import { systemGet, upsertAccount } from '../db.ts';
 import {
   authorizeUrl,
   exchangeCodeForShortLived,
@@ -10,7 +10,13 @@ import {
   oauthRedirectUri,
   subscribeCommentWebhooks,
 } from '../meta.ts';
-import { makeOauthState, verifyOauthState } from '../session.ts';
+import {
+  OAUTH_STATE_TTL_SECONDS,
+  makeOauthState,
+  readSession,
+  serializeConnectCookie,
+  verifyOauthState,
+} from '../session.ts';
 import type { Env } from '../types.ts';
 import { layout, pageError } from '../html.ts';
 
@@ -19,6 +25,35 @@ export const connectRoutes = new Hono<{ Bindings: Env }>();
 function startHref(reconnect: boolean): string {
   return reconnect ? '/connect/start?reconnect=1' : '/connect/start';
 }
+
+/** The same bar the admin panel sets: a logged-in session, and a password that still exists. */
+async function adminSignedIn(env: Env, cookieHeader: string | undefined): Promise<boolean> {
+  const session = await readSession(env.SESSION_SIGNING_KEY, cookieHeader);
+  if (!session?.authed) return false;
+  const [hash, salt] = await Promise.all([
+    systemGet(env.DB, 'admin_password_hash'),
+    systemGet(env.DB, 'admin_password_salt'),
+  ]);
+  return !!(hash && salt);
+}
+
+// Deliberately says nothing about where the admin page is: this is what a
+// stranger who found /connect sees.
+const fromAdminOnly = layout({
+  title: 'Connect Instagram',
+  body: html`
+    <h1>Connect from your admin page</h1>
+    <p>Open your admin page, log in, then go to <b>Accounts → Connect a new account</b>.</p>
+  `,
+});
+
+const requireAdmin: MiddlewareHandler<{ Bindings: Env }> = async (c, next) => {
+  if (!(await adminSignedIn(c.env, c.req.header('Cookie')))) return c.html(fromAdminOnly, 403);
+  await next();
+};
+
+connectRoutes.use('/', requireAdmin);
+connectRoutes.use('/start', requireAdmin);
 
 connectRoutes.get('/', (c) => {
   const redir = oauthRedirectUri(c.req.url, c.env.PUBLIC_BASE_URL);
@@ -57,7 +92,8 @@ ${withSlash}</pre>
 
 connectRoutes.get('/start', async (c) => {
   const redir = oauthRedirectUri(c.req.url, c.env.PUBLIC_BASE_URL);
-  const state = await makeOauthState(c.env.SESSION_SIGNING_KEY);
+  const { state, cookie } = await makeOauthState(c.env.SESSION_SIGNING_KEY);
+  c.header('Set-Cookie', serializeConnectCookie(cookie, c.env.PUBLIC_BASE_URL, OAUTH_STATE_TTL_SECONDS));
   const url = authorizeUrl({
     clientId: c.env.META_APP_ID,
     redirectUri: redir,
@@ -68,6 +104,7 @@ connectRoutes.get('/start', async (c) => {
 });
 
 connectRoutes.get('/callback', async (c) => {
+  c.header('Set-Cookie', serializeConnectCookie('', c.env.PUBLIC_BASE_URL, 0));
   const denied = c.req.query('error');
   if (denied) {
     return c.html(
@@ -83,13 +120,13 @@ connectRoutes.get('/callback', async (c) => {
 
   const code = c.req.query('code');
   const state = c.req.query('state');
-  if (!code || !state || !(await verifyOauthState(c.env.SESSION_SIGNING_KEY, state))) {
+  if (!code || !state || !(await verifyOauthState(c.env.SESSION_SIGNING_KEY, state, c.req.header('Cookie')))) {
     return c.html(
       layout({
         title: 'Not connected',
         body: pageError(
-          'That Instagram link expired or was invalid. Go back and click Connect again.',
-          'missing or invalid code/state',
+          'That Instagram link expired or was invalid. Open your admin page and click Connect again, then finish in the same browser within 10 minutes.',
+          'missing or invalid code, state, or connect cookie',
         ),
       }),
       400,

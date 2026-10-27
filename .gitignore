@@ -15,7 +15,11 @@ wrangler.local.toml
 # Build output
 node_modules/
 dist/
+site/.astro/
 /tmp-worker-build/
+
+# Claude Code: .claude/skills/ is committed, local worktrees are not.
+.claude/worktrees/
 
 # Noise
 *.log

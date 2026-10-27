@@ -1,0 +1,358 @@
+---
+description: Symptom first. Start here when a comment gets no DM, Connect fails, or the admin panel won't let you in.
+---
+
+Start here:
+
+```bash
+npm run doctor
+```
+
+It checks your live deployment (secrets, database tables, connected accounts, active rules, rejected webhooks, and whether the scheduled jobs are running) and names the fix for anything it finds.
+
+Two things it can't see from outside: whether your Meta app is **Live**, and whether Instagram's **Hidden Words** filter is removing comments before Meta ever sees them. Check those first if `doctor` comes back clean and it still doesn't work.
+
+## The two delivery paths
+
+Most confusing symptoms make sense once you know there are two.
+
+| | The webhook | The poll |
+|---|---|---|
+| Speed | About two seconds | Up to five minutes |
+| How it starts | Meta POSTs to `/webhook` | The Worker asks Instagram for recent comments |
+| Needs the app to be Live | Yes | **No** |
+| Sees Hidden Words comments | No | No |
+| Covers old posts | Yes | Only the 3 most recent posts, last 72 hours |
+
+They share the same rule matching and the same duplicate protection, so a comment is never answered twice, whichever path finds it first.
+
+That explains the two most common confusing reports:
+
+- **"It works, but it takes five minutes."** The webhook isn't being delivered and the poll is doing all the work. The app is probably still in Development, or the per-account webhook subscription is off.
+- **"It worked for my new reel and not my old post."** The poll only looks at recent posts. Again, the webhook isn't being delivered.
+
+If DMs arrive but slowly, you don't have a matching problem. You have a webhook problem.
+
+## Nothing happens when someone comments
+
+The most common report, with eight causes. Work down the list in order; they're sorted by how often they're the answer.
+
+### 1. The Meta app is still in Development
+
+**By far the most common.** Meta doesn't deliver real webhooks to an app in Development mode, only the dashboard's **Test** button.
+
+**Confirm:** open your app in the Meta dashboard. The mode toggle is at the top.
+
+**Fix:** Meta → **Publish**. Paste your three legal URLs, then click Publish.
+
+```
+https://ig-comment-dm.YOURNAME.workers.dev/privacy
+https://ig-comment-dm.YOURNAME.workers.dev/terms
+https://ig-comment-dm.YOURNAME.workers.dev/data-deletion
+```
+
+You don't need App Review while only your own tester accounts connect. App Review is for letting strangers connect their Instagram.
+
+### 2. The per-account webhook subscription is off
+
+Setting the callback URL isn't enough. Each connected account has its own toggle, and it defaults to off.
+
+**Fix:** Meta → **Instagram → API setup with Instagram login → Generate access tokens**. For every account you connected, set **Webhook subscription** to **On**.
+
+If Meta won't let you flip the switch until you generate a token, generate it, flip the switch, then ignore the token. Don't paste it into Cloudflare: Connect already stored the token the Worker uses.
+
+### 3. `FACEBOOK_APP_SECRET` isn't set
+
+Meta signs live comment notifications with the **Facebook** App Secret, not the Instagram one. Without it, every real webhook fails signature verification and is rejected before anything else happens.
+
+**Confirm:** Home shows a `Wrong secret` row under "Did Instagram reach us?", or `npm run doctor` flags it.
+
+**Fix:** Meta → **App settings → Basic → App secret → Show**, then:
+
+```bash
+npx wrangler secret put FACEBOOK_APP_SECRET
+npx wrangler deploy
+```
+
+### 4. Hidden Words hid the comment
+
+If Instagram's own spam or keyword filter hides a comment, it never reaches the API at all, and nothing on your side can see it. That's a limitation, not a bug.
+
+**Fix:** on the creator account, Instagram app → Settings → Hidden Words. Turn the filters off while testing.
+
+### 5. The comment came from the account that owns the post
+
+Meta notifies you about your own comments on your own posts. Acting on them would DM yourself and use up the one private reply that comment gets, so they're dropped deliberately.
+
+**Fix:** comment from a different Instagram account. A friend's phone works. The friend doesn't need to be an Instagram Tester; only the account that *owns* the post does.
+
+### 6. The comment is more than 7 days old
+
+Instagram refuses a private reply to a comment older than seven days. Those are logged as skipped, with the reason.
+
+### 7. No rule matched
+
+**Confirm:** admin → **Test**, paste the exact comment text, and see which rule lights up. This sends nothing.
+
+Matching ignores case, emoji, punctuation and accents on Latin letters, and by default matches whole words: `guide` matches `Guide!` and `guide 🙏` but not `guides` or `#guide2026`, and `cafe` matches `café`. The Test page shows the comment as it was matched, with all of that stripped out.
+
+If the keyword sits inside a hashtag or a longer word, edit the rule and choose **Anywhere in the comment** under "How to look for them". That catches `#launch2026` for `launch`, at the cost of `art` also matching `start`. [How keywords match](/using#how-keywords-match) covers non-Latin scripts too.
+
+A rule set to **Reply to every comment on this post** fires only on that post. On the Test page, pick the post under "Which posts" to see it match.
+
+If Home says `Skipped: matched exclusion “…”`, the keyword did match, but the comment also contained one of that rule's exclusions. The Test page lists the rule, the keyword it found and the exclusion that stopped it.
+
+### 8. The keyword is too short
+
+Keywords under 3 characters are rejected when you save the rule, because they match inside other words: `AI` would fire on "again" and "email". The count is taken after emoji and punctuation are dropped, so `AI!!` is too short as well, and a keyword that is only emoji or punctuation (`🔥🔥🔥`) is refused because it could never match anything. Chinese and Japanese need only 2 characters, so `指南` is fine and `指` is refused.
+
+## "Did Instagram reach us?" is empty
+
+Meta has never POSTed to your Worker. The problem is upstream of the Worker, so nothing in the admin panel will help.
+
+In order of likelihood: the app is in Development ([cause 1](#1-the-meta-app-is-still-in-development)), the per-account webhook subscription is off ([cause 2](#2-the-per-account-webhook-subscription-is-off)), or the webhook was never configured.
+
+**Check the webhook itself:** in the Meta dashboard, next to the `comments` field, click **Test**, then **Send to My Server**. Clicking *Test* alone only previews the sample payload and sends nothing.
+
+A row should appear under "Did Instagram reach us?" immediately. If it does, your webhook is set up correctly and the problem is delivery of *real* events, which is almost always cause 1 or 2.
+
+If no row appears from the Test button either, re-check the callback URL:
+
+```
+https://ig-comment-dm.YOURNAME.workers.dev/webhook
+```
+
+and confirm the field is subscribed to **comments** with **Include values** on.
+
+## "Did Instagram reach us?" says Wrong secret
+
+Meta reached you, and the request was rejected because its HMAC signature matched neither app secret.
+
+A **Not signed** row is different: that request carried no signature at all, so it didn't come from Meta. Scanners send these to every public URL. They're rejected, and they never trigger the red banner.
+
+This is nearly always a missing `FACEBOOK_APP_SECRET`: see [cause 3](#3-facebook_app_secret-isnt-set).
+
+If it's already set, the value is wrong. `META_APP_SECRET` and `FACEBOOK_APP_SECRET` come from **two different screens** and are two different values:
+
+| Secret | Where |
+|---|---|
+| `META_APP_SECRET` | Instagram → API setup with Instagram login → Business login settings → **Instagram App Secret** |
+| `FACEBOOK_APP_SECRET` | **App settings → Basic → App secret** |
+
+## Invalid redirect_uri
+
+Instagram rejected the Connect attempt before showing the permission screen.
+
+**Cause A: the wrong App ID.** The number at the **top** of the Meta dashboard is the Facebook App ID. You need the **Instagram App ID**, from Instagram → API setup with Instagram login → Business login settings. The Connect page (admin → **Accounts → Connect a new account**) prints the App ID the Worker is actually sending, so compare the two.
+
+```bash
+npx wrangler secret put META_APP_ID
+npx wrangler deploy
+```
+
+**Cause B: the redirect URI isn't registered.** Meta requires an exact match, and its dashboard sometimes appends a trailing slash. Register **both**:
+
+```
+https://ig-comment-dm.YOURNAME.workers.dev/connect/callback
+https://ig-comment-dm.YOURNAME.workers.dev/connect/callback/
+```
+
+They go under **Instagram → API setup with Instagram login → Business login settings → OAuth redirect URIs**. If the screen you're on says *Facebook Login → Valid OAuth Redirect URIs*, that's the wrong product: stay on Instagram. The Connect page and the admin Accounts page both print the exact two lines.
+
+## Insufficient developer role
+
+The Instagram account you're connecting hasn't accepted a tester invite. Being a Facebook **Admin** on the app isn't enough, and an invite for one account doesn't cover another.
+
+For **each** Instagram account, both halves are required:
+
+1. Meta app → **App roles → Roles → Add people → Instagram Tester**. Enter the Instagram **username**, select it, and click Add.
+2. **On a browser or phone logged into that same Instagram account**, open [instagram.com/accounts/manage_access](https://www.instagram.com/accounts/manage_access/) → **Tester invites** → **Accept**.
+
+Step 2 is the one people miss.
+
+**Also check which account the browser is logged into.** When you click Connect, Instagram uses whatever account that browser is signed in as. One profile working and another failing is almost always this. Open a private window, log in to your admin page there, and click Connect from that window.
+
+## Deploy fails on the free plan
+
+If the error mentions CPU limits, `wrangler.toml` has a `[limits]` / `cpu_ms` block. That setting is paid-plan only and the deploy fails outright on Free. Remove it.
+
+If the error says the account doesn't have Workers enabled, open [dash.cloudflare.com](https://dash.cloudflare.com), click into Workers once to activate it, then deploy again.
+
+## The admin page shows 404
+
+Every path that isn't `/a/<ADMIN_URL_SECRET>` returns 404 by design, so the panel can't be found by crawling. A 404 means the secret in your URL doesn't match the deployed one.
+
+Usually it's a typo, a character lost on paste, a trailing slash, or a secret rotated by a later `npm run setup -- --rotate`.
+
+**Check what's deployed:**
+
+```bash
+npx wrangler secret list
+```
+
+That confirms `ADMIN_URL_SECRET` exists, but not its value: Cloudflare never shows a secret again after it's set. If you've lost it, set a new one:
+
+```bash
+npm run keys                              # copy the ADMIN_URL_SECRET line
+npx wrangler secret put ADMIN_URL_SECRET
+npx wrangler deploy
+```
+
+Your password and all your data are unaffected. Only the URL changes.
+
+## Locked out of the admin page
+
+### Too many wrong passwords
+
+Five attempts are free. The sixth waits a minute, and each attempt after that doubles the wait, up to an hour. Waiting it out is the intended fix.
+
+To clear it immediately:
+
+```bash
+npx wrangler d1 execute ig-comment-dm --remote --command \
+  "UPDATE system SET value = '0' WHERE key IN ('login_fail_count','login_locked_until');"
+```
+
+### Forgotten password
+
+There's no password reset email. Anyone with access to the Cloudflare account can clear it:
+
+```bash
+npx wrangler d1 execute ig-comment-dm --remote --command \
+  "DELETE FROM system WHERE key IN ('admin_password_hash','admin_password_salt');"
+```
+
+Then open your admin URL and create a new password. Connected accounts and rules are untouched.
+
+## Creating the first password returns a 500
+
+There are two causes, and the error page names which.
+
+**"A Worker secret is the wrong size."** `TOKEN_ENCRYPTION_KEY` and `SESSION_SIGNING_KEY` must each decode to exactly 32 bytes. A truncated paste looks fine and fails here.
+
+```bash
+npm run keys
+npx wrangler secret put TOKEN_ENCRYPTION_KEY
+npx wrangler secret put SESSION_SIGNING_KEY
+npx wrangler deploy
+```
+
+**"The database tables are missing."** The migrations never ran.
+
+```bash
+npm run db:migrate
+```
+
+## Errors mention "no such column" after an update
+
+The new code went live without its database migrations, usually because it was deployed with `npx wrangler deploy` instead of `npm run deploy` (which `npm run update` uses). Apply them:
+
+```bash
+npm run db:migrate:list   # shows the ones that are missing
+npm run db:migrate
+```
+
+## The DM failed
+
+The **Last 20 sends** row shows the exact error from Meta. When the DM fails, the public reply isn't posted either, because a reply like "Sent you a DM!" would be false; the row says so. A public reply can still fail on its own after a DM went through.
+
+"Could not reach Instagram after 3 tries" means Meta never answered, usually a brief network problem. That comment isn't retried automatically. A comment from a webhook has 25 seconds for its DM and public reply, so when Instagram is slow you may see fewer tries, followed by "and there was no time left to try again". If the DM got through but used up that time, the public reply is recorded as failed with "no time was left to post it".
+
+Common DM failures:
+
+| Error mentions | What it means |
+|---|---|
+| a closed messaging window | The comment is older than 7 days |
+| the reply was already sent | Instagram allows one private reply per comment, ever |
+| permissions or scope | The token predates a scope change: click **Reconnect** |
+| rate limit | You're near Meta's cap of 750 private replies per hour |
+
+If the DM says it succeeded but the recipient sees nothing, have them check **Message requests**. Instagram files DMs there when the recipient doesn't follow you.
+
+## Red banner: an account needs reconnecting
+
+Instagram tokens last 60 days. A nightly job refreshes them, but a token that goes too long without a refresh dies permanently.
+
+**Fix:** admin → **Accounts → Reconnect**. It takes about 20 seconds and nothing is lost: rules and history stay.
+
+If this keeps happening, the nightly job isn't running. See the next section.
+
+## Red banner: the daily check hasn't run
+
+The nightly token refresh hasn't succeeded in over 3 days, or a new deployment's first run, due at 03:00 UTC, is more than a day late. Left alone, tokens eventually expire and every account needs a manual reconnect.
+
+Until that first run is due, Home shows a plain note instead, saying the check hasn't run yet and when to expect it. That needs nothing from you.
+
+**Confirm the cron triggers are registered:**
+
+```bash
+npx wrangler deployments list
+```
+
+`wrangler.toml` should contain:
+
+```toml
+[triggers]
+crons = ["0 3 * * *", "*/5 * * * *"]
+```
+
+If it does, redeploy. Cron triggers are registered at deploy time, and a deploy from an older config can drop them.
+
+```bash
+npx wrangler deploy
+```
+
+To run it right now, click **Check connections now** on the admin Home page, or wait for the next scheduled run.
+
+## /health answers 503
+
+`/health` is the URL to give an uptime monitor ([Using it → Get told when it stops working](/using#get-told-when-it-stops-working)). It needs no login and returns only counts and timestamps, never a username, an account ID or a secret:
+
+```json
+{
+  "ok": true,
+  "database": "ok",
+  "accounts": { "active": 2, "needs_reconnect": 0 },
+  "cron": "ok",
+  "poll": "ok",
+  "last_cron_ok_at": 1759320000,
+  "last_poll_ok_at": 1759406280
+}
+```
+
+`200` means healthy and `503` means something needs fixing, so the monitor only has to check the status code. Open the URL in a browser to see which part failed:
+
+| The body says | What it means | Fix |
+|---|---|---|
+| `"database": "error"` | The Worker couldn't read D1, or the tables are missing. | Run `npm run db:migrate`. If the tables exist, check [Cloudflare's status page](https://www.cloudflarestatus.com) and `npx wrangler tail`. |
+| `"cron": "stale"` | The nightly token refresh hasn't succeeded in over 3 days, or hasn't run at all in the 26 hours since `/health` was first checked. | See [the daily check hasn't run](#red-banner-the-daily-check-hasnt-run). |
+| `"poll": "stale"` | The 5-minute comment poll hasn't finished in over an hour. | Usually the cron triggers were dropped. Redeploy with `npx wrangler deploy`. |
+
+`"starting"` means a job hasn't run yet on a new deploy. It counts as healthy, but only until the job is overdue: a day and two hours for the nightly refresh, an hour for the poll. Press **Check connections now** on Home to run the nightly job straight away.
+
+`accounts.needs_reconnect` above 0 doesn't make `/health` fail, because a monitor can't fix it. You fix it in the admin panel: see [an account needs reconnecting](#red-banner-an-account-needs-reconnecting).
+
+## Home shows a table of secrets needing attention
+
+The Worker checks the shape of all eight secrets every time you open Home. The table names the secret, what's wrong with it, and the command that fixes it. It catches:
+
+- a secret that isn't set at all
+- a key that doesn't decode to 32 bytes
+- `TOKEN_ENCRYPTION_KEY` and `SESSION_SIGNING_KEY` set to the same value, which turns one leak into two
+- an `ADMIN_URL_SECRET` shorter than 24 characters
+- a `PUBLIC_BASE_URL` with a trailing slash or without `https://`
+- a missing `FACEBOOK_APP_SECRET`
+
+Each of these would otherwise fail later, somewhere unrelated. Fix them, run `npx wrangler deploy`, and reload.
+
+## Reading the logs
+
+`npx wrangler tail` shows the Worker's live logs, and two SQL queries show what Instagram sent and why a comment was skipped. They're in [Using it → Logs](/using#logs).
+
+## Still stuck
+
+[Open an issue](https://github.com/CharanMN7/ig-comment-dm/issues/new/choose). The bug template asks for what makes a report solvable.
+
+**Redact before you paste.** Replace your admin secret with `/a/REDACTED`, and never include an access token, an app secret, or the contents of `.dev.vars`. Worker log output and the SQL queries are safe.
+
+Found a security problem? Don't open a public issue: see [Security](/security#reporting-a-vulnerability).

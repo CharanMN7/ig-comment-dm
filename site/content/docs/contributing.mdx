@@ -1,0 +1,158 @@
+---
+description: Claim an issue first, then set up locally, run the tests, and follow the house style. Small on purpose, and contributions that keep it small are the most welcome kind.
+---
+
+Thanks for being here. This project is small on purpose, and contributions that keep it small are the most welcome kind.
+
+## Claim an issue first
+
+Every pull request starts as an issue with your name on it.
+
+1. **Find an issue, or open one.** For a bug, a typo or a broken link too: it takes ten seconds and saves a wasted PR.
+2. **Comment to claim it**, with a line or two on how you plan to do it.
+3. **Wait until a maintainer assigns it to you.** Then start building.
+4. **Open the PR with `Closes #<issue>` in the description.**
+
+A pull request from someone who isn't assigned to the issue it closes is closed automatically, however good the code is. We may still build the idea ourselves. It's nothing personal: writing a PR now takes seconds, reviewing one still takes an hour, and assignment is how two people avoid building the same thing twice.
+
+You can have at most **two open pull requests** here at a time.
+
+Working with a coding agent? Claude Code, Codex, Cursor and most others read [`AGENTS.md`](https://github.com/CharanMN7/ig-comment-dm/blob/master/AGENTS.md) at the repo root on their own. It's the short version of this page, and it tells the agent to check that you're assigned before it writes code for a PR. You're still the one who claims the issue, and the one answerable for what the PR contains.
+
+Issues labelled [`good first issue`](https://github.com/CharanMN7/ig-comment-dm/labels/good%20first%20issue) are self-contained and have the approach sketched out in the description. Anything labelled [`roadmap`](https://github.com/CharanMN7/ig-comment-dm/labels/roadmap) is a feature we want but haven't built. Those are bigger, so expect a short design conversation in the issue before you're assigned.
+
+## The shape of this project
+
+One Cloudflare Worker. One D1 database. No build step, no bundler config, no framework, no client-side JavaScript. Pages are server-rendered HTML from [Hono](https://hono.dev).
+
+That's a feature. A creator with no technical background should be able to have this running on a free Cloudflare account in under an hour, and a maintainer should be able to read the whole thing in an afternoon.
+
+**Before you add a dependency, try not adding it.** The runtime dependency list is one entry long (`hono`). Web Crypto covers hashing, HMAC and AES-GCM. D1 covers storage. `fetch` covers Meta.
+
+## Local setup
+
+You need [Node.js 22.13+](https://nodejs.org) and a free [Cloudflare](https://dash.cloudflare.com/sign-up) account.
+
+```bash
+git clone https://github.com/CharanMN7/ig-comment-dm.git
+cd ig-comment-dm
+npm install
+
+cp .dev.vars.example .dev.vars      # then fill it in, see below
+npm run db:migrate:local             # creates the tables in the local database
+npm run dev                          # http://localhost:8787
+```
+
+Run `npm run db:migrate:local` again after pulling a change that adds a migration. It skips the ones your local database has already recorded.
+
+For local work you **don't** need a real Meta app. Fill `.dev.vars` with dummy values of the right shape and most of the admin panel works. Keep `PUBLIC_BASE_URL=http://localhost:8787`.
+
+```bash
+npm run keys        # prints correctly sized random values for the four generated secrets
+```
+
+You need a real Meta app only to test Connect or a live DM. To click Connect locally, add `http://localhost:8787/connect/callback` as an OAuth redirect URI in the Meta app. Webhooks from Instagram can't reach localhost, so fake one with curl instead.
+
+### Fake a comment webhook
+
+Replace `YOUR_APP_SECRET` and, once you've connected an account, `YOUR_IG_USER_ID` (the account ID stored in the database).
+
+```bash
+export META_APP_SECRET='YOUR_APP_SECRET'
+BODY='{"object":"instagram","entry":[{"id":"YOUR_IG_USER_ID","time":'"$(date +%s)"',"changes":[{"field":"comments","value":{"id":"TEST_COMMENT_ID_1","text":"guide please","from":{"id":"OTHER_PERSON_ID","username":"someone"},"media":{"id":"MEDIA_ID"}}}]}]}'
+SIG="$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$META_APP_SECRET" | awk '{print $NF}')"
+curl -sS -D - -o /tmp/webhook-body.txt \
+  -X POST 'http://localhost:8787/webhook' \
+  -H 'Content-Type: application/json' \
+  -H "X-Hub-Signature-256: sha256=${SIG}" \
+  --data-binary "$BODY"
+```
+
+A `200` with an empty body is success. Instagram retries anything slow, so the Worker answers immediately and does the work in the background.
+
+## Tests
+
+```bash
+npm test            # both suites below: a few seconds, no network
+npm run typecheck   # tsc over src/ and test/
+```
+
+Both must pass. CI runs them, a `wrangler deploy --dry-run`, and a secret scan.
+
+`npm test` is two suites you can also run alone:
+
+- `npm run test:unit` runs `scripts/test-unit.ts`: pure functions on Node's built-in `node:test` runner, no framework to learn. It also runs `scripts/test-update.ts`, which checks `npm run update` against throwaway git repositories in a temporary folder.
+- `npm run test:integration` runs `test/*.test.ts`: the real Worker in workerd, with a fresh local D1 for each test and every file in `migrations/` applied. Meta is faked in `test/support/meta.ts`, so no request leaves the machine and tests assert exactly what the Worker sent. A Meta call with no fake fails the test, so if your change adds one, add a route there.
+
+You need no Meta app and no `.dev.vars` for either. If you fix a bug in the webhook, the admin panel or the cron, add an integration test that fails without your fix.
+
+There's also a live end-to-end check that drives a running Worker:
+
+```bash
+ADMIN_URL_SECRET=... WEBHOOK_VERIFY_TOKEN=... META_APP_SECRET=... ADMIN_PASSWORD=... \
+  npm run selftest -- http://localhost:8787
+```
+
+## Pull requests
+
+- **One change per PR.** A bug fix and a refactor in the same diff is two PRs.
+- **Branch from `master`** and name it `feat/…`, `fix/…`, `docs/…` or `chore/…`.
+- **Write the commit subject as a sentence about behaviour**, in the imperative, ending with a period. Every commit in `git log` reads like `Accept Facebook webhook signatures and poll missed comments.`, not `fix webhook`.
+- **Explain the why in the body**, especially for anything involving Meta. Meta's documented behaviour and its actual behaviour differ often enough that the reasoning is the valuable part.
+- **Add a test** when you fix a bug.
+- **Update the docs** when you change the operator-facing steps. They live in `site/content/docs/`; see [Editing these docs](#editing-these-docs).
+
+## House style
+
+There's no linter, so these conventions are kept by hand:
+
+- **Comments explain why, never what.** `src/guard.ts` is the model: 14 lines, and 8 of them explain why the guard has to exist at all.
+- **Errors that reach an operator are written for a person.** Not "500 Internal Server Error", but "The database tables are missing. Run the D1 migration, then try again." The person reading it may not be a developer. Technical detail goes in a `<pre>` underneath.
+- **No `any`.** Meta's JSON is typed narrowly at the boundary and validated there.
+- **Imports carry the `.ts` extension.** Node's type stripping and Wrangler both want it.
+- **Nothing secret is ever logged.** Log an account ID, never a token, a password or a key. If you add a log line, check what's in the object you're spreading.
+- **No `nodejs_compat`.** Web Crypto only. This keeps the Worker startable on the free plan with a tiny bundle.
+
+## Adding a migration
+
+A schema change is a new file in `migrations/` with the next free number on `master`: after `006_match_all.sql` comes `007_…`. Nothing else needs editing: `npm run db:migrate`, `npm run deploy`, `npm run setup` and the integration tests all pick up every file in the folder. If another PR takes your number before yours merges, renumber yours.
+
+Wrangler's runner (`wrangler d1 migrations apply`) records each file it applies in a `d1_migrations` table and skips recorded files after that, so a migration runs once per database. That's what makes `ALTER TABLE` possible.
+
+- **Never edit a migration that has shipped.** A database that has recorded it never reads it again, so the edit would reach new installs only and the two would quietly drift apart. Fix it in a new migration.
+- **Keep changes additive.** `npm run deploy` applies migrations before the new code goes live, so the old code runs against the new schema for a moment. Add tables and columns; don't rename or drop them.
+- **Give a new column a default that keeps existing rows behaving exactly as before**, like `004_rule_match_mode.sql` does with `DEFAULT 'word'`. SQLite refuses `NOT NULL` without a default here anyway.
+- **Try it locally** with `npm run db:migrate:local` (`npm run db:migrate:list:local` shows what's pending), then `npm test`.
+
+**Why `001` and `002` run again on old deployments.** Deployments from before tracking applied them by hand with `wrangler d1 execute`, so their `d1_migrations` table is empty and the first tracked run applies both again. That's harmless: every statement in them is `CREATE TABLE IF NOT EXISTS` or `CREATE INDEX IF NOT EXISTS`, and neither inserts a row, so the replay changes nothing and only records them. `test/migrations.test.ts` builds a database the old way, with rows in it, and checks that every migration then applies cleanly and leaves those rows alone. Your new migration has to pass that test too.
+
+## Security
+
+Don't open a public issue for a vulnerability. See [Security](/security#reporting-a-vulnerability) for private reporting.
+
+Never commit `.dev.vars`, a `database_id`, an access token, or a screenshot showing your admin URL. CI scans every PR for these, but the scan is a backstop, not a substitute for checking your own diff.
+
+## Deciding what belongs here
+
+**Yes:** anything that makes the comment-to-DM path more reliable, anything that makes setup less painful, better error messages, more of Instagram's API, and the features on the [roadmap](/roadmap).
+
+**Probably not:** a hosted multi-tenant version, a database other than D1, a JavaScript framework in the admin panel, or a paid tier. This is a tool you run yourself, and keeping it that way is the point.
+
+If you're unsure, open an issue and ask before building.
+
+## Editing these docs
+
+This site lives in `site/`, with its own `package.json`; the root `npm install` doesn't touch it. Pages are MDX files in `site/content/docs/`, the sidebar is `site/content/docs/docs.json`, and the landing page is `site/src/pages/index.astro`. It's built with [Astro](https://astro.build) and the [Inkform](https://framework.inkform.dev) docs framework, and deployed to GitHub Pages by `.github/workflows/site.yml`.
+
+```bash
+cd site
+npm ci
+npm run dev         # http://localhost:4321/ig-comment-dm/
+npm run build && npm run check-links
+```
+
+Links between docs pages are written from the docs root: `[Troubleshooting](/troubleshooting)`. Screenshots go in `site/public/screenshots/`; `site/SCREENSHOTS.md` lists the ones each page expects.
+
+## Code of conduct
+
+Be decent. Assume good faith. Everyone here is doing this in their spare time. Harassment gets you removed, and there's no appeals process. The full text is in [CODE_OF_CONDUCT.md](https://github.com/CharanMN7/ig-comment-dm/blob/master/CODE_OF_CONDUCT.md).

@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { decryptAesGcm, encryptAesGcm } from '../../src/crypto.ts';
 import { insertRule, setAccountActive, toggleRule, tryClaimComment, updateSent, upsertAccount } from '../../src/db.ts';
-import type { Account, Rule, Sent } from '../../src/types.ts';
+import type { Account, MatchMode, Rule, Sent } from '../../src/types.ts';
 
 export const FROZEN_NOW_MS = Date.UTC(2026, 9, 1, 12, 0, 0);
 export const NOW = Math.floor(FROZEN_NOW_MS / 1000);
@@ -45,6 +45,9 @@ export async function seedRule(
     igUserId?: string;
     label?: string;
     keywords?: string[];
+    matchMode?: MatchMode;
+    excludeKeywords?: string[];
+    matchAll?: boolean;
     mediaId?: string | null;
     dmText?: string;
     publicReply?: string | null;
@@ -55,6 +58,9 @@ export async function seedRule(
     ig_user_id: opts.igUserId ?? IG_USER,
     label: opts.label ?? 'Free guide',
     keywords: JSON.stringify(opts.keywords ?? ['guide']),
+    match_mode: opts.matchMode ?? 'word',
+    exclude_keywords: JSON.stringify(opts.excludeKeywords ?? []),
+    match_all: opts.matchAll ? 1 : 0,
     media_id: opts.mediaId ?? null,
     dm_text: opts.dmText ?? 'Here is your guide: https://example.com/guide',
     public_reply_text: opts.publicReply ?? null,
@@ -66,32 +72,36 @@ export async function seedRule(
   return id;
 }
 
-/** A logged comment, claimed then settled the way the pipeline writes one. */
+/** A `sent` row as the pipeline's claim writes it, already settled on a status. */
 export async function seedSent(opts: {
   commentId: string;
+  status: 'ok' | 'skipped' | 'failed' | 'pending';
+  at: number;
+  commenterId?: string | null;
   igUserId?: string;
   ruleId?: number | null;
-  status?: string;
   replyStatus?: string | null;
   error?: string | null;
-  sentAt?: number;
 }): Promise<void> {
-  const sentAt = opts.sentAt ?? NOW;
   await tryClaimComment(env.DB, {
     comment_id: opts.commentId,
     ig_user_id: opts.igUserId ?? IG_USER,
-    commenter_id: '9100000000000001',
-    dm_status: 'pending',
-    error: null,
-    sent_at: sentAt,
-  });
-  await updateSent(env.DB, opts.commentId, {
-    rule_id: opts.ruleId ?? null,
-    dm_status: opts.status ?? 'ok',
-    reply_status: opts.replyStatus ?? null,
+    commenter_id: opts.commenterId === undefined ? '9100000000000001' : opts.commenterId,
+    dm_status: opts.status,
     error: opts.error ?? null,
-    sent_at: sentAt,
+    sent_at: opts.at,
   });
+  // The claim can't record a rule or a reply outcome; the pipeline sets those
+  // when it settles the row, so this does too.
+  if (opts.ruleId != null || opts.replyStatus != null) {
+    await updateSent(env.DB, opts.commentId, {
+      rule_id: opts.ruleId ?? null,
+      dm_status: opts.status,
+      reply_status: opts.replyStatus ?? null,
+      error: opts.error ?? null,
+      sent_at: opts.at,
+    });
+  }
 }
 
 // Compare rows with toMatchObject, not toEqual: a migration that adds a column

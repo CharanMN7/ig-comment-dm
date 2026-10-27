@@ -1,0 +1,45 @@
+{
+  "name": "Comment to DM",
+  "favicon": "/favicon.svg",
+  "navbarLinks": [
+    { "name": "Home", "href": "/" },
+    { "name": "GitHub", "href": "https://github.com/CharanMN7/ig-comment-dm" }
+  ],
+  "tabs": [
+    {
+      "tab": "Docs",
+      "navigation": [
+        {
+          "group": "Start here",
+          "pages": [
+            { "title": "Overview", "slug": "", "file": "index.mdx" },
+            { "title": "Self-setup guide", "slug": "setup", "file": "setup.mdx" },
+            { "title": "Agent setup guide", "slug": "agent-setup", "file": "agent-setup.mdx" }
+          ]
+        },
+        {
+          "group": "Running it",
+          "pages": [
+            { "title": "Using it", "slug": "using", "file": "using.mdx" },
+            { "title": "Updating your copy", "slug": "updating", "file": "updating.mdx" },
+            { "title": "Troubleshooting", "slug": "troubleshooting", "file": "troubleshooting.mdx" }
+          ]
+        },
+        {
+          "group": "How it works",
+          "pages": [
+            { "title": "Architecture", "slug": "architecture", "file": "architecture.mdx" },
+            { "title": "Security", "slug": "security", "file": "security.mdx" }
+          ]
+        },
+        {
+          "group": "Project",
+          "pages": [
+            { "title": "Contributing", "slug": "contributing", "file": "contributing.mdx" },
+            { "title": "Roadmap", "slug": "roadmap", "file": "roadmap.mdx" }
+          ]
+        }
+      ]
+    }
+  ]
+}

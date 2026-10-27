@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CRON_STALE_SECONDS, POLL_STALE_SECONDS } from '../src/crypto.ts';
 import { HEALTH_FIRST_SEEN_KEY, flagNeedsReconnect, systemSet } from '../src/db.ts';
 import { ACCESS_TOKEN, DAY, FROZEN_NOW_MS, IG_USER, NOW, accountRow, seedAccount, seedRule, systemValue } from './support/seed.ts';
-import { adminPath, request, runScheduled, signedInAdmin } from './support/worker.ts';
+import { adminPath, countingDb, request, runScheduled, signedInAdmin } from './support/worker.ts';
 
 const HOUR = 60 * 60;
 
@@ -46,20 +46,6 @@ function unreachableDb(): D1Database {
   return { prepare: () => statement, batch: fail, exec: fail } as unknown as D1Database;
 }
 
-/** The real database, counting the statements prepared against it. */
-function countingDb(): { db: D1Database; statements: string[] } {
-  const statements: string[] = [];
-  const db = {
-    prepare: (sql: string) => {
-      statements.push(sql);
-      return env.DB.prepare(sql);
-    },
-    batch: (s: D1PreparedStatement[]) => env.DB.batch(s),
-    exec: (sql: string) => env.DB.exec(sql),
-  } as unknown as D1Database;
-  return { db, statements };
-}
-
 afterEach(() => vi.restoreAllMocks());
 
 describe('GET /health', () => {
@@ -92,7 +78,7 @@ describe('GET /health', () => {
     expect(res.headers.get('Cache-Control')).toBe('no-store');
     expect(res.headers.get('X-Robots-Tag')).toBe('noindex');
     expect(res.headers.get('Content-Security-Policy')).toBe(
-      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      "default-src 'none'; style-src 'unsafe-inline'; manifest-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
     );
     expect(res.headers.get('Referrer-Policy')).toBe('no-referrer');
     expect(res.headers.get('X-Frame-Options')).toBe('DENY');

@@ -1,0 +1,259 @@
+---
+import '../styles/site.css';
+
+const base = import.meta.env.BASE_URL;
+const docs = (path = '') => `${base}docs/${path}`;
+const repo = 'https://github.com/CharanMN7/ig-comment-dm';
+const title = 'Comment to DM: Instagram comment-to-DM on your own Cloudflare account';
+const description =
+  'Someone comments a keyword on your post or reel and gets your link by DM about two seconds later. Runs on your own free Cloudflare account. No monthly fee, and no SaaS holding your Instagram login.';
+const canonical = new URL(base, Astro.site).href;
+
+const limits = [
+  {
+    title: 'Professional accounts only.',
+    body: 'Instagram’s API doesn’t work with personal accounts. Switching to Creator or Business takes a minute in the app, under Settings → Account type and tools.',
+  },
+  {
+    title: 'You need your own Meta developer app, and it has to be Live.',
+    body: 'An app in Development mode only receives the dashboard’s Test button, never real comments. Publishing needs no App Review while only your own accounts connect as Instagram Testers; App Review is for letting other people connect theirs.',
+  },
+  {
+    title: 'One DM per comment, ever.',
+    body: 'Instagram allows one private reply per comment, and no follow-up unless the person replies first. Put everything in that message.',
+  },
+  {
+    title: 'Comments older than seven days can’t get a private reply.',
+    body: 'They’re logged as skipped.',
+  },
+  {
+    title: 'Hidden Words wins.',
+    body: 'Comments Instagram’s filter hides never reach the API, so nothing can answer them.',
+  },
+  {
+    title: 'Not following you? Message requests.',
+    body: 'A DM to someone who doesn’t follow you lands in their Message requests folder, not their inbox.',
+  },
+  {
+    title: 'Meta caps private replies at 750 an hour.',
+    body: 'Past it, sends fail and the log says why.',
+  },
+];
+
+const faq = [
+  {
+    q: 'Does it need my Instagram password?',
+    a: `No. You connect each account through Instagram’s own login page, the same official flow (Instagram Login) that hosted tools use. The Worker only ever holds the access token Instagram issues, encrypted with AES-256-GCM under a key that lives in your Cloudflare account.`,
+  },
+  {
+    q: 'What does it cost?',
+    a: `Nothing, on Cloudflare’s free plan, which covers 100,000 Worker requests a day. Meta doesn’t charge for the API.`,
+  },
+  {
+    q: 'Is this allowed?',
+    a: `It uses Meta’s official Graph API through Instagram Login: webhooks for comments and the Private Replies endpoint for the DM. No scraping, no browser automation, no unofficial endpoints.`,
+  },
+  {
+    q: 'Do I need to write code?',
+    a: `No. You run five commands and click through Meta’s developer dashboard. If you’d rather not, the <a href="${docs('agent-setup/')}">agent setup guide</a> has Claude Code and Claude in Chrome do the typing and clicking while you handle the logins and secrets.`,
+  },
+  {
+    q: 'What if Meta never sends the webhook?',
+    a: `Every five minutes the Worker also checks the three most recent posts on each account (the last 72 hours) and answers anything it missed, so the DM arrives late instead of never. Each comment is claimed in the database before anything is sent, so nobody gets two.`,
+  },
+  {
+    q: 'Can I run it for several accounts?',
+    a: `Yes, for accounts that are yours: one deployment handles several Instagram accounts, each added as an Instagram Tester on your Meta app. For a client, set up a separate copy on their own Cloudflare account and Meta app.`,
+  },
+  {
+    q: 'How do I update it?',
+    a: `Run <code>npm run update</code>. It pulls the latest code, shows what changed, applies any database migrations and deploys. Your secrets live in Cloudflare and your data in D1, so an update doesn’t touch either. <a href="${docs('updating/')}">Updating your copy</a> has the details.`,
+  },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" href={`${base}favicon.svg`} type="image/svg+xml" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Comment to DM" />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta name="twitter:card" content="summary" />
+    <meta name="color-scheme" content="light dark" />
+    {/* Follows the theme chosen with the docs' toggle; without it, the OS setting. */}
+    <script is:inline>
+      try {
+        var t = localStorage.getItem('fw-theme');
+        if (t === 'dark' || t === 'light') document.documentElement.dataset.theme = t;
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="bar">
+      <a class="mark" href={base} aria-label="Comment to DM home">
+        <img src={`${base}favicon.svg`} alt="" width="22" height="22" />
+        <span>Comment to DM</span>
+      </a>
+      <nav aria-label="Site">
+        <a href={docs()}>Docs</a>
+        <a class="gh" href={repo}>
+          GitHub
+          <img
+            src="https://img.shields.io/github/stars/CharanMN7/ig-comment-dm?style=flat&label=%E2%98%85&labelColor=262626&color=5851db"
+            alt="stars on GitHub"
+            height="20"
+            loading="lazy"
+          />
+        </a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero">
+        <h1>They comment “guide”. Two seconds later, they have your link.</h1>
+        <div class="pitch">
+          <p class="lede">
+            Instagram comment-to-DM that runs on your own Cloudflare account, on the free plan. No monthly fee, and no SaaS
+            holding your Instagram login.
+          </p>
+          <div class="ctas">
+            <a class="btn" href={docs('setup/')}>Set it up</a>
+            <a class="btn quiet" href={docs()}>How it works</a>
+          </div>
+          <p class="fine">
+            Open source under MIT. Setup is one command, plus about 15 minutes in Meta’s developer dashboard.
+          </p>
+        </div>
+
+        <figure class="demo" aria-labelledby="demo-caption">
+          <figcaption id="demo-caption" class="sr">
+            An example: maya.draws comments “guide please” on your reel. Meta sends the comment to your Worker, it matches your
+            rule “Free guide”, and about two seconds later Maya has a DM from you with the link.
+          </figcaption>
+
+          <div class="pane" aria-hidden="true">
+            <p class="pane-label">Comments on your reel</p>
+            <div class="comment">
+              <span class="av av-maya">m</span>
+              <p><b>maya.draws</b> guide please 🙏</p>
+            </div>
+          </div>
+
+          <ol class="pipe" aria-hidden="true">
+            <li>Meta sends it to your Worker</li>
+            <li>“guide” matches your rule “Free guide”</li>
+            <li>One private reply goes out</li>
+          </ol>
+
+          <div class="pane dm" aria-hidden="true">
+            <p class="pane-label">Maya’s DMs</p>
+            <div class="thread">
+              <span class="av av-you"><span>y</span></span>
+              <div class="msgs">
+                <b class="from">yourname</b>
+                <div class="slot">
+                  <p class="typing"><i></i><i></i><i></i></p>
+                  <p class="bubble">Here’s the free guide 👉 yoursite.com/guide</p>
+                </div>
+                <p class="when">about 2 seconds after the comment</p>
+              </div>
+            </div>
+          </div>
+        </figure>
+      </section>
+
+      <section class="row" aria-labelledby="h-own">
+        <h2 id="h-own">Hosted tools vs. your own Worker</h2>
+        <div class="body">
+          <div class="table-wrap">
+            <table class="compare">
+              <thead>
+                <tr><th scope="col"><span class="sr">What</span></th><th scope="col">Hosted tools</th><th scope="col">Comment to DM</th></tr>
+              </thead>
+              <tbody>
+                <tr><th scope="row">Cost</th><td>$15–99 a month, every month</td><td>$0. Cloudflare’s free plan covers 100,000 requests a day.</td></tr>
+                <tr><th scope="row">Your Instagram token</th><td>On their servers, next to everyone else’s</td><td>In your Cloudflare account, encrypted with a key only you hold</td></tr>
+                <tr><th scope="row">Your audience’s DMs</th><td>Pass through a third party</td><td>Go straight from your Worker to Meta</td></tr>
+                <tr><th scope="row">If they shut down</th><td>The automation stops</td><td>Nothing changes. It’s your Worker.</td></tr>
+                <tr><th scope="row">The code</th><td>Closed</td><td>One Worker, one runtime dependency, no build step</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="row" aria-labelledby="h-setup">
+        <h2 id="h-setup">Setup</h2>
+        <div class="body">
+          <pre class="cmd"><code><span class="c"># Node.js 22.13+ and a free Cloudflare account</span>
+git clone https://github.com/CharanMN7/ig-comment-dm.git
+cd ig-comment-dm
+npm install
+npx wrangler login
+npm run setup</code></pre>
+          <p>
+            <code>npm run setup</code> deploys the Worker, creates the database, generates every secret at the right size, and prints
+            the exact values to paste into Meta’s dashboard. The Meta side (creating an app, adding yourself as a tester,
+            publishing it) is the slow part, and the guide shows every screen.
+          </p>
+          <ul class="paths">
+            <li><a href={docs('setup/')}>Self-setup guide</a>: Cloudflare and the Meta developer app, step by step.</li>
+            <li>
+              <a href={docs('agent-setup/')}>Agent setup guide</a>: Claude Code and Claude in Chrome do the clicking. You keep the
+              logins and the secrets.
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="row" aria-labelledby="h-limits">
+        <h2 id="h-limits">Limits</h2>
+        <div class="body">
+          <p class="intro">Meta’s rules, not ours. Each one has cost someone an evening, so here they are up front.</p>
+          <ul class="limits">
+            {limits.map((l) => (
+              <li>
+                <b>{l.title}</b> {l.body}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      <section class="row" aria-labelledby="h-faq">
+        <h2 id="h-faq">Questions</h2>
+        <div class="body faq">
+          {faq.map((f) => (
+            <details>
+              <summary>{f.q}</summary>
+              <p set:html={f.a} />
+            </details>
+          ))}
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <div class="foot-in">
+      <nav aria-label="Footer">
+        <a href={docs()}>Docs</a>
+        <a href={repo}>GitHub</a>
+        <a href={docs('security/')}>Security</a>
+        <a href={docs('contributing/')}>Contributing</a>
+        <a href={`${repo}/blob/master/LICENSE`}>MIT license</a>
+      </nav>
+      <p>
+        Not affiliated with, endorsed by, or sponsored by Meta or Instagram. Instagram is a trademark of Meta Platforms, Inc.
+      </p>
+      </div>
+    </footer>
+  </body>
+</html>

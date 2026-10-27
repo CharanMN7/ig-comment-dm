@@ -3,6 +3,7 @@ import { html } from 'hono/html';
 import {
   CRON_STALE_SECONDS,
   DM_TEXT_MAX,
+  PUBLIC_REPLY_MAX,
   decryptAesGcm,
   encryptAesGcm,
   hashPassword,
@@ -12,21 +13,26 @@ import {
 } from '../crypto.ts';
 import { ensureCommentSubscriptions, runCron } from '../cron.ts';
 import {
+  HEALTH_FIRST_SEEN_KEY,
+  type SendTotals,
   countSentByComment,
   deleteRule,
   getAccount,
   getRule,
   getSent,
+  healthSnapshot,
   insertRule,
+  latestSignedWebhookStatus,
   listAccounts,
   listRules,
   paginatedSent,
   recentSent,
   recentWebhookEvents,
+  sendTotals,
+  sendTotalsByAccount,
   setAccountActive,
   systemGet,
   systemSet,
-  todayCounters,
   toggleRule,
   updateRule,
   upsertAccount,
@@ -34,10 +40,28 @@ import {
 import { findConfigProblems } from '../config.ts';
 import { csrfField, daysUntil, fmtWhen, layout, pageError, statusWords } from '../html.ts';
 import { LOGS_PAGE_SIZE, LOG_STATUSES, logsHref, pageLinks, parseLogsQuery } from '../logs.ts';
-import { KEYWORD_TOO_SHORT_MESSAGE, parseKeywords } from '../match.ts';
+import {
+  EXCLUSION_TOO_SHORT_MESSAGE,
+  KEYWORD_TOO_SHORT_MESSAGE,
+  isMatchMode,
+  keywordProblem,
+  keywordSwallowedBy,
+  normalizeCommentText,
+  parseKeywords,
+} from '../match.ts';
 import { listRecentMedia, oauthRedirectUri } from '../meta.ts';
+import {
+  SAMPLE_USERNAME,
+  USERNAME_GROWTH,
+  countUsernameTokens,
+  fillPlaceholders,
+  worstCaseLength,
+} from '../placeholders.ts';
 import { chooseRule } from '../process.ts';
+import { parsePublicReplies, serializePublicReplies } from '../replies.ts';
+import { CRON_FIRST_RUN_SECONDS, jobState } from './health.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
+import { LINK_MARKER, TEMPLATES, findTemplate, placeholderLinkIn, type RuleTemplate } from '../templates.ts';
 import {
   clearFailures,
   describeLock,
@@ -45,7 +69,7 @@ import {
   readThrottle,
   recordFailure,
 } from '../throttle.ts';
-import type { Env, Sent, SessionData } from '../types.ts';
+import type { Env, MatchMode, Rule, Sent, SessionData } from '../types.ts';
 
 type Vars = {
   adminBase: string;
@@ -58,7 +82,7 @@ export const adminRoutes = new Hono<{ Bindings: Env; Variables: Vars }>({ strict
 adminRoutes.onError((err, c) => {
   console.error(err);
   const detail = err instanceof Error ? err.message : String(err);
-  const d1 = /no such table|D1/i.test(detail);
+  const d1 = /no such table/i.test(detail);
   const key = /SESSION_SIGNING_KEY|TOKEN_ENCRYPTION_KEY|32 random bytes/i.test(detail);
   const plain = d1
     ? 'The database tables are missing. Run the D1 migration, then try again.'
@@ -145,6 +169,7 @@ adminRoutes.get('/setup', async (c) => {
   return c.html(
     layout({
       title: 'Create password',
+      app: base,
       body: html`
         <h1>Create your password</h1>
         <p>This page is only shown once. Pick a password you will remember — there is no email reset.</p>
@@ -171,7 +196,7 @@ adminRoutes.post('/setup', async (c) => {
     return c.html(
       layout({
         title: 'Create password',
-        body: html`<p class="err">Use at least 8 characters.</p><p><a href="${base}/setup">Back</a></p>`,
+        body: html`<p class="err">Use at least 8 characters.</p><p><a class="btn secondary" href="${base}/setup">Back</a></p>`,
       }),
       400,
     );
@@ -180,7 +205,7 @@ adminRoutes.post('/setup', async (c) => {
     return c.html(
       layout({
         title: 'Create password',
-        body: html`<p class="err">Those two passwords did not match.</p><p><a href="${base}/setup">Back</a></p>`,
+        body: html`<p class="err">Those two passwords did not match.</p><p><a class="btn secondary" href="${base}/setup">Back</a></p>`,
       }),
       400,
     );
@@ -212,6 +237,7 @@ adminRoutes.post('/setup', async (c) => {
 function loginPage(opts: { base: string; csrf: string; error?: string; lockedFor?: number }) {
   return layout({
     title: 'Log in',
+    app: opts.base,
     body: html`
       <h1>Log in</h1>
       ${opts.error ? html`<p class="err">${opts.error}</p>` : html``}
@@ -291,13 +317,53 @@ function sendDetail(s: Sent) {
   return html`
     ${s.dm_status === 'failed' && s.error
       ? html`<span class="err">Send failed.</span>
-          <div class="muted">${s.error}</div>`
+          <div class="muted detail">${s.error}</div>`
       : s.error
-        ? html`<span class="muted">${s.error}</span>`
+        ? html`<span class="muted detail">${s.error}</span>`
         : html``}
     ${s.reply_status === 'skipped'
       ? html`<div class="muted">Public reply not posted, because no DM went out.</div>`
       : html``}
+  `;
+}
+
+const DAY = 24 * 60 * 60;
+
+// Windows start at a UTC midnight, so "Last 7 days" is today and the six days
+// before it. One fixed clock means the numbers don't shift with the viewer.
+const TOTAL_WINDOWS = [
+  { label: 'Today (UTC)', days: 1 },
+  { label: 'Last 7 days', days: 7 },
+  { label: 'Last 30 days', days: 30 },
+  { label: 'All time', days: null },
+];
+
+function windowStarts(now: number): number[] {
+  const today = Math.floor(now / DAY) * DAY;
+  return TOTAL_WINDOWS.map((w) => (w.days == null ? 0 : today - (w.days - 1) * DAY));
+}
+
+function fmtCount(n: number): string {
+  return n.toLocaleString('en-US');
+}
+
+function totalsTiles(totals: SendTotals[]) {
+  return html`
+    <div class="kpis">
+      ${TOTAL_WINDOWS.map((w, i) => {
+        const t = totals[i] ?? { sent: 0, skipped: 0, failed: 0, reached: 0 };
+        const failed = `${fmtCount(t.failed)} failed`;
+        return html`<div class="kpi">
+          <span class="muted">${w.label}</span>
+          <b>${fmtCount(t.reached)}</b>
+          people reached
+          <div class="muted">
+            ${fmtCount(t.sent)} DMs sent<br />${fmtCount(t.skipped)} skipped<br />
+            ${t.failed ? html`<span class="err">${failed}</span>` : failed}
+          </div>
+        </div>`;
+      })}
+    </div>
   `;
 }
 
@@ -309,20 +375,23 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
   c.executionCtx.waitUntil(ensureCommentSubscriptions(c.env));
   const sends = await recentSent(c.env.DB, 20);
   let events: Awaited<ReturnType<typeof recentWebhookEvents>> = [];
+  let latestSigned: string | null = null;
   try {
     events = await recentWebhookEvents(c.env.DB, 8);
+    latestSigned = await latestSignedWebhookStatus(c.env.DB);
   } catch {
     events = [];
   }
-  const dayStart = Math.floor(now / 86400) * 86400;
-  const counts = await todayCounters(c.env.DB, dayStart);
-  const lastCron = await systemGet(c.env.DB, 'last_cron_ok_at');
-  const lastCronN = lastCron ? parseInt(lastCron, 10) : NaN;
-  const lastPoll = await systemGet(c.env.DB, 'last_poll_ok_at');
-  const lastPollN = lastPoll ? parseInt(lastPoll, 10) : NaN;
-  const cronStale = !Number.isFinite(lastCronN) || now - lastCronN > CRON_STALE_SECONDS;
+  const starts = windowStarts(now);
+  const totals = await sendTotals(c.env.DB, starts);
+  // With one account the breakdown would repeat the totals, so skip its query.
+  const byAccount = accounts.length > 1 ? await sendTotalsByAccount(c.env.DB, starts) : null;
+  const health = await healthSnapshot(c.env.DB, now);
+  // Shares /health's clock, so a deploy nobody monitors still gets its grace
+  // period from the first time the operator opens Home.
+  if (health.firstSeenAt == null) await systemSet(c.env.DB, HEALTH_FIRST_SEEN_KEY, String(now));
+  const cron = jobState(health.lastCronOkAt, CRON_STALE_SECONDS, CRON_FIRST_RUN_SECONDS, health.firstSeenAt ?? now, now);
   const reconnect = accounts.filter((a) => a.needs_reconnect === 1 || a.token_expires_at <= now);
-  const latestEvent = events[0];
   const configProblems = findConfigProblems(c.env);
 
   const banners = [];
@@ -335,11 +404,22 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
       </div>
     `);
   }
-  if (cronStale) {
+  if (cron === 'starting') {
+    const todayRun = Math.floor(now / DAY) * DAY + 3 * 60 * 60;
+    const next = todayRun > now ? todayRun : todayRun + DAY;
+    banners.push(html`
+      <div class="note">
+        The daily Instagram check hasn’t run yet. It runs at 03:00 UTC every day, so expect the first run by
+        ${fmtWhen(next)}.
+      </div>
+    `);
+  } else if (cron === 'stale') {
     banners.push(html`
       <div class="banner">
-        The daily Instagram check hasn’t run in over 3 days. Message whoever set this up — the automatic
-        refresh job isn’t running.
+        ${health.lastCronOkAt == null
+          ? 'The daily Instagram check has never run, and its first run at 03:00 UTC is overdue.'
+          : 'The daily Instagram check hasn’t run in over 3 days.'}
+        Message whoever set this up — the automatic refresh job isn’t running.
       </div>
     `);
   }
@@ -348,7 +428,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
       <div class="banner">
         <b>${configProblems.length === 1 ? 'A Worker secret needs attention.' : `${String(configProblems.length)} Worker secrets need attention.`}</b>
         Whoever set this up should fix these and deploy again.
-        <table style="margin-top:0.55rem">
+        <div class="table-wrap"><table style="margin-top:0.55rem">
           <tr><th>Secret</th><th>What is wrong</th><th>Command that fixes it</th></tr>
           ${configProblems.map(
             (p) => html`
@@ -359,11 +439,11 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
               </tr>
             `,
           )}
-        </table>
+        </table></div>
       </div>
     `);
   }
-  if (latestEvent?.status === 'bad_sig') {
+  if (latestSigned === 'bad_sig') {
     banners.push(html`
       <div class="banner">
         Instagram reached this program but the signing secret did not match. Add
@@ -380,17 +460,26 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
       body: html`
         ${banners}
         <h1>Home</h1>
-        <div class="kpis">
-          <div class="kpi"><span class="muted">Comments seen today</span><b>${String(counts.triggers)}</b></div>
-          <div class="kpi"><span class="muted">DMs sent today</span><b>${String(counts.sends)}</b></div>
-          <div class="kpi"><span class="muted">Failures today</span><b>${String(counts.failures)}</b></div>
-        </div>
+        ${totalsTiles(totals)}
+        <p class="muted">
+          Days start at 00:00 UTC, and the 7- and 30-day totals include today. People reached counts each
+          person once, and only if a DM actually went out to them.
+        </p>
+        ${byAccount
+          ? html`
+              <h2>By account</h2>
+              ${accounts.map(
+                (a) => html`<h3>@${a.username}</h3>
+                  ${totalsTiles(byAccount.get(a.ig_user_id) ?? [])}`,
+              )}
+            `
+          : html``}
 
         <h2>Accounts</h2>
         ${accounts.length === 0
           ? html`<p>No Instagram account connected yet. <a href="/connect">Connect one</a> — takes about 20 seconds.</p>`
           : html`
-              <table>
+              <div class="table-wrap"><table>
                 <thead>
                   <tr>
                     <th>Account</th>
@@ -411,7 +500,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                     </tr>`;
                   })}
                 </tbody>
-              </table>
+              </table></div>
             `}
 
         <h2>Last 20 sends</h2>
@@ -428,7 +517,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
               comments or Instagram may hide them from this program.
             </p>`
           : html`
-              <table>
+              <div class="table-wrap"><table>
                 <thead>
                   <tr>
                     <th>When</th>
@@ -447,7 +536,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                     </tr>`,
                   )}
                 </tbody>
-              </table>
+              </table></div>
             `}
 
         <h2>Did Instagram reach us?</h2>
@@ -459,7 +548,7 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
               URL is correct.
             </p>`
           : html`
-              <table>
+              <div class="table-wrap"><table>
                 <thead>
                   <tr>
                     <th>When</th>
@@ -475,20 +564,22 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
                         ? 'Reached us'
                         : e.status === 'bad_sig'
                           ? 'Wrong secret'
-                          : e.status}</td>
-                      <td class="muted">${e.error ?? e.object ?? ''}</td>
+                          : e.status === 'unsigned'
+                            ? 'Not signed'
+                            : e.status}</td>
+                      <td class="muted detail">${e.error ?? e.object ?? ''}</td>
                     </tr>`,
                   )}
                 </tbody>
-              </table>
+              </table></div>
             `}
 
         <h2>Daily check</h2>
         <p class="muted">
           Last token refresh:
-          ${Number.isFinite(lastCronN) ? fmtWhen(lastCronN) : 'never'}.
+          ${health.lastCronOkAt != null ? fmtWhen(health.lastCronOkAt) : 'never'}.
           Last comment checker:
-          ${Number.isFinite(lastPollN) ? fmtWhen(lastPollN) : 'not yet'}.
+          ${health.lastPollOkAt != null ? fmtWhen(health.lastPollOkAt) : 'not yet'}.
         </p>
         <form method="post" action="${base}/run-cron">
           ${csrfField(session.csrf)}
@@ -519,7 +610,7 @@ adminRoutes.get('/logs', async (c) => {
       body: html`
         <h1>Logs</h1>
         ${query.notes.map((note) => html`<p class="err">${note}</p>`)}
-        <form class="filters" method="get" action="${base}/logs">
+        <form method="get" action="${base}/logs">
           <label for="status">Status</label>
           <select id="status" name="status">
             <option value="">All statuses</option>
@@ -570,33 +661,31 @@ adminRoutes.get('/logs', async (c) => {
                   a rule.
                 </p>`
           : html`
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>When</th>
-                      <th>Account</th>
-                      <th>Rule</th>
-                      <th>Status</th>
-                      <th>Detail</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${sends.map(
-                      (s) => html`<tr>
-                        <td>${fmtWhen(s.sent_at)}</td>
-                        <td>@${accountNames.get(s.ig_user_id) ?? s.ig_user_id}</td>
-                        <td>${s.rule_label ?? '—'}</td>
-                        <td>${statusWords(s.dm_status)}</td>
-                        <td>${sendDetail(s)}</td>
-                      </tr>`,
-                    )}
-                  </tbody>
-                </table>
-              </div>
+              <div class="table-wrap"><table>
+                <thead>
+                  <tr>
+                    <th>When</th>
+                    <th>Account</th>
+                    <th>Rule</th>
+                    <th>Status</th>
+                    <th>Detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${sends.map(
+                    (s) => html`<tr>
+                      <td>${fmtWhen(s.sent_at)}</td>
+                      <td>@${accountNames.get(s.ig_user_id) ?? s.ig_user_id}</td>
+                      <td>${s.rule_label ?? '—'}</td>
+                      <td>${statusWords(s.dm_status)}</td>
+                      <td>${sendDetail(s)}</td>
+                    </tr>`,
+                  )}
+                </tbody>
+              </table></div>
             `}
         ${links.newer || links.older
-          ? html`<div class="row pager">
+          ? html`<div class="row">
               ${links.newer ? html`<a class="btn secondary" href="${links.newer}">← Newer</a>` : html``}
               ${links.older ? html`<a class="btn secondary" href="${links.older}">Older →</a>` : html``}
             </div>`
@@ -637,79 +726,252 @@ async function recentMediaOptions(
   return out;
 }
 
-function parseKeywordLines(raw: string): { ok: true; keywords: string[] } | { ok: false; error: string } {
-  const keywords = raw
+function keywordLines(raw: string): string[] {
+  return raw
     .split(/\r?\n/)
     .map((s) => s.trim())
     .filter(Boolean);
-  if (keywords.length === 0) return { ok: false, error: 'Add at least one keyword, one per line.' };
-  if (keywords.some((k) => k.length < 3)) return { ok: false, error: KEYWORD_TOO_SHORT_MESSAGE };
-  return { ok: true, keywords };
 }
+
+function firstKeywordProblem(words: string[], tooShortMessage: string): string | null {
+  for (const word of words) {
+    const problem = keywordProblem(word, tooShortMessage);
+    if (problem) return problem;
+  }
+  return null;
+}
+
+/** How many variation fields the form offers beside the main public reply. */
+const EXTRA_REPLIES = 4;
+
+/**
+ * The main reply, then every variation field the form sent, blanks included,
+ * so a form shown again after an error keeps each reply in its own field.
+ */
+function replyFields(form: Record<string, string>): string[] {
+  const fields = [form.public_reply_text ?? ''];
+  for (let i = 2; `public_reply_text_${String(i)}` in form; i++) fields.push(form[`public_reply_text_${String(i)}`] ?? '');
+  return fields;
+}
+
+type RuleFormValues = {
+  ig_user_id: string;
+  label: string;
+  keywords: string;
+  match_mode: string;
+  exclude_keywords: string;
+  match_all: boolean;
+  media_id: string;
+  dm_text: string;
+  /** The main reply first, then the variations, in the fields they came from. */
+  public_replies: string[];
+};
+
+function formValuesFromRule(rule: Rule): RuleFormValues {
+  return {
+    ig_user_id: rule.ig_user_id,
+    label: rule.label,
+    keywords: parseKeywords(rule.keywords).join('\n'),
+    match_mode: rule.match_mode,
+    exclude_keywords: parseKeywords(rule.exclude_keywords).join('\n'),
+    match_all: rule.match_all === 1,
+    media_id: rule.media_id ?? '',
+    dm_text: rule.dm_text,
+    public_replies: parsePublicReplies(rule.public_reply_text),
+  };
+}
+
+/** What the operator typed, echoed back unchanged when the form is rejected. */
+function formValuesFromPost(f: Record<string, string>): RuleFormValues {
+  return {
+    ig_user_id: f.ig_user_id ?? '',
+    label: f.label ?? '',
+    keywords: f.keywords ?? '',
+    match_mode: f.match_mode ?? 'word',
+    exclude_keywords: f.exclude_keywords ?? '',
+    match_all: f.match_all === '1',
+    media_id: f.media_id ?? '',
+    dm_text: f.dm_text ?? '',
+    public_replies: replyFields(f),
+  };
+}
+
+function formValuesFromTemplate(t: RuleTemplate, igUserId: string): RuleFormValues {
+  return {
+    ig_user_id: igUserId,
+    label: t.name,
+    keywords: t.keywords.join('\n'),
+    match_mode: 'word',
+    exclude_keywords: t.exclusions.join('\n'),
+    match_all: t.matchAll,
+    media_id: '',
+    dm_text: t.dm,
+    public_replies: [...t.publicReplies],
+  };
+}
+
+const EVERY_COMMENT_WORDS = 'Every comment on its post';
+
+const MATCH_MODE_WORDS: Record<MatchMode, string> = {
+  word: 'Whole words only',
+  contains: 'Anywhere in the comment',
+};
 
 function ruleForm(opts: {
   base: string;
   csrf: string;
   accounts: { ig_user_id: string; username: string }[];
   action: string;
-  values: {
-    ig_user_id: string;
-    label: string;
-    keywords: string;
-    media_id: string;
-    dm_text: string;
-    public_reply_text: string;
-  };
+  values: RuleFormValues;
   posts: Array<{ id: string; label: string }>;
   error?: string;
 }) {
   const v = opts.values;
   const known = new Set(opts.posts.map((p) => p.id));
+  const [mainReply = '', ...variations] = v.public_replies;
+  const variationFields = Array.from({ length: Math.max(EXTRA_REPLIES, variations.length) }, (_, i) => variations[i] ?? '');
+  const contains = v.match_mode === 'contains';
   return html`
-    ${opts.error ? html`<p class="err">${opts.error}</p>` : html``}
-    <form method="post" action="${opts.action}">
+    ${opts.error ? html`<p class="err" role="alert">${opts.error}</p>` : html``}
+    <form class="rule-form" method="post" action="${opts.action}">
       ${csrfField(opts.csrf)}
-      <label for="ig_user_id">Instagram account</label>
-      <select id="ig_user_id" name="ig_user_id" required>
-        ${opts.accounts.map(
-          (a) =>
-            html`<option value="${a.ig_user_id}" ${a.ig_user_id === v.ig_user_id ? 'selected' : ''}>
-              @${a.username}
-            </option>`,
-        )}
-      </select>
-      <label for="label">Name for this rule</label>
+      <label for="label">Rule name</label>
       <input id="label" name="label" type="text" required value="${v.label}" placeholder="Free guide" />
-      <label for="keywords">Keywords (one per line)</label>
-      <textarea id="keywords" name="keywords" required placeholder="guide&#10;freebie">${v.keywords}</textarea>
-      <p class="muted">A comment matches if it contains any of these as whole words.</p>
-      <label for="media_id">Which posts</label>
-      <select id="media_id" name="media_id">
-        <option value="" ${!v.media_id ? 'selected' : ''}>All posts and reels (recommended)</option>
-        ${opts.posts.map(
-          (p) =>
-            html`<option value="${p.id}" ${p.id === v.media_id ? 'selected' : ''}>${p.label}</option>`,
-        )}
-        ${v.media_id && !known.has(v.media_id)
-          ? html`<option value="${v.media_id}" selected>Saved ID · ${v.media_id}</option>`
-          : html``}
-      </select>
-      <p class="muted">
-        Leave this on <b>All posts and reels</b> unless you want one reel only. A reel’s ID is a long number
-        from Instagram, not the share link (<code>instagram.com/reel/…</code>). If the list is empty, leave it
-        on all posts — that still covers reels.
-      </p>
-      <label for="dm_text">Private message to send</label>
-      <textarea id="dm_text" name="dm_text" required maxlength="${String(DM_TEXT_MAX)}">${v.dm_text}</textarea>
-      <p class="muted">Up to 1,000 characters.</p>
-      <label for="public_reply_text">Public reply under the comment (optional)</label>
-      <textarea id="public_reply_text" name="public_reply_text">${v.public_reply_text}</textarea>
-      <p class="muted">
-        Leave blank to only send the private message, with no public reply. If the private message fails,
-        the public reply is not posted either.
-      </p>
+      <p class="muted">Only you see this. It helps you tell your rules apart.</p>
+
+      <fieldset class="group">
+        <legend>Where to watch</legend>
+        <label for="ig_user_id">Instagram account</label>
+        <select id="ig_user_id" name="ig_user_id" required>
+          ${opts.accounts.map(
+            (a) =>
+              html`<option value="${a.ig_user_id}" ${a.ig_user_id === v.ig_user_id ? 'selected' : ''}>
+                @${a.username}
+              </option>`,
+          )}
+        </select>
+        <label for="media_id">Which posts</label>
+        <select id="media_id" name="media_id">
+          <option value="" ${!v.media_id ? 'selected' : ''}>All posts and reels (recommended)</option>
+          ${opts.posts.map(
+            (p) =>
+              html`<option value="${p.id}" ${p.id === v.media_id ? 'selected' : ''}>${p.label}</option>`,
+          )}
+          ${v.media_id && !known.has(v.media_id)
+            ? html`<option value="${v.media_id}" selected>Saved ID · ${v.media_id}</option>`
+            : html``}
+        </select>
+        <p class="muted when-keywords">
+          Leave this on <b>All posts and reels</b> unless you want one reel only. A reel’s ID is a long number
+          from Instagram, not the share link (<code>instagram.com/reel/…</code>). If the list is empty, leave it
+          on all posts — that still covers reels.
+        </p>
+        <p class="muted when-all">Pick the one post or reel whose commenters should all get the message.</p>
+      </fieldset>
+
+      <fieldset class="group">
+        <legend>Which comments get a message</legend>
+        <label class="choice">
+          <input type="checkbox" id="match_all" name="match_all" value="1" ${v.match_all ? 'checked' : ''} />
+          <span>
+            <b>Reply to every comment on this post</b>
+            <span class="muted">
+              For giveaways and waitlists: everyone who comments gets the message, no keyword needed. Each
+              comment gets its own message, so someone who comments three times gets it three times.
+            </span>
+          </span>
+        </label>
+        <p class="err needs-post">
+          Pick one post or reel under “Which posts” above. This can’t be used on all posts: it would message
+          everyone who comments on anything, and Instagram may restrict the account.
+        </p>
+        <p class="muted when-all">
+          Older posts: every 5 minutes a check also reads the post’s 25 newest comments from the last 3 days,
+          and any it hasn’t handled before get the message too, up to 10 messages per check. Comments it
+          already skipped stay skipped.
+        </p>
+        <div class="when-keywords">
+          <label for="keywords">Keywords</label>
+          <textarea id="keywords" name="keywords" placeholder="guide&#10;freebie">${v.keywords}</textarea>
+          <p class="muted">
+            One per line. A comment with any of these gets your message. Capitals, accents, emoji and
+            punctuation don’t matter, so “GUIDE!!” counts as “guide”. Each keyword needs at least 3 letters,
+            or 2 in Chinese and Japanese.
+          </p>
+          <fieldset class="choices">
+            <legend>How to look for them</legend>
+            <label class="choice">
+              <input type="radio" name="match_mode" value="word" ${contains ? '' : 'checked'} />
+              <span>
+                <b>${MATCH_MODE_WORDS.word}</b> (recommended)
+                <span class="muted">“guide” matches “Guide please!” but not “guides” or “guidelines”.</span>
+              </span>
+            </label>
+            <label class="choice">
+              <input type="radio" name="match_mode" value="contains" ${contains ? 'checked' : ''} />
+              <span>
+                <b>${MATCH_MODE_WORDS.contains}</b>
+                <span class="muted">Contains also catches #launch2026, but “art” would match “start”.</span>
+              </span>
+            </label>
+          </fieldset>
+        </div>
+        <label for="exclude_keywords">Exclusions (optional)</label>
+        <textarea id="exclude_keywords" name="exclude_keywords" placeholder="how much&#10;already have it&#10;not interested">${v.exclude_keywords}</textarea>
+        <p class="muted">
+          Skip comments that contain any of these, even when a keyword matches. One per line. Useful for
+          “how much is the guide?” or “I already have the guide”, which mention your keyword but don’t want
+          the message. They are found the same way as your keywords. Another rule without these exclusions
+          can still reply.
+        </p>
+        <p class="muted when-all">On a rule that replies to every comment, exclusions are found as whole words.</p>
+      </fieldset>
+
+      <fieldset class="group">
+        <legend>What to send</legend>
+        <label for="dm_text">Private message</label>
+        <textarea id="dm_text" name="dm_text" required maxlength="${String(DM_TEXT_MAX)}">${v.dm_text}</textarea>
+        <p class="muted">
+          Up to 1,000 characters. Instagram allows one private message per comment, so put everything they
+          need in this one, link included.
+          <code>{username}</code> puts in their Instagram name and counts as 30. It’s the only placeholder for now.
+        </p>
+        <label for="public_reply_text">Public reply under their comment (optional)</label>
+        <textarea id="public_reply_text" name="public_reply_text" maxlength="${String(PUBLIC_REPLY_MAX)}">${mainReply}</textarea>
+        <p class="muted">
+          Everyone reading the comments sees this, for example “Sent you a DM!”. Leave it blank to reply
+          privately only. If the private message fails, the public reply is not posted either. Up to 1,000
+          characters, and <code>{username}</code> works here too.
+        </p>
+        <details ${variations.some((r) => r.trim()) ? 'open' : ''}>
+          <summary>Add variations (optional)</summary>
+          <p class="muted">Each comment gets one of your replies, picked at random, so the thread doesn’t look automated.</p>
+          ${variationFields.map((text, i) => {
+            const name = `public_reply_text_${String(i + 2)}`;
+            return html`
+              <label for="${name}">Reply ${String(i + 2)}</label>
+              <textarea id="${name}" name="${name}" class="short" maxlength="${String(PUBLIC_REPLY_MAX)}">${text}</textarea>
+            `;
+          })}
+        </details>
+      </fieldset>
+
       <div class="row"><button type="submit">Save rule</button></div>
     </form>
+  `;
+}
+
+function templateGallery(base: string) {
+  return html`
+    <h2 id="templates">Start from a template</h2>
+    <p class="muted">Each one fills in the new-rule form with keywords and a message, ready for you to change.</p>
+    <ul class="templates">
+      ${TEMPLATES.map(
+        (t) => html`<li>
+          <a href="${base}/rules/new?template=${t.id}"><b>${t.name}</b><span class="muted">${t.forWhom}</span></a>
+        </li>`,
+      )}
+    </ul>
   `;
 }
 
@@ -718,6 +980,9 @@ adminRoutes.get('/rules', async (c) => {
   const session = c.get('session');
   const accounts = await listAccounts(c.env.DB);
   const accountMap = new Map(accounts.map((a) => [a.ig_user_id, a.username]));
+  // With one account the column says the same thing on every row, and dropping
+  // it is what lets the action buttons fit on a phone without scrolling.
+  const showAccount = accounts.length > 1;
   const rules = await listRules(c.env.DB);
   return c.html(
     layout({
@@ -727,15 +992,18 @@ adminRoutes.get('/rules', async (c) => {
       body: html`
         <h1>Rules</h1>
         <p class="muted">When a comment matches a keyword, we send that person one private message.</p>
-        <p><a class="btn" href="${base}/rules/new">New rule</a></p>
+        <div class="row">
+          <a class="btn" href="${base}/rules/new">New rule</a>
+          ${rules.length ? html`<a class="btn secondary" href="#templates">Start from a template</a>` : html``}
+        </div>
         ${rules.length === 0
-          ? html`<p>No rules yet.</p>`
+          ? html`<p>No rules yet. Start from a template below, or press New rule for a blank form.</p>`
           : html`
-              <table>
+              <div class="table-wrap"><table>
                 <thead>
                   <tr>
                     <th>Name</th>
-                    <th>Account</th>
+                    ${showAccount ? html`<th>Account</th>` : html``}
                     <th>Keywords</th>
                     <th>On</th>
                     <th></th>
@@ -743,14 +1011,23 @@ adminRoutes.get('/rules', async (c) => {
                 </thead>
                 <tbody>
                   ${rules.map((r) => {
-                    const kws = parseKeywords(r.keywords).join(', ');
+                    const kws = r.match_all === 1 ? EVERY_COMMENT_WORDS : parseKeywords(r.keywords).join(', ');
+                    const exclusions = parseKeywords(r.exclude_keywords);
                     return html`<tr>
                       <td>${r.label}</td>
-                      <td>@${accountMap.get(r.ig_user_id) ?? r.ig_user_id}</td>
-                      <td>${kws}</td>
+                      ${showAccount ? html`<td>@${accountMap.get(r.ig_user_id) ?? r.ig_user_id}</td>` : html``}
+                      <td>
+                        ${kws}
+                        ${r.match_mode === 'contains'
+                          ? html`<div class="muted">${MATCH_MODE_WORDS.contains}</div>`
+                          : html``}
+                        ${exclusions.length
+                          ? html`<div class="muted">Exclusions: ${exclusions.join(', ')}</div>`
+                          : html``}
+                      </td>
                       <td>${r.active ? 'Yes' : 'Paused'}</td>
                       <td class="actions">
-                        <a href="${base}/rules/${String(r.id)}/edit">Edit</a>
+                        <a class="btn secondary" href="${base}/rules/${String(r.id)}/edit">Edit</a>
                         <form method="post" action="${base}/rules/${String(r.id)}/toggle">
                           ${csrfField(session.csrf)}
                           <button class="secondary" type="submit">${r.active ? 'Pause' : 'Resume'}</button>
@@ -760,8 +1037,9 @@ adminRoutes.get('/rules', async (c) => {
                     </tr>`;
                   })}
                 </tbody>
-              </table>
+              </table></div>
             `}
+        ${templateGallery(base)}
       `,
     }),
   );
@@ -780,32 +1058,77 @@ adminRoutes.get('/rules/new', async (c) => {
       }),
     );
   }
+  const igUserId = accounts[0]!.ig_user_id;
+  const template = findTemplate(c.req.query('template'));
+  const intro = template
+    ? html`<div class="note">
+        <p>Filled in from <b>${template.name}</b>. Nothing is saved until you press Save rule.</p>
+        <p>Replace <code>${LINK_MARKER}</code> with your own link.</p>
+        ${template.note ? html`<p>${template.note}</p>` : html``}
+        <p><a href="${base}/rules#templates">Pick a different template</a></p>
+      </div>`
+    : html`<p class="muted">
+        Or <a href="${base}/rules#templates">start from a template</a>, with keywords and a message already written.
+      </p>`;
   return c.html(
     layout({
       title: 'New rule',
       base,
       csrf: c.get('session').csrf,
-      body: html`<h1>New rule</h1>${ruleForm({
+      body: html`<h1>New rule</h1>${intro}${ruleForm({
         base,
         csrf: c.get('session').csrf,
         accounts,
         action: `${base}/rules`,
-        values: {
-          ig_user_id: accounts[0]!.ig_user_id,
-          label: '',
-          keywords: '',
-          media_id: '',
-          dm_text: '',
-          public_reply_text: '',
-        },
+        values: template ? formValuesFromTemplate(template, igUserId) : { ...formValuesFromPost({}), ig_user_id: igUserId },
         posts: await recentMediaOptions(c.env),
       })}`,
     }),
   );
 });
 
-function readRuleFields(form: Record<string, string>) {
-  const parsed = parseKeywordLines(form.keywords ?? '');
+const count = (n: number): string => n.toLocaleString('en-US');
+
+/**
+ * Checked against the longest the text can become once a name is put in, not
+ * against what was typed, so a rule that saves always fits Instagram's limit.
+ */
+function messageProblem(what: string, text: string, max: number): string | null {
+  if (!fillPlaceholders(text, null).trim()) {
+    return `${what} needs more than {username}. Instagram sometimes leaves the name out, and then there would be nothing to send.`;
+  }
+  const longest = worstCaseLength(text);
+  if (longest <= max) return null;
+  const limit = `${what} must be ${count(max)} characters or fewer.`;
+  if (!countUsernameTokens(text)) return `${limit} This one is ${count(text.length)}.`;
+  return `${limit} This one is ${count(text.length)}, and each {username} can add up to ${USERNAME_GROWTH} characters for a long name, so it could reach ${count(longest)}.`;
+}
+
+/**
+ * Templates put LINK_MARKER where the creator's link goes. That, or a sample
+ * address like example.com, would reach real followers as typed, so neither
+ * can be saved.
+ */
+function placeholderLinkProblem(what: string, text: string): string | null {
+  const found = placeholderLinkIn(text);
+  if (!found) return null;
+  if (found === LINK_MARKER) {
+    return `${what} still says ${LINK_MARKER}. Replace it with your own link, or delete it, before saving.`;
+  }
+  return `${what} links to “${found}”, a sample address that isn’t yours. Replace it with your own link before saving.`;
+}
+
+export const MATCH_ALL_NEEDS_POST_MESSAGE =
+  '“Reply to every comment” needs one post. Pick it under “Which posts”, or untick the box. On all posts it would message everyone who comments on anything, and Instagram may restrict the account.';
+
+/**
+ * Exported for the unit tests. CSS can hide a field but cannot stop a form
+ * being posted, so this, not the form, is what keeps a match-all rule off
+ * "All posts".
+ */
+export function readRuleFields(form: Record<string, string>) {
+  const keywords = keywordLines(form.keywords ?? '');
+  const exclusions = keywordLines(form.exclude_keywords ?? '');
   // Browsers submit each textarea line break as CRLF but count it as one
   // character against maxlength. Without this, a message that fit the box
   // could still fail the length check below.
@@ -813,15 +1136,42 @@ function readRuleFields(form: Record<string, string>) {
   const label = (form.label ?? '').trim();
   const ig = (form.ig_user_id ?? '').trim();
   const media = (form.media_id ?? '').trim();
-  const pub = (form.public_reply_text ?? '').replace(/\r\n/g, '\n').trim();
+  const replies = replyFields(form).map((r) => r.replace(/\r\n/g, '\n').trim());
+  const matchAll = form.match_all === '1';
   if (!label) return { error: 'Give this rule a name.' };
   if (!ig) return { error: 'Pick an Instagram account.' };
-  if (!parsed.ok) return { error: parsed.error };
-  if (!dm) return { error: 'Write the private message to send.' };
-  if (dm.length > DM_TEXT_MAX) {
+  if (matchAll && !media) return { error: MATCH_ALL_NEEDS_POST_MESSAGE };
+  // A match-all rule hides the keywords and the radios, and the matcher never
+  // reads its keywords, so neither is checked or kept. Its exclusions are
+  // still matched, as whole words, which is what the form tells the operator.
+  let matchMode: MatchMode = 'word';
+  if (!matchAll) {
+    if (keywords.length === 0) return { error: 'Add at least one keyword, one per line.' };
+    const keywordError = firstKeywordProblem(keywords, KEYWORD_TOO_SHORT_MESSAGE);
+    if (keywordError) return { error: keywordError };
+    // A form from before match modes existed sends no choice; that rule matched whole words.
+    const chosen = form.match_mode ?? 'word';
+    if (!isMatchMode(chosen)) {
+      return { error: 'Choose how to look for keywords: whole words only, or anywhere in the comment.' };
+    }
+    matchMode = chosen;
+  }
+  const exclusionError = firstKeywordProblem(exclusions, EXCLUSION_TOO_SHORT_MESSAGE);
+  if (exclusionError) return { error: exclusionError };
+  const swallowed = matchAll ? null : keywordSwallowedBy(keywords, exclusions, matchMode);
+  if (swallowed) {
     return {
-      error: `The private message must be 1,000 characters or fewer. This one is ${dm.length.toLocaleString('en-US')}.`,
+      error: `The keyword “${swallowed.keyword}” could never get a message, because it contains the exclusion “${swallowed.exclusion}”. Remove one of them.`,
     };
+  }
+  if (!dm) return { error: 'Write the private message to send.' };
+  const dmProblem =
+    messageProblem('The private message', dm, DM_TEXT_MAX) ?? placeholderLinkProblem('The private message', dm);
+  if (dmProblem) return { error: dmProblem };
+  for (const [i, reply] of replies.entries()) {
+    const what = i === 0 ? 'The public reply' : `Reply ${String(i + 1)}`;
+    const problem = reply ? (messageProblem(what, reply, PUBLIC_REPLY_MAX) ?? placeholderLinkProblem(what, reply)) : null;
+    if (problem) return { error: problem };
   }
   if (media && looksLikePostUrl(media)) {
     return {
@@ -833,10 +1183,13 @@ function readRuleFields(form: Record<string, string>) {
     row: {
       ig_user_id: ig,
       label,
-      keywords: JSON.stringify(parsed.keywords),
+      keywords: JSON.stringify(matchAll ? [] : keywords),
+      match_mode: matchMode,
+      exclude_keywords: JSON.stringify(exclusions),
+      match_all: matchAll ? 1 : 0,
       media_id: media || null,
       dm_text: dm,
-      public_reply_text: pub || null,
+      public_reply_text: serializePublicReplies(replies),
     },
   };
 }
@@ -846,7 +1199,6 @@ adminRoutes.post('/rules', async (c) => {
   const base = c.get('adminBase');
   if ('error' in fields) {
     const accounts = await listAccounts(c.env.DB);
-    const f = formOf(c);
     return c.html(
       layout({
         title: 'New rule',
@@ -857,14 +1209,7 @@ adminRoutes.post('/rules', async (c) => {
           csrf: c.get('session').csrf,
           accounts,
           action: `${base}/rules`,
-          values: {
-            ig_user_id: f.ig_user_id ?? '',
-            label: f.label ?? '',
-            keywords: f.keywords ?? '',
-            media_id: f.media_id ?? '',
-            dm_text: f.dm_text ?? '',
-            public_reply_text: f.public_reply_text ?? '',
-          },
+          values: formValuesFromPost(formOf(c)),
           posts: await recentMediaOptions(c.env),
           error: fields.error,
         })}`,
@@ -892,14 +1237,7 @@ adminRoutes.get('/rules/:id/edit', async (c) => {
         csrf: c.get('session').csrf,
         accounts,
         action: `${base}/rules/${String(rule.id)}`,
-        values: {
-          ig_user_id: rule.ig_user_id,
-          label: rule.label,
-          keywords: parseKeywords(rule.keywords).join('\n'),
-          media_id: rule.media_id ?? '',
-          dm_text: rule.dm_text,
-          public_reply_text: rule.public_reply_text ?? '',
-        },
+        values: formValuesFromRule(rule),
         posts: await recentMediaOptions(c.env),
       })}`,
     }),
@@ -914,7 +1252,6 @@ adminRoutes.post('/rules/:id', async (c) => {
   const base = c.get('adminBase');
   if ('error' in fields) {
     const accounts = await listAccounts(c.env.DB);
-    const f = formOf(c);
     return c.html(
       layout({
         title: 'Edit rule',
@@ -925,14 +1262,7 @@ adminRoutes.post('/rules/:id', async (c) => {
           csrf: c.get('session').csrf,
           accounts,
           action: `${base}/rules/${String(id)}`,
-          values: {
-            ig_user_id: f.ig_user_id ?? '',
-            label: f.label ?? '',
-            keywords: f.keywords ?? '',
-            media_id: f.media_id ?? '',
-            dm_text: f.dm_text ?? '',
-            public_reply_text: f.public_reply_text ?? '',
-          },
+          values: formValuesFromPost(formOf(c)),
           posts: await recentMediaOptions(c.env),
           error: fields.error,
         })}`,
@@ -962,11 +1292,14 @@ adminRoutes.get('/rules/:id/delete', async (c) => {
       csrf: session.csrf,
       body: html`
         <h1>Delete this rule?</h1>
-        <table>
+        <div class="table-wrap"><table>
           <tr><th>Name</th><td>${rule.label}</td></tr>
           <tr><th>Account</th><td>@${account?.username ?? rule.ig_user_id}</td></tr>
-          <tr><th>Keywords</th><td>${parseKeywords(rule.keywords).join(', ')}</td></tr>
-        </table>
+          <tr>
+            <th>Keywords</th>
+            <td>${rule.match_all === 1 ? EVERY_COMMENT_WORDS : parseKeywords(rule.keywords).join(', ')}</td>
+          </tr>
+        </table></div>
         <p>
           Matching comments will stop getting a private message. This cannot be undone. To stop it for now
           and keep it, pause it instead.
@@ -1016,7 +1349,10 @@ adminRoutes.get('/test', async (c) => {
                   <option value="">All posts and reels</option>
                   ${posts.map((p) => html`<option value="${p.id}">${p.label}</option>`)}
                 </select>
-                <p class="muted">Leave on all posts unless you limited a rule to one reel.</p>
+                <p class="muted">
+                  Leave on all posts unless you limited a rule to one reel. A rule that replies to every comment
+                  only shows up when you pick its post here.
+                </p>
                 <div class="row"><button type="submit">See what would happen</button></div>
               </form>
             `}
@@ -1030,8 +1366,30 @@ adminRoutes.post('/test', async (c) => {
   const ig = form.ig_user_id ?? '';
   const text = form.text ?? '';
   const media = form.media_id?.trim() || undefined;
-  const match = await chooseRule(c.env.DB, ig, text, media);
+  const { match, excluded } = await chooseRule(c.env.DB, ig, text, media);
   const base = c.get('adminBase');
+  // Shown either way: when a test does not match, the cleaned-up text is
+  // usually the explanation (the hashtag symbol is gone, the accent folded).
+  const readAs = html`<tr><th>Comment, as matched</th><td>${normalizeCommentText(text) || '(nothing left)'}</td></tr>`;
+  const exclusions = excluded.length
+    ? html`
+        <h2>${match ? 'Passed over first' : 'Skipped because of an exclusion'}</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Rule</th><th>Keyword found</th><th>Exclusion found</th></tr></thead>
+          <tbody>
+            ${excluded.map(
+              (e) =>
+                html`<tr><td>${e.rule.label}</td><td>${e.keyword ?? EVERY_COMMENT_WORDS}</td><td>${e.exclusion}</td></tr>`,
+            )}
+          </tbody>
+        </table></div>
+        ${match
+          ? html`<p class="muted">An exclusion only stops its own rule, so the next matching rule replies instead.</p>`
+          : html``}
+      `
+    : html``;
+  const replies = parsePublicReplies(match?.rule.public_reply_text);
+  const usesName = match ? countUsernameTokens([match.rule.dm_text, ...replies].join('\n')) > 0 : false;
   return c.html(
     layout({
       title: 'Test',
@@ -1042,16 +1400,56 @@ adminRoutes.post('/test', async (c) => {
         ${match
           ? html`
               <div class="ok">
-                This would match the rule <b>${match.label}</b>.
+                This would match the rule <b>${match.rule.label}</b>.
               </div>
+              <div class="table-wrap"><table>
+                ${match.keyword === null
+                  ? html`<tr><th>Matched because</th><td>This rule replies to every comment on this post.</td></tr>`
+                  : html`
+                      <tr><th>Keyword found</th><td>${match.keyword}</td></tr>
+                      <tr><th>Matching</th><td>${MATCH_MODE_WORDS[match.rule.match_mode]}</td></tr>
+                    `}
+                ${readAs}
+              </table></div>
+              ${usesName
+                ? html`<p class="muted">
+                    <code>{username}</code> is filled in with <b>${SAMPLE_USERNAME}</b>, a sample name. Real
+                    messages use the name of whoever commented.
+                  </p>`
+                : html``}
               <h2>Private message that would be sent</h2>
-              <p>${match.dm_text}</p>
-              ${match.public_reply_text
-                ? html`<h2>Public reply that would be posted</h2><p>${match.public_reply_text}</p>`
-                : html`<p class="muted">No public reply for this rule.</p>`}
+              <p class="message">${fillPlaceholders(match.rule.dm_text, SAMPLE_USERNAME)}</p>
+              ${replies.length === 0
+                ? html`<p class="muted">No public reply for this rule.</p>`
+                : replies.length === 1
+                  ? html`<h2>Public reply that would be posted</h2>
+                      <p class="message">${fillPlaceholders(replies[0] ?? '', SAMPLE_USERNAME)}</p>`
+                  : html`<h2>Public reply that would be posted</h2>
+                      <p class="muted">One of these ${String(replies.length)}, picked at random for each comment:</p>
+                      <ol>
+                        ${replies.map((r) => html`<li class="message">${fillPlaceholders(r, SAMPLE_USERNAME)}</li>`)}
+                      </ol>`}
+              ${exclusions}
             `
-          : html`<p>No rule would match this comment. Nothing would be sent.</p>`}
-        <p><a href="${base}/test">Test another</a></p>
+          : excluded.length
+            ? html`
+                <p>
+                  Nothing would be sent. This comment has a rule’s keyword, but also one of that rule’s
+                  exclusions, so it would be skipped.
+                </p>
+                ${exclusions}
+                <div class="table-wrap"><table>${readAs}</table></div>
+              `
+            : html`
+                <p>No rule would match this comment. Nothing would be sent.</p>
+                <div class="table-wrap"><table>${readAs}</table></div>
+                <p class="muted">
+                  Rules set to <b>${MATCH_MODE_WORDS.word}</b> skip keywords inside longer words and hashtags: “guide”
+                  does not match “guides” or “#guide2026”. Paused rules are not tested, and a rule that replies to
+                  every comment is only tested on its own post.
+                </p>
+              `}
+        <p><a class="btn secondary" href="${base}/test">Test another</a></p>
       `,
     }),
   );
@@ -1083,7 +1481,7 @@ ${callback}/</pre>
         ${accounts.length === 0
           ? html`<p class="muted">None connected yet.</p>`
           : html`
-              <table>
+              <div class="table-wrap"><table>
                 <thead>
                   <tr>
                     <th>Account</th>
@@ -1116,7 +1514,7 @@ ${callback}/</pre>
                     </tr>`;
                   })}
                 </tbody>
-              </table>
+              </table></div>
             `}
       `,
     }),

@@ -66,24 +66,28 @@ async function recordedMigrations(): Promise<string[]> {
   return results.map((r) => r.name);
 }
 
+async function oldDeploymentThenMigrate() {
+  await reset();
+  for (const migration of env.TEST_MIGRATIONS.filter((m) => HAND_APPLIED.includes(m.name))) {
+    await env.DB.batch(migration.queries.map((q) => env.DB.prepare(q)));
+  }
+  await env.DB.batch(
+    Object.entries(OLD_ROWS).map(([table, row]) =>
+      env.DB.prepare(
+        `INSERT INTO ${table} (${Object.keys(row).join(', ')}) VALUES (${Object.keys(row).map(() => '?').join(', ')})`,
+      ).bind(...Object.values(row)),
+    ),
+  );
+
+  // Mirrors `wrangler d1 migrations apply`: the same d1_migrations table, one batch per file.
+  await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
+}
+
 describe('migrations', () => {
   it('replays 001 and 002 harmlessly on a deployment that applied them by hand', async () => {
     const freshInstall = await schema();
 
-    await reset();
-    for (const migration of env.TEST_MIGRATIONS.filter((m) => HAND_APPLIED.includes(m.name))) {
-      await env.DB.batch(migration.queries.map((q) => env.DB.prepare(q)));
-    }
-    await env.DB.batch(
-      Object.entries(OLD_ROWS).map(([table, row]) =>
-        env.DB.prepare(
-          `INSERT INTO ${table} (${Object.keys(row).join(', ')}) VALUES (${Object.keys(row).map(() => '?').join(', ')})`,
-        ).bind(...Object.values(row)),
-      ),
-    );
-
-    // Mirrors `wrangler d1 migrations apply`: the same d1_migrations table, one batch per file.
-    await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
+    await oldDeploymentThenMigrate();
 
     expect(await recordedMigrations()).toEqual(env.TEST_MIGRATIONS.map((m) => m.name));
     expect(await schema()).toEqual(freshInstall);
@@ -91,5 +95,24 @@ describe('migrations', () => {
       const { results } = await env.DB.prepare(`SELECT * FROM ${table}`).all();
       expect(results, table).toMatchObject([row]);
     }
+  });
+
+  it('leaves rules saved before match-all needing a keyword', async () => {
+    await oldDeploymentThenMigrate();
+    const rule = await env.DB.prepare('SELECT match_all FROM rules WHERE id = 7').first<{ match_all: number }>();
+    expect(rule).toEqual({ match_all: 0 });
+  });
+
+  it('gives rules saved before exclusions an empty list', async () => {
+    await oldDeploymentThenMigrate();
+    const rule = await env.DB.prepare('SELECT exclude_keywords FROM rules WHERE id = 7').first<{ exclude_keywords: string }>();
+    expect(rule).toEqual({ exclude_keywords: '[]' });
+  });
+
+  it('keeps rules saved before match modes matching whole words', async () => {
+    await oldDeploymentThenMigrate();
+    const rule = await env.DB.prepare('SELECT match_mode FROM rules WHERE id = 7').first<{ match_mode: string }>();
+    expect(rule).toEqual({ match_mode: 'word' });
+    await expect(env.DB.prepare("UPDATE rules SET match_mode = 'regex' WHERE id = 7").run()).rejects.toThrow(/CHECK constraint failed/);
   });
 });

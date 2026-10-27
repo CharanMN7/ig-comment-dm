@@ -1,4 +1,4 @@
-import type { Account, Rule, Sent, WebhookEvent } from './types.ts';
+import type { Account, MatchMode, Rule, Sent, WebhookEvent } from './types.ts';
 
 export async function systemGet(db: D1Database, key: string): Promise<string | null> {
   const row = await db.prepare('SELECT value FROM system WHERE key = ?').bind(key).first<{ value: string | null }>();
@@ -154,7 +154,7 @@ export async function accountsNeedingRefresh(db: D1Database, expiresBefore: numb
       `SELECT ig_user_id, username, access_token_enc, token_iv, token_expires_at,
               active, connected_at, last_refreshed_at, needs_reconnect
        FROM accounts
-       WHERE active = 1 AND token_expires_at < ?
+       WHERE token_expires_at < ?
        ORDER BY token_expires_at ASC`,
     )
     .bind(expiresBefore)
@@ -162,11 +162,15 @@ export async function accountsNeedingRefresh(db: D1Database, expiresBefore: numb
   return results ?? [];
 }
 
+// Every reader selects the same columns, so a migration that adds one to
+// `rules` is a one-line change here rather than four that can drift apart.
+const RULE_COLUMNS =
+  'id, ig_user_id, label, keywords, match_mode, exclude_keywords, match_all, media_id, dm_text, public_reply_text, active, created_at';
+
 export async function listActiveRules(db: D1Database, igUserId: string): Promise<Rule[]> {
   const { results } = await db
     .prepare(
-      `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at
-       FROM rules WHERE ig_user_id = ? AND active = 1 ORDER BY id ASC`,
+      `SELECT ${RULE_COLUMNS} FROM rules WHERE ig_user_id = ? AND active = 1 ORDER BY id ASC`,
     )
     .bind(igUserId)
     .all<Rule>();
@@ -177,8 +181,7 @@ export async function listRules(db: D1Database, igUserId?: string): Promise<Rule
   if (igUserId) {
     const { results } = await db
       .prepare(
-        `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at
-         FROM rules WHERE ig_user_id = ? ORDER BY id DESC`,
+        `SELECT ${RULE_COLUMNS} FROM rules WHERE ig_user_id = ? ORDER BY id DESC`,
       )
       .bind(igUserId)
       .all<Rule>();
@@ -186,8 +189,7 @@ export async function listRules(db: D1Database, igUserId?: string): Promise<Rule
   }
   const { results } = await db
     .prepare(
-      `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at
-       FROM rules ORDER BY id DESC`,
+      `SELECT ${RULE_COLUMNS} FROM rules ORDER BY id DESC`,
     )
     .all<Rule>();
   return results ?? [];
@@ -196,8 +198,7 @@ export async function listRules(db: D1Database, igUserId?: string): Promise<Rule
 export async function getRule(db: D1Database, id: number): Promise<Rule | null> {
   return await db
     .prepare(
-      `SELECT id, ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at
-       FROM rules WHERE id = ?`,
+      `SELECT ${RULE_COLUMNS} FROM rules WHERE id = ?`,
     )
     .bind(id)
     .first<Rule>();
@@ -209,6 +210,9 @@ export async function insertRule(
     ig_user_id: string;
     label: string;
     keywords: string;
+    match_mode: MatchMode;
+    exclude_keywords: string;
+    match_all: number;
     media_id: string | null;
     dm_text: string;
     public_reply_text: string | null;
@@ -217,10 +221,23 @@ export async function insertRule(
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO rules (ig_user_id, label, keywords, media_id, dm_text, public_reply_text, active, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+      `INSERT INTO rules (
+         ig_user_id, label, keywords, match_mode, exclude_keywords, match_all, media_id, dm_text, public_reply_text,
+         active, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
     )
-    .bind(row.ig_user_id, row.label, row.keywords, row.media_id, row.dm_text, row.public_reply_text, row.created_at)
+    .bind(
+      row.ig_user_id,
+      row.label,
+      row.keywords,
+      row.match_mode,
+      row.exclude_keywords,
+      row.match_all,
+      row.media_id,
+      row.dm_text,
+      row.public_reply_text,
+      row.created_at,
+    )
     .run();
 }
 
@@ -231,6 +248,9 @@ export async function updateRule(
     ig_user_id: string;
     label: string;
     keywords: string;
+    match_mode: MatchMode;
+    exclude_keywords: string;
+    match_all: number;
     media_id: string | null;
     dm_text: string;
     public_reply_text: string | null;
@@ -239,10 +259,22 @@ export async function updateRule(
   await db
     .prepare(
       `UPDATE rules
-       SET ig_user_id = ?, label = ?, keywords = ?, media_id = ?, dm_text = ?, public_reply_text = ?
+       SET ig_user_id = ?, label = ?, keywords = ?, match_mode = ?, exclude_keywords = ?, match_all = ?,
+           media_id = ?, dm_text = ?, public_reply_text = ?
        WHERE id = ?`,
     )
-    .bind(row.ig_user_id, row.label, row.keywords, row.media_id, row.dm_text, row.public_reply_text, id)
+    .bind(
+      row.ig_user_id,
+      row.label,
+      row.keywords,
+      row.match_mode,
+      row.exclude_keywords,
+      row.match_all,
+      row.media_id,
+      row.dm_text,
+      row.public_reply_text,
+      id,
+    )
     .run();
 }
 
@@ -293,6 +325,17 @@ export async function updateSent(
       `UPDATE sent SET rule_id = ?, dm_status = ?, reply_status = ?, error = ?, sent_at = ? WHERE comment_id = ?`,
     )
     .bind(patch.rule_id, patch.dm_status, patch.reply_status, patch.error, patch.sent_at, commentId)
+    .run();
+}
+
+/**
+ * Fails `pending` rows claimed before `claimedBefore`. Only `pending` is
+ * touched, so a send that does finish late still records its real outcome.
+ */
+export async function failStalePending(db: D1Database, claimedBefore: number, error: string): Promise<void> {
+  await db
+    .prepare(`UPDATE sent SET dm_status = 'failed', error = ? WHERE dm_status = 'pending' AND sent_at < ?`)
+    .bind(error, claimedBefore)
     .run();
 }
 
@@ -397,25 +440,59 @@ export async function paginatedSent(
   return { sends, more: rows.length > limit };
 }
 
-export async function todayCounters(
-  db: D1Database,
-  since: number,
-): Promise<{ triggers: number; sends: number; failures: number }> {
-  const row = await db
-    .prepare(
-      `SELECT
-         COUNT(*) AS triggers,
-         SUM(CASE WHEN dm_status = 'ok' THEN 1 ELSE 0 END) AS sends,
-         SUM(CASE WHEN dm_status = 'failed' THEN 1 ELSE 0 END) AS failures
-       FROM sent WHERE sent_at >= ?`,
-    )
-    .bind(since)
-    .first<{ triggers: number; sends: number | null; failures: number | null }>();
-  return {
-    triggers: row?.triggers ?? 0,
-    sends: row?.sends ?? 0,
-    failures: row?.failures ?? 0,
-  };
+export type SendTotals = { sent: number; skipped: number; failed: number; reached: number };
+
+type TotalsRow = Record<string, number | string | null>;
+
+/**
+ * One column per status per window, so adding a window adds columns rather than
+ * statements. The scan is the whole table whatever the windows are: the
+ * all-time window reads every row, so no index could narrow it.
+ *
+ * People reached counts each commenter once, from rows where a DM went out.
+ * Someone whose comment was skipped, or whose DM failed, was not reached.
+ */
+function totalsQuery(starts: number[], perAccount: boolean): string {
+  const columns = starts.flatMap((_, i) => {
+    const since = `sent_at >= ?${i + 1}`;
+    return [
+      `COUNT(CASE WHEN ${since} AND dm_status = 'ok' THEN 1 END) AS sent_${i}`,
+      `COUNT(CASE WHEN ${since} AND dm_status = 'skipped' THEN 1 END) AS skipped_${i}`,
+      `COUNT(CASE WHEN ${since} AND dm_status = 'failed' THEN 1 END) AS failed_${i}`,
+      `COUNT(DISTINCT CASE WHEN ${since} AND dm_status = 'ok' THEN commenter_id END) AS reached_${i}`,
+    ];
+  });
+  return perAccount
+    ? `SELECT ig_user_id, ${columns.join(', ')} FROM sent GROUP BY ig_user_id`
+    : `SELECT ${columns.join(', ')} FROM sent`;
+}
+
+function readTotals(row: TotalsRow | undefined, windows: number): SendTotals[] {
+  const n = (key: string) => Number(row?.[key] ?? 0);
+  return Array.from({ length: windows }, (_, i) => ({
+    sent: n(`sent_${i}`),
+    skipped: n(`skipped_${i}`),
+    failed: n(`failed_${i}`),
+    reached: n(`reached_${i}`),
+  }));
+}
+
+/** Totals for each window starting at `starts[i]` (unix seconds), in one statement. */
+export async function sendTotals(db: D1Database, starts: number[]): Promise<SendTotals[]> {
+  const { results } = await db
+    .prepare(totalsQuery(starts, false))
+    .bind(...starts)
+    .all<TotalsRow>();
+  return readTotals(results?.[0], starts.length);
+}
+
+/** The same totals per account, also in one statement. Accounts with no rows are absent. */
+export async function sendTotalsByAccount(db: D1Database, starts: number[]): Promise<Map<string, SendTotals[]>> {
+  const { results } = await db
+    .prepare(totalsQuery(starts, true))
+    .bind(...starts)
+    .all<TotalsRow>();
+  return new Map((results ?? []).map((row) => [String(row.ig_user_id), readTotals(row, starts.length)]));
 }
 
 export async function insertWebhookEvent(
@@ -448,6 +525,22 @@ export async function recentWebhookEvents(db: D1Database, limit: number): Promis
     .bind(limit)
     .all<WebhookEvent>();
   return results ?? [];
+}
+
+/**
+ * The newest delivery that carried a signature, so unsigned POSTs from
+ * scanners can neither raise the "secret did not match" banner nor hide it.
+ */
+export async function latestSignedWebhookStatus(db: D1Database): Promise<string | null> {
+  const row = await db
+    .prepare(
+      `SELECT status FROM webhook_events
+       WHERE status IN ('received', 'bad_sig')
+       ORDER BY received_at DESC, id DESC
+       LIMIT 1`,
+    )
+    .first<{ status: string }>();
+  return row?.status ?? null;
 }
 
 export async function pruneWebhookEvents(db: D1Database, olderThan: number): Promise<void> {

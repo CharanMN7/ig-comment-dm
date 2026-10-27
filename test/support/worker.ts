@@ -10,6 +10,7 @@ export type Reply = {
   status: number;
   headers: Headers;
   text: string;
+  bytes: Uint8Array;
   location: string | null;
   setCookies: string[];
 };
@@ -26,9 +27,10 @@ export async function request(
   const { env: overrides, ...rest } = init;
   const ctx = createExecutionContext();
   const res = await worker.fetch(new Request(new URL(path, ORIGIN), rest), overrides ? { ...env, ...overrides } : env, ctx);
-  const text = await res.text();
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const text = new TextDecoder().decode(bytes);
   await waitOnExecutionContext(ctx);
-  return { status: res.status, headers: res.headers, text, location: res.headers.get('Location'), setCookies: res.headers.getSetCookie() };
+  return { status: res.status, headers: res.headers, text, bytes, location: res.headers.get('Location'), setCookies: res.headers.getSetCookie() };
 }
 
 export async function runScheduled(cron: string): Promise<void> {
@@ -39,6 +41,20 @@ export async function runScheduled(cron: string): Promise<void> {
   // both have, so the cast mirrors what production actually receives.
   await worker.scheduled(controller as unknown as ScheduledEvent, env, ctx);
   await waitOnExecutionContext(ctx);
+}
+
+/** The real database, counting the statements prepared against it. */
+export function countingDb(): { db: D1Database; statements: string[] } {
+  const statements: string[] = [];
+  const db = {
+    prepare: (sql: string) => {
+      statements.push(sql);
+      return env.DB.prepare(sql);
+    },
+    batch: (s: D1PreparedStatement[]) => env.DB.batch(s),
+    exec: (sql: string) => env.DB.exec(sql),
+  } as unknown as D1Database;
+  return { db, statements };
 }
 
 // --- Webhooks ----------------------------------------------------------------
@@ -65,6 +81,8 @@ export async function postWebhook(
 export type CommentOpts = {
   commentId?: string;
   fromId?: string;
+  /** `null` leaves the username off the payload, as Meta sometimes does. */
+  username?: string | null;
   text?: string;
   mediaId?: string;
   igUserId?: string;
@@ -75,7 +93,10 @@ export function commentValue(opts: CommentOpts = {}) {
   return {
     id: opts.commentId ?? '17900000000000001',
     text: opts.text ?? 'Guide please!',
-    from: { id: opts.fromId ?? '9100000000000001', username: 'a_fan' },
+    from: {
+      id: opts.fromId ?? '9100000000000001',
+      ...(opts.username === null ? {} : { username: opts.username ?? 'a_fan' }),
+    },
     media: { id: opts.mediaId ?? '18000000000000777', media_product_type: 'REELS' },
   };
 }
@@ -110,19 +131,28 @@ export function csrfFrom(html: string): string {
 
 /** A cookie jar and form poster, standing in for the operator's browser. */
 export class Browser {
-  #cookies = new Map<string, string>();
+  #cookies = new Map<string, { value: string; strict: boolean }>();
   lastPage = '';
 
   get cookieHeader(): string {
-    return [...this.#cookies].map(([k, v]) => `${k}=${v}`).join('; ');
+    return this.#header(false);
+  }
+
+  cookie(name: string): string | undefined {
+    return this.#cookies.get(name)?.value;
   }
 
   setCookie(name: string, value: string): void {
-    this.#cookies.set(name, value);
+    this.#cookies.set(name, { value, strict: false });
   }
 
-  async get(path: string): Promise<Reply> {
-    return this.#send(path, { method: 'GET' });
+  /**
+   * `crossSite` is a navigation another site started, such as Instagram
+   * redirecting back after login. A real browser leaves SameSite=Strict
+   * cookies off those, so the admin session cookie never arrives with them.
+   */
+  async get(path: string, opts: { crossSite?: boolean } = {}): Promise<Reply> {
+    return this.#send(path, { method: 'GET' }, opts.crossSite ?? false);
   }
 
   async post(path: string, fields: Record<string, string>): Promise<Reply> {
@@ -138,9 +168,17 @@ export class Browser {
     return this.post(path, { csrf: csrfFrom(this.lastPage), ...fields });
   }
 
-  async #send(path: string, init: RequestInit): Promise<Reply> {
+  #header(crossSite: boolean): string {
+    return [...this.#cookies]
+      .filter(([, c]) => !(crossSite && c.strict))
+      .map(([k, c]) => `${k}=${c.value}`)
+      .join('; ');
+  }
+
+  async #send(path: string, init: RequestInit, crossSite = false): Promise<Reply> {
     const headers = new Headers(init.headers);
-    if (this.#cookies.size) headers.set('Cookie', this.cookieHeader);
+    const cookies = this.#header(crossSite);
+    if (cookies) headers.set('Cookie', cookies);
     const reply = await request(path, { ...init, headers });
     for (const line of reply.setCookies) {
       const [pair] = line.split(';');
@@ -148,7 +186,7 @@ export class Browser {
       const name = pair!.slice(0, eq).trim();
       const value = pair!.slice(eq + 1).trim();
       if (/max-age=0/i.test(line) || value === '') this.#cookies.delete(name);
-      else this.#cookies.set(name, value);
+      else this.#cookies.set(name, { value, strict: /samesite=strict/i.test(line) });
     }
     if (reply.headers.get('Content-Type')?.includes('text/html')) this.lastPage = reply.text;
     return reply;
@@ -163,4 +201,18 @@ export async function signedInAdmin(): Promise<Browser> {
   if (done.status !== 302) throw new Error(`setup failed with ${done.status}: ${done.text.slice(0, 200)}`);
   await browser.get(adminPath('/rules'));
   return browser;
+}
+
+// --- Connect -----------------------------------------------------------------
+
+/** Starts Connect as `browser` and returns the state Instagram will echo back. */
+export async function startConnect(browser: Browser, query = ''): Promise<string> {
+  const res = await browser.get(`/connect/start${query}`);
+  if (res.status !== 302) throw new Error(`/connect/start answered ${res.status}: ${res.text.slice(0, 200)}`);
+  return new URL(res.location!).searchParams.get('state')!;
+}
+
+/** Instagram's redirect back to the callback, made by the browser that started Connect. */
+export function returnFromInstagram(browser: Browser, query: Record<string, string>): Promise<Reply> {
+  return browser.get(`/connect/callback?${new URLSearchParams(query)}`, { crossSite: true });
 }

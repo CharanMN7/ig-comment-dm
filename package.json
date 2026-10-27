@@ -5,6 +5,7 @@
   "scripts": {
     "setup": "node --experimental-strip-types scripts/setup.ts",
     "doctor": "node --experimental-strip-types scripts/doctor.ts",
+    "update": "node --experimental-strip-types scripts/update.ts",
     "dev": "wrangler dev --port 8787",
     "deploy": "npm run db:migrate && wrangler deploy",
     "db:migrate": "wrangler d1 migrations apply DB --remote",
@@ -12,11 +13,12 @@
     "db:migrate:list": "wrangler d1 migrations list DB --remote",
     "db:migrate:list:local": "wrangler d1 migrations list DB --local",
     "test": "npm run test:unit && npm run test:integration",
-    "test:unit": "node --experimental-strip-types --test scripts/test-unit.ts",
+    "test:unit": "node --experimental-strip-types --test scripts/test-unit.ts scripts/test-update.ts",
     "test:integration": "vitest run",
     "typecheck": "tsc --noEmit && tsc --noEmit -p test",
     "selftest": "node --experimental-strip-types scripts/selftest.ts",
-    "keys": "node --experimental-strip-types scripts/keys.ts"
+    "keys": "node --experimental-strip-types scripts/keys.ts",
+    "icons": "node --experimental-strip-types scripts/icons.ts"
   },
   "dependencies": {
     "hono": "^4.13.13"
@@ -41,6 +43,6 @@
   },
   "homepage": "https://github.com/CharanMN7/ig-comment-dm#readme",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   }
 }

@@ -5,6 +5,7 @@ import { reconcileComments } from './reconcile.ts';
 import { adminRoutes } from './routes/admin.ts';
 import { connectRoutes } from './routes/connect.ts';
 import { healthRoutes } from './routes/health.ts';
+import { installRoutes } from './routes/install.ts';
 import { legalRoutes } from './routes/legal.ts';
 import { webhookRoutes } from './routes/webhook.ts';
 import type { Env } from './types.ts';
@@ -18,6 +19,8 @@ app.route('/health', healthRoutes);
 app.route('/', legalRoutes);
 app.route('/webhook', webhookRoutes);
 app.route('/connect', connectRoutes);
+// First, so its four public GETs answer before the admin login middleware.
+app.route('/a/:secret', installRoutes);
 app.route('/a/:secret', adminRoutes);
 
 export default {

@@ -1,0 +1,68 @@
+---
+description: What protects the admin panel, what's encrypted, what's deliberately not defended against, and how to rotate a secret. The full policy is SECURITY.md.
+---
+
+This page summarises the threat model. The policy itself, with the full secret inventory and how to report a vulnerability, is [SECURITY.md](https://github.com/CharanMN7/ig-comment-dm/blob/master/SECURITY.md).
+
+This is self-hosted software. Every deployment is a separate Worker owned by whoever deployed it. There's no hosted service, no shared database and no vendor with access to your data. Your secrets live in your Cloudflare account's secret store, and none of them are in the repository, in D1 or in any log line the Worker writes.
+
+## The admin panel
+
+The panel is on the public internet, behind two independent factors:
+
+1. **A secret path segment.** It lives at `/a/<ADMIN_URL_SECRET>`, where the secret is 32 hex characters (128 bits). Every other path returns 404, so crawling can't find it.
+2. **A password**, chosen on your first visit and stored as a PBKDF2-SHA256 hash with a random 16-byte salt.
+
+Sessions are stateless cookies signed with HMAC-SHA256 (`SESSION_SIGNING_KEY`), marked `HttpOnly`, `SameSite=Strict`, and `Secure` over HTTPS. Every form that changes something carries a CSRF token bound to the session. Logins are rate limited, with a lockout that doubles after five failures. Admin responses send `Referrer-Policy: no-referrer`, so clicking an outbound link never leaks the secret URL.
+
+Connecting an Instagram account needs the same logged-in session. The OAuth `state` is signed, expires after 10 minutes, and only completes in the browser that started it, which holds a matching short-lived cookie.
+
+## Installing on a phone
+
+A phone fetches the web app manifest and its icons without cookies, so four paths under the admin URL answer without the password: `manifest.webmanifest`, `icon.svg`, `icon-192.png` and `icon-512.png`. They still need the secret path, are never cached, and hold only the app's name, colours and icon.
+
+Installing on Android sends the manifest, and with it your admin URL (its `start_url`), to Google's WebAPK service, which builds the app Android installs. The password still protects the panel, so this is the same exposure as any leaked admin URL. If you'd rather Google never sees it, use a bookmark instead of installing.
+
+## Instagram tokens
+
+Instagram access tokens are encrypted at rest with **AES-256-GCM** using `TOKEN_ENCRYPTION_KEY`, with a fresh random 12-byte IV per token. The key lives in Cloudflare's secret store, never in D1. Losing it means every account must reconnect; leaking it exposes every stored token.
+
+The Worker never sees your Instagram password. Accounts connect through Instagram's own login page, and the Worker only ever holds the token Instagram issues.
+
+## Webhooks
+
+Every POST to `/webhook` is checked against its `X-Hub-Signature-256` HMAC before the body is parsed. Meta signs Instagram Login webhooks with the Instagram App Secret in some flows and the Facebook App Secret in others, so either is accepted. Both are yours, so accepting either isn't a downgrade.
+
+## The health endpoint
+
+`/health` is public on purpose, so an uptime monitor can reach it without a login. It returns account counts, the time each scheduled job last ran, and whether the database answered. It never includes a username, an account ID or a secret.
+
+## Not defended against
+
+- **Someone with access to your Cloudflare account.** They can read every secret. Protect that account with a hardware key.
+- **A leaked admin URL plus a weak password.** The path secret filters; it doesn't replace a real password. Use a generated one.
+- **Traffic analysis of Meta's webhooks.** Signature verification proves the sender knows an app secret. It doesn't hide that a request happened.
+
+## Accepted weaknesses
+
+- **PBKDF2 at 12,000 iterations, not 600,000.** The Workers free plan caps CPU per request, and 600,000 reliably fails the first password save. On a paid plan you can raise `PBKDF2_ITERATIONS` in `src/crypto.ts`; existing hashes only keep working if you also reset the password.
+- **`ADMIN_URL_SECRET` is in the URL.** It has to be, to gate the panel before any database read. Don't paste the URL into a chat, a screenshot or a bug report.
+
+## What a leak costs
+
+`TOKEN_ENCRYPTION_KEY` and `SESSION_SIGNING_KEY` are critical: one decrypts every stored token, the other forges an admin session. A leaked `META_APP_SECRET` or `FACEBOOK_APP_SECRET` allows forged webhooks and token exchanges; reset it in Meta's dashboard immediately. A leaked `ADMIN_URL_SECRET` reveals the panel's URL. `WEBHOOK_VERIFY_TOKEN` is low impact, and `META_APP_ID` and `PUBLIC_BASE_URL` aren't secret at all. The table in [SECURITY.md](https://github.com/CharanMN7/ig-comment-dm/blob/master/SECURITY.md#secret-inventory) has each one.
+
+## Rotating a secret
+
+```bash
+npx wrangler secret put SESSION_SIGNING_KEY   # paste the new value
+npx wrangler deploy
+```
+
+`npm run keys` prints fresh values at the right size. Rotating `SESSION_SIGNING_KEY` logs everyone out. Rotating `TOKEN_ENCRYPTION_KEY` makes every stored token undecryptable, so every account shows **Reconnect** on the Accounts page, about 20 seconds each. Rotating `ADMIN_URL_SECRET` changes your admin URL, so re-bookmark it.
+
+`npm run setup -- --rotate` replaces every secret it manages in one go and asks for the three Meta values again. That rotates `TOKEN_ENCRYPTION_KEY` and `ADMIN_URL_SECRET` too, so every account needs reconnecting and your admin URL changes.
+
+## Reporting a vulnerability
+
+Don't open a public issue. Use GitHub's [private vulnerability reporting](https://github.com/CharanMN7/ig-comment-dm/security/advisories/new). If that isn't available to you, [SECURITY.md](https://github.com/CharanMN7/ig-comment-dm/blob/master/SECURITY.md#reporting-a-vulnerability) has an email address. Include what you found, how to reproduce it, and what an attacker gains. Test against your own deployment, never someone else's.

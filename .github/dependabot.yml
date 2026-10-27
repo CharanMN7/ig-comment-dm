@@ -11,6 +11,15 @@ updates:
       cloudflare:
         patterns: ["wrangler", "@cloudflare/*"]
 
+  # The docs site has its own package.json and lockfile.
+  - package-ecosystem: npm
+    directory: /site
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
