@@ -108,14 +108,14 @@ Web Crypto only.
 - **Webhook signatures** (`X-Hub-Signature-256`): `crypto.subtle.importKey` and `crypto.subtle.verify` (HMAC-SHA256). Verify; don't sign and compare with `===`. `FACEBOOK_APP_SECRET` (App settings → Basic) is tried first, then `META_APP_SECRET` (the Instagram App Secret), because Meta often signs with the Facebook one.
 - **Token encryption**: AES-256-GCM with a random 96-bit IV per encryption. The IV is stored in `accounts.token_iv` and the ciphertext in `accounts.access_token_enc`. The key is `TOKEN_ENCRYPTION_KEY`, 32 random bytes in base64.
 - **Password hashing**: PBKDF2-HMAC-SHA256 through `crypto.subtle.deriveBits`, **12,000** iterations, with a 16-byte random salt. Hash and salt live in the `system` table. (The original spec asked for 600,000 iterations, which exceeds free-plan CPU and returns a 500 on the first password save.)
-- **Session cookie**: HMAC-signed, `HttpOnly`, `SameSite=Strict`, 30-day expiry. The CSRF token lives inside the session, and every mutating admin POST must send it.
+- **Session cookie**: HMAC-signed, `HttpOnly`, `SameSite=Strict`, 30-day expiry. The CSRF token lives inside the session, and every mutating admin POST must send it. The MAC covers the payload, `admin_password_salt` and `session_epoch` (see `src/session.ts`), so a new password or a logout invalidates every older cookie.
 
 ## Admin auth
 
 The panel is mounted at `/a/:secret`. The unguessable URL is one layer, not the whole of the auth.
 
 - First visit: create a password (PBKDF2). There's no email reset; recovery is deleting `admin_password_hash` and `admin_password_salt` with `wrangler d1 execute` (see [Troubleshooting](/troubleshooting#forgotten-password)).
-- A signed session cookie lasts 30 days.
+- A signed session cookie lasts 30 days, unless the operator logs out (which ends every session, in every browser) or the password is replaced.
 - CSRF protection on every mutating form, including logout.
 - Connect needs the same logged-in session. The session cookie is `SameSite=Strict`, so the browser leaves it off Instagram's cross-site redirect to `/connect/callback`. `/connect/start` checks the session instead, then issues a signed `state` (10-minute expiry) and an `igcdm_connect` cookie (`HttpOnly`, `SameSite=Lax`, `Path=/connect`) holding an HMAC of the state's nonce. The callback refuses unless both verify, and clears the cookie. Neither the refusal page nor the callback's error pages link to the admin path.
 - The keyword-save error is exactly: `Keywords need at least 3 characters, or 2 in Chinese and Japanese. Shorter ones match inside other words — 'AI' would fire on 'again' and 'email'.`
@@ -159,6 +159,7 @@ Not Worker environment:
 | `health_first_seen_at` | When `/health` was first checked, the start of its grace period for jobs that haven't run yet |
 | `send_totals_snapshot` | All-time send totals for rows before a cutoff, as JSON, which Home adds its live counts to. Written by the daily job |
 | `admin_password_hash`, `admin_password_salt` | The admin password |
+| `session_epoch` | Goes up on every logout. Session cookies are signed over it, so a logout ends them all |
 | `login_fail_count`, `login_locked_until` | Login rate limiting |
 
 ### Selftest environment

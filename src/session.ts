@@ -46,8 +46,48 @@ export function clearSessionCookie(publicBaseUrl: string): string {
   return serializeSessionCookie('', publicBaseUrl, 0);
 }
 
+const SESSION_EPOCH_KEY = 'session_epoch';
+
+/**
+ * What a session's signature covers besides its own payload. Sessions are
+ * stateless cookies, so without this a copied cookie would keep working for its
+ * full 30 days, through logout and through a password reset. The salt is
+ * replaced whenever a password is set, so a reset ends every older session.
+ * The epoch goes up on logout, which ends every session, in every browser.
+ */
+export type SessionBinding = { salt: string | null; epoch: string };
+
+/** The binding, plus whether a password exists, in one read of `system`. */
+export async function readSessionBinding(db: D1Database): Promise<{ binding: SessionBinding; hasPassword: boolean }> {
+  const { results } = await db
+    .prepare(`SELECT key, value FROM system WHERE key IN ('admin_password_hash', 'admin_password_salt', ?)`)
+    .bind(SESSION_EPOCH_KEY)
+    .all<{ key: string; value: string | null }>();
+  const value = (key: string) => results.find((r) => r.key === key)?.value || null;
+  const salt = value('admin_password_salt');
+  return { binding: { salt, epoch: value(SESSION_EPOCH_KEY) ?? '0' }, hasPassword: !!(salt && value('admin_password_hash')) };
+}
+
+export async function endAllSessions(db: D1Database): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO system (key, value) VALUES (?, '1')
+       ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1`,
+    )
+    .bind(SESSION_EPOCH_KEY)
+    .run();
+}
+
+// The payload is base64url and the salt base64, neither of which contains a
+// '.', so no two bindings sign the same string. The '.' also keeps these
+// apart from OAuth state MACs, which sign a bare payload.
+function signedText(payload: string, binding: SessionBinding): string {
+  return `${payload}.${binding.salt ?? ''}.${binding.epoch}`;
+}
+
 export async function makeSession(
   signingKeyB64: string,
+  binding: SessionBinding,
   authed: boolean,
   csrf?: string,
 ): Promise<{ token: string; data: SessionData }> {
@@ -57,12 +97,13 @@ export async function makeSession(
     authed,
   };
   const payload = bytesToB64Url(new TextEncoder().encode(JSON.stringify(data)));
-  const mac = await hmacSignBytes(sessionSigningKey(signingKeyB64), payload);
+  const mac = await hmacSignBytes(sessionSigningKey(signingKeyB64), signedText(payload, binding));
   return { token: `${payload}.${bytesToB64Url(mac)}`, data };
 }
 
 export async function readSession(
   signingKeyB64: string,
+  binding: SessionBinding,
   cookieHeader: string | undefined,
 ): Promise<SessionData | null> {
   const token = readCookie(cookieHeader, SESSION_COOKIE);
@@ -77,7 +118,7 @@ export async function readSession(
   } catch {
     return null;
   }
-  const ok = await hmacVerifyBytes(sessionSigningKey(signingKeyB64), payload, mac);
+  const ok = await hmacVerifyBytes(sessionSigningKey(signingKeyB64), signedText(payload, binding), mac);
   if (!ok) return null;
   try {
     const data = JSON.parse(new TextDecoder().decode(b64UrlToBytes(payload))) as SessionData;
