@@ -56,6 +56,7 @@ import {
   worstCaseLength,
 } from '../placeholders.ts';
 import { chooseRule } from '../process.ts';
+import { parsePublicReplies, serializePublicReplies } from '../replies.ts';
 import { CRON_FIRST_RUN_SECONDS, jobState } from './health.ts';
 import { clearSessionCookie, makeSession, readSession, serializeSessionCookie } from '../session.ts';
 import {
@@ -623,6 +624,19 @@ function firstKeywordProblem(words: string[], tooShortMessage: string): string |
   return null;
 }
 
+/** How many variation fields the form offers beside the main public reply. */
+const EXTRA_REPLIES = 4;
+
+/**
+ * The main reply, then every variation field the form sent, blanks included,
+ * so a form shown again after an error keeps each reply in its own field.
+ */
+function replyFields(form: Record<string, string>): string[] {
+  const fields = [form.public_reply_text ?? ''];
+  for (let i = 2; `public_reply_text_${String(i)}` in form; i++) fields.push(form[`public_reply_text_${String(i)}`] ?? '');
+  return fields;
+}
+
 type RuleFormValues = {
   ig_user_id: string;
   label: string;
@@ -632,7 +646,8 @@ type RuleFormValues = {
   match_all: boolean;
   media_id: string;
   dm_text: string;
-  public_reply_text: string;
+  /** The main reply first, then the variations, in the fields they came from. */
+  public_replies: string[];
 };
 
 function formValuesFromRule(rule: Rule): RuleFormValues {
@@ -645,7 +660,7 @@ function formValuesFromRule(rule: Rule): RuleFormValues {
     match_all: rule.match_all === 1,
     media_id: rule.media_id ?? '',
     dm_text: rule.dm_text,
-    public_reply_text: rule.public_reply_text ?? '',
+    public_replies: parsePublicReplies(rule.public_reply_text),
   };
 }
 
@@ -660,7 +675,7 @@ function formValuesFromPost(f: Record<string, string>): RuleFormValues {
     match_all: f.match_all === '1',
     media_id: f.media_id ?? '',
     dm_text: f.dm_text ?? '',
-    public_reply_text: f.public_reply_text ?? '',
+    public_replies: replyFields(f),
   };
 }
 
@@ -682,6 +697,8 @@ function ruleForm(opts: {
 }) {
   const v = opts.values;
   const known = new Set(opts.posts.map((p) => p.id));
+  const [mainReply = '', ...variations] = v.public_replies;
+  const variationFields = Array.from({ length: Math.max(EXTRA_REPLIES, variations.length) }, (_, i) => variations[i] ?? '');
   const contains = v.match_mode === 'contains';
   return html`
     ${opts.error ? html`<p class="err" role="alert">${opts.error}</p>` : html``}
@@ -788,12 +805,23 @@ function ruleForm(opts: {
           <code>{username}</code> puts in their Instagram name and counts as 30. It’s the only placeholder for now.
         </p>
         <label for="public_reply_text">Public reply under their comment (optional)</label>
-        <textarea id="public_reply_text" name="public_reply_text" maxlength="${String(PUBLIC_REPLY_MAX)}">${v.public_reply_text}</textarea>
+        <textarea id="public_reply_text" name="public_reply_text" maxlength="${String(PUBLIC_REPLY_MAX)}">${mainReply}</textarea>
         <p class="muted">
           Everyone reading the comments sees this, for example “Sent you a DM!”. Leave it blank to reply
           privately only. If the private message fails, the public reply is not posted either. Up to 1,000
           characters, and <code>{username}</code> works here too.
         </p>
+        <details ${variations.some((r) => r.trim()) ? 'open' : ''}>
+          <summary>Add variations (optional)</summary>
+          <p class="muted">Each comment gets one of your replies, picked at random, so the thread doesn’t look automated.</p>
+          ${variationFields.map((text, i) => {
+            const name = `public_reply_text_${String(i + 2)}`;
+            return html`
+              <label for="${name}">Reply ${String(i + 2)}</label>
+              <textarea id="${name}" name="${name}" class="short" maxlength="${String(PUBLIC_REPLY_MAX)}">${text}</textarea>
+            `;
+          })}
+        </details>
       </fieldset>
 
       <div class="row"><button type="submit">Save rule</button></div>
@@ -929,7 +957,7 @@ export function readRuleFields(form: Record<string, string>) {
   const label = (form.label ?? '').trim();
   const ig = (form.ig_user_id ?? '').trim();
   const media = (form.media_id ?? '').trim();
-  const pub = (form.public_reply_text ?? '').replace(/\r\n/g, '\n').trim();
+  const replies = replyFields(form).map((r) => r.replace(/\r\n/g, '\n').trim());
   const matchAll = form.match_all === '1';
   if (!label) return { error: 'Give this rule a name.' };
   if (!ig) return { error: 'Pick an Instagram account.' };
@@ -960,8 +988,10 @@ export function readRuleFields(form: Record<string, string>) {
   if (!dm) return { error: 'Write the private message to send.' };
   const dmProblem = messageProblem('The private message', dm, DM_TEXT_MAX);
   if (dmProblem) return { error: dmProblem };
-  const pubProblem = pub ? messageProblem('The public reply', pub, PUBLIC_REPLY_MAX) : null;
-  if (pubProblem) return { error: pubProblem };
+  for (const [i, reply] of replies.entries()) {
+    const problem = reply ? messageProblem(i === 0 ? 'The public reply' : `Reply ${String(i + 1)}`, reply, PUBLIC_REPLY_MAX) : null;
+    if (problem) return { error: problem };
+  }
   if (media && looksLikePostUrl(media)) {
     return {
       error:
@@ -978,7 +1008,7 @@ export function readRuleFields(form: Record<string, string>) {
       match_all: matchAll ? 1 : 0,
       media_id: media || null,
       dm_text: dm,
-      public_reply_text: pub || null,
+      public_reply_text: serializePublicReplies(replies),
     },
   };
 }
@@ -1177,8 +1207,8 @@ adminRoutes.post('/test', async (c) => {
           : html``}
       `
     : html``;
-  const savedReply = match?.rule.public_reply_text?.trim() ?? '';
-  const usesName = match ? countUsernameTokens(`${match.rule.dm_text}\n${savedReply}`) > 0 : false;
+  const replies = parsePublicReplies(match?.rule.public_reply_text);
+  const usesName = match ? countUsernameTokens([match.rule.dm_text, ...replies].join('\n')) > 0 : false;
   return c.html(
     layout({
       title: 'Test',
@@ -1208,10 +1238,16 @@ adminRoutes.post('/test', async (c) => {
                 : html``}
               <h2>Private message that would be sent</h2>
               <p class="message">${fillPlaceholders(match.rule.dm_text, SAMPLE_USERNAME)}</p>
-              ${savedReply
-                ? html`<h2>Public reply that would be posted</h2>
-                    <p class="message">${fillPlaceholders(savedReply, SAMPLE_USERNAME)}</p>`
-                : html`<p class="muted">No public reply for this rule.</p>`}
+              ${replies.length === 0
+                ? html`<p class="muted">No public reply for this rule.</p>`
+                : replies.length === 1
+                  ? html`<h2>Public reply that would be posted</h2>
+                      <p class="message">${fillPlaceholders(replies[0] ?? '', SAMPLE_USERNAME)}</p>`
+                  : html`<h2>Public reply that would be posted</h2>
+                      <p class="muted">One of these ${String(replies.length)}, picked at random for each comment:</p>
+                      <ol>
+                        ${replies.map((r) => html`<li class="message">${fillPlaceholders(r, SAMPLE_USERNAME)}</li>`)}
+                      </ol>`}
               ${exclusions}
             `
           : excluded.length

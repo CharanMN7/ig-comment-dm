@@ -325,6 +325,96 @@ describe('replying to every comment on a post', () => {
   });
 });
 
+describe('public reply variations on the rule form', () => {
+  const noVariations = { public_reply_text_2: '', public_reply_text_3: '', public_reply_text_4: '', public_reply_text_5: '' };
+
+  it('offers four optional variation fields, folded away, with a one-line explanation', async () => {
+    const admin = await adminWithAccount();
+    const form = (await admin.get(adminPath('/rules/new'))).text;
+    expect(form).toContain('<details >');
+    expect(form).toContain('<summary>Add variations (optional)</summary>');
+    expect(form).toContain('Each comment gets one of your replies, picked at random');
+    for (const n of [2, 3, 4, 5]) {
+      expect(form).toContain(`<textarea id="public_reply_text_${n}" name="public_reply_text_${n}" class="short" maxlength="1000"></textarea>`);
+    }
+    expect(form).not.toContain('public_reply_text_6');
+  });
+
+  it('stores several replies as a list, ignoring blank fields, and shows each back in its own field', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const res = await admin.submit(adminPath('/rules'), {
+      ...validRule,
+      ...noVariations,
+      public_reply_text: 'Sent you a DM!',
+      public_reply_text_2: '  Check your inbox\r\nand requests ',
+      public_reply_text_4: 'On its way, {username}',
+    });
+    expect(res.status).toBe(302);
+    const [rule] = await ruleRows();
+    expect(rule).toMatchObject({ public_reply_text: '["Sent you a DM!","Check your inbox\\nand requests","On its way, {username}"]' });
+
+    const form = (await admin.get(adminPath(`/rules/${rule!.id}/edit`))).text;
+    expect(form).toContain('<details open>');
+    expect(form).toContain('maxlength="1000">Sent you a DM!</textarea>');
+    expect(form).toContain('name="public_reply_text_2" class="short" maxlength="1000">Check your inbox\nand requests</textarea>');
+    expect(form).toContain('name="public_reply_text_3" class="short" maxlength="1000">On its way, {username}</textarea>');
+    expect(form).toContain('name="public_reply_text_4" class="short" maxlength="1000"></textarea>');
+  });
+
+  it('stores a single reply as plain text, even one typed in a variation field', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    await admin.submit(adminPath('/rules'), { ...validRule, ...noVariations, public_reply_text: ' ', public_reply_text_3: 'Only this one' });
+    expect(await ruleRows()).toMatchObject([{ public_reply_text: 'Only this one' }]);
+  });
+
+  it('shows a legacy multi-line reply whole in the main field and saves it back unchanged', async () => {
+    const admin = await adminWithAccount();
+    const legacy = 'Sent you a DM!\nCheck your message requests too.';
+    const id = await seedRule({ publicReply: legacy });
+
+    const form = (await admin.get(adminPath(`/rules/${id}/edit`))).text;
+    expect(form).toContain(`maxlength="1000">${legacy}</textarea>`);
+    expect(form).toContain('<details >');
+
+    const res = await admin.submit(adminPath(`/rules/${id}`), { ...validRule, ...noVariations, public_reply_text: legacy.replace('\n', '\r\n') });
+    expect(res.status).toBe(302);
+    expect(await ruleRows()).toMatchObject([{ public_reply_text: legacy }]);
+  });
+
+  it('checks each variation against the limit, counting {username}, and keeps every field as typed', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const long = `${'x'.repeat(981)}{username}`;
+    const res = await admin.submit(adminPath('/rules'), {
+      ...validRule,
+      ...noVariations,
+      public_reply_text: 'Sent!',
+      public_reply_text_2: 'Check DMs',
+      public_reply_text_3: long,
+    });
+    expect(res.status).toBe(400);
+    expect(res.text).toContain(
+      'Reply 3 must be 1,000 characters or fewer. This one is 991, and each {username} can add up to 20 characters for a long name, so it could reach 1,011.',
+    );
+    expect(res.text).toContain('maxlength="1000">Sent!</textarea>');
+    expect(res.text).toContain('name="public_reply_text_2" class="short" maxlength="1000">Check DMs</textarea>');
+    expect(res.text).toContain(`name="public_reply_text_3" class="short" maxlength="1000">${long}</textarea>`);
+    expect(await ruleRows()).toEqual([]);
+  });
+
+  it('refuses a variation that is only {username}', async () => {
+    const admin = await adminWithAccount();
+    const id = await seedRule({ publicReply: 'Sent!' });
+    await admin.get(adminPath(`/rules/${id}/edit`));
+    const res = await admin.submit(adminPath(`/rules/${id}`), { ...validRule, ...noVariations, public_reply_text: 'Sent!', public_reply_text_5: '@{username}' });
+    expect(res.status).toBe(400);
+    expect(res.text).toContain('Reply 5 needs more than {username}.');
+    expect(await ruleRows()).toMatchObject([{ public_reply_text: 'Sent!' }]);
+  });
+});
+
 describe('editing, pausing and deleting rules', () => {
   it('shows the saved rule in the edit form and saves changes', async () => {
     const admin = await adminWithAccount();
@@ -473,6 +563,16 @@ describe('the dry-run test page', () => {
     expect(page.text).toContain('<p class="message">Check your DMs @sample_user</p>');
     expect(page.text).toContain('<b>sample_user</b>, a sample name');
     expect(page.text).not.toContain('{username}</p>');
+  });
+
+  it('lists every public reply variation, with the sample name filled in', async () => {
+    const admin = await adminWithAccount();
+    await seedRule({ publicReply: JSON.stringify(['Sent, {username}!', 'Check your DMs\nand requests']) });
+    await admin.get(adminPath('/test'));
+    const page = (await admin.submit(adminPath('/test'), { ig_user_id: IG_USER, text: 'guide', media_id: '' })).text;
+    expect(page).toContain('One of these 2, picked at random for each comment:');
+    expect(page).toContain('<li class="message">Sent, sample_user!</li>');
+    expect(page).toContain('<li class="message">Check your DMs\nand requests</li>');
   });
 
   it('does not mention a sample name when the rule has no {username}', async () => {
