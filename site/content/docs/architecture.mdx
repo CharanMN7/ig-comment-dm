@@ -20,7 +20,7 @@ The Meta app must be **Live** (published) for real comment webhooks; in Developm
 
 1. Meta POSTs a signed webhook when someone comments on a connected account's post. In Development this usually never happens, except for the Test button.
 2. After Connect, and again on Home and in the daily cron, the Worker POSTs `/{ig_user_id}/subscribed_apps` with JSON `{ subscribed_fields: ["comments"] }`. The Meta dashboard's **Generate access tokens → Webhook subscription** toggle must also be **On** for each Instagram account.
-3. The Worker verifies the signature against both app secrets, logs a `webhook_events` row, routes on `entry.id` to an account, and matches the comment text against that account's rules.
+3. The Worker verifies the signature against both app secrets, logs a `webhook_events` row and the time in `last_webhook_received_at`, routes on `entry.id` to an account, and matches the comment text against that account's rules.
 4. On a match it sends **one** DM through Private Replies (`recipient.comment_id`, not the commenter's user ID), and optionally a public reply on the comment.
 5. A 5-minute cron polls recent comments on recent media (and on media that rules are scoped to) and reuses the same send path. That covers missed webhooks and Development mode.
 6. Everything is logged. The operator manages accounts and rules at `/a/:secret`. The legal pages at `/privacy`, `/terms` and `/data-deletion` exist so Meta will allow the app to be published.
@@ -157,6 +157,7 @@ Not Worker environment:
 | `last_cron_ok_at` | When the daily job last finished cleanly |
 | `last_poll_ok_at` | When the 5-minute poll last finished |
 | `health_first_seen_at` | When `/health` was first checked, the start of its grace period for jobs that haven't run yet |
+| `last_webhook_received_at` | When the last delivery that passed the signature check arrived. `webhook_events` is pruned after 7 days, so this is what tells Home and `npm run doctor` that Meta has reached the Worker before |
 | `send_totals_snapshot` | All-time send totals for rows before a cutoff, as JSON, which Home adds its live counts to. Written by the daily job |
 | `admin_password_hash`, `admin_password_salt` | The admin password |
 | `session_epoch` | Goes up on every logout. Session cookies are signed over it, so a logout ends them all |

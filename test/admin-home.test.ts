@@ -1,9 +1,10 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it, vi } from 'vitest';
 import { HEALTH_FIRST_SEEN_KEY, claimExtraReply, systemSet } from '../src/db.ts';
+import { fmtWhen } from '../src/html.ts';
 import { meta } from './support/meta.ts';
 import { DAY, FROZEN_NOW_MS, IG_USER, NOW, seedAccount, seedRule, seedSent, systemValue } from './support/seed.ts';
-import { adminPath, commentPayload, postWebhook, request, signedInAdmin } from './support/worker.ts';
+import { adminPath, commentPayload, postWebhook, request, runScheduled, signedInAdmin } from './support/worker.ts';
 
 /** The page as a reader sees it: tags gone, whitespace collapsed. */
 function textOf(page: string): string {
@@ -201,6 +202,17 @@ describe('the admin home page', () => {
     const page = (await admin.get(adminPath('/'))).text;
     expect(page).not.toContain('hasn’t run in over 3 days');
     expect(page).not.toContain('hasn’t run yet');
+  });
+
+  it('says nothing has arrived for a week, not that nothing ever has, once the nightly job prunes the log', async () => {
+    await postWebhook(commentPayload());
+    vi.setSystemTime(FROZEN_NOW_MS + 8 * DAY * 1000);
+    await runScheduled('0 3 * * *');
+    expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM webhook_events').first('n')).toBe(0);
+
+    const page = textOf((await (await signedInAdmin()).get(adminPath('/'))).text);
+    expect(page).toContain(`Did Instagram reach us? Nothing in the last 7 days. The last notification reached us on ${fmtWhen(NOW)}.`);
+    expect(page).not.toContain('No notification has arrived yet');
   });
 
   it('flags an account whose token has expired', async () => {

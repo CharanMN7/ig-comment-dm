@@ -708,12 +708,18 @@ adminRoutes.on('GET', ['/', ''], async (c) => {
 
         <h2>Did Instagram reach us?</h2>
         ${events.length === 0
-          ? html`<p class="muted">
-              No notification has arrived yet. If the app is still in Development, that is expected
-              for real comments. Publish the app, or wait up to 5 minutes for the comment checker.
-              Meta’s webhook Test → Send to My Server should appear here immediately if the callback
-              URL is correct.
-            </p>`
+          ? health.lastWebhookAt != null
+            ? html`<p class="muted">
+                Nothing in the last 7 days. The last notification reached us on ${fmtWhen(health.lastWebhookAt)}.
+                That is normal if nobody has commented since. If someone has, check that the app is still
+                Live and that Webhook subscription is still on for the account.
+              </p>`
+            : html`<p class="muted">
+                No notification has arrived yet. If the app is still in Development, that is expected
+                for real comments. Publish the app, or wait up to 5 minutes for the comment checker.
+                Meta’s webhook Test → Send to My Server should appear here immediately if the callback
+                URL is correct.
+              </p>`
           : html`
               <div class="table-wrap"><table>
                 <thead>

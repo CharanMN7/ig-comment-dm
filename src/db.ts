@@ -18,11 +18,13 @@ export type HealthSnapshot = {
   lastCronOkAt: number | null;
   lastPollOkAt: number | null;
   firstSeenAt: number | null;
+  lastWebhookAt: number | null;
   activeAccounts: number;
   needsReconnect: number;
 };
 
 export const HEALTH_FIRST_SEEN_KEY = 'health_first_seen_at';
+export const LAST_WEBHOOK_KEY = 'last_webhook_received_at';
 
 /**
  * Everything `/health` reports, in one statement, so a monitor polling every
@@ -35,15 +37,17 @@ export async function healthSnapshot(db: D1Database, now: number): Promise<Healt
       `SELECT
          (SELECT value FROM system WHERE key = 'last_cron_ok_at') AS last_cron_ok_at,
          (SELECT value FROM system WHERE key = 'last_poll_ok_at') AS last_poll_ok_at,
-         (SELECT value FROM system WHERE key = ?) AS first_seen_at,
+         (SELECT value FROM system WHERE key = ?1) AS first_seen_at,
+         (SELECT value FROM system WHERE key = ?3) AS last_webhook_at,
          (SELECT COUNT(*) FROM accounts WHERE active = 1) AS active,
-         (SELECT COUNT(*) FROM accounts WHERE needs_reconnect = 1 OR token_expires_at <= ?) AS needs_reconnect`,
+         (SELECT COUNT(*) FROM accounts WHERE needs_reconnect = 1 OR token_expires_at <= ?2) AS needs_reconnect`,
     )
-    .bind(HEALTH_FIRST_SEEN_KEY, now)
+    .bind(HEALTH_FIRST_SEEN_KEY, now, LAST_WEBHOOK_KEY)
     .first<{
       last_cron_ok_at: string | null;
       last_poll_ok_at: string | null;
       first_seen_at: string | null;
+      last_webhook_at: string | null;
       active: number;
       needs_reconnect: number;
     }>();
@@ -55,6 +59,7 @@ export async function healthSnapshot(db: D1Database, now: number): Promise<Healt
     lastCronOkAt: int(row?.last_cron_ok_at),
     lastPollOkAt: int(row?.last_poll_ok_at),
     firstSeenAt: int(row?.first_seen_at),
+    lastWebhookAt: int(row?.last_webhook_at),
     activeAccounts: row?.active ?? 0,
     needsReconnect: row?.needs_reconnect ?? 0,
   };
@@ -582,6 +587,26 @@ export async function insertWebhookEvent(
     )
     .bind(row.received_at, row.status, row.object, row.preview, row.error)
     .run();
+}
+
+/**
+ * Logs a delivery that passed the signature check, and keeps its time in
+ * `system` as well. The nightly job prunes webhook_events after 7 days, so on
+ * a quiet deployment the rows alone can't tell "Meta has never reached us"
+ * from "nobody has commented this week".
+ */
+export async function logVerifiedWebhook(db: D1Database, now: number, object: string | null, preview: string): Promise<void> {
+  await db.batch([
+    db
+      .prepare(
+        `INSERT INTO webhook_events (received_at, status, object, preview, error)
+         VALUES (?, 'received', ?, ?, NULL)`,
+      )
+      .bind(now, object, preview),
+    db
+      .prepare('INSERT INTO system (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+      .bind(LAST_WEBHOOK_KEY, String(now)),
+  ]);
 }
 
 export async function recentWebhookEvents(db: D1Database, limit: number): Promise<WebhookEvent[]> {

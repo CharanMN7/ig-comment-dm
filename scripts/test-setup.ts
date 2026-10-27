@@ -47,11 +47,14 @@ if (a === 'whoami') {
 } else if (a === 'd1' && b === 'execute') {
   const sql = args.find((x) => x.startsWith('--command=')).slice('--command='.length);
   const now = String(Math.floor(Date.now() / 1000));
-  const results = sql.includes('sqlite_master')
-    ? ['accounts', 'rules', 'sent', 'sent_extra_replies', 'system', 'webhook_events'].map((name) => ({ name }))
-    : sql.includes('FROM system')
-      ? [{ key: 'last_cron_ok_at', value: now }, { key: 'last_poll_ok_at', value: now }]
-      : [{ n: sql.includes("status = 'bad_sig'") ? 0 : 1 }];
+  const canned = Object.keys(state.results || {}).find((part) => sql.includes(part));
+  const results = canned
+    ? state.results[canned]
+    : sql.includes('sqlite_master')
+      ? ['accounts', 'rules', 'sent', 'sent_extra_replies', 'system', 'webhook_events'].map((name) => ({ name }))
+      : sql.includes("key IN ('last_cron_ok_at'")
+        ? [{ key: 'last_cron_ok_at', value: now }, { key: 'last_poll_ok_at', value: now }]
+        : [{ n: sql.includes("status = 'bad_sig'") ? 0 : 1 }];
   console.log(JSON.stringify([{ results, success: true }]));
 } else {
   console.error('fake wrangler: nothing set up for ' + args.join(' '));
@@ -191,6 +194,25 @@ describe('npm run setup and npm run doctor, with a fake Wrangler and no npx on P
       state().calls.some((argv) => argv.at(-1) === "--command=SELECT name FROM sqlite_master WHERE type='table'"),
       JSON.stringify(state().calls),
     );
+  });
+
+  // Answers the doctor's question about webhooks as D1 would, by the part of
+  // the SQL that asks it.
+  const webhooksAnswer = (row: { last: string | null; n: number }): void => {
+    const results = { "FROM webhook_events WHERE status IN ('received', 'bad_sig')": [row] };
+    writeFileSync(stateFile, JSON.stringify({ ...state(), results }));
+  };
+
+  it('doctor tells a deployment that has gone quiet from one Instagram has never reached', () => {
+    reset(ALL_SECRETS);
+    webhooksAnswer({ last: String(Math.floor(Date.now() / 1000) - 12 * 86400), n: 0 });
+    const quiet = run(root, 'doctor.ts');
+    assert.equal(quiet.code, 0, quiet.out);
+    assert.match(quiet.out, /! Nothing from Instagram in the last 7 days\n\s+The last notification arrived 12 days ago\./);
+    assert.doesNotMatch(quiet.out, /never reached/);
+
+    webhooksAnswer({ last: null, n: 0 });
+    assert.match(run(root, 'doctor.ts').out, /! Instagram has never reached this Worker/);
   });
 
   it('setup runs to the end and saves secrets through stdin', () => {
