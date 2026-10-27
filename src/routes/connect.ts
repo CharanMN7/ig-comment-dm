@@ -84,7 +84,10 @@ ${withSlash}</pre>
           <code>npx wrangler secret put META_APP_ID</code>, paste the Instagram App ID, then
           <code>npx wrangler deploy</code> before connecting.
         </p>
-        <p><a class="btn" href="${startHref(reconnect)}">I’ve saved those URLs — continue to Instagram</a></p>
+        <div class="row">
+          <a class="btn" href="${startHref(reconnect)}">I’ve saved those URLs — continue to Instagram</a>
+          <a class="btn secondary" href="/a/${c.env.ADMIN_URL_SECRET}/accounts">Cancel</a>
+        </div>
       `,
     }),
   );

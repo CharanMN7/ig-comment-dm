@@ -19,6 +19,8 @@ describe('Connect (Instagram Business Login)', () => {
     expect(res.text).toContain(`${CALLBACK}\n${CALLBACK}/`);
     expect(res.text).toContain(`<code>${env.META_APP_ID}</code>`);
     expect(res.text).toContain('href="/connect/start?reconnect=1"');
+    // Only a logged-in admin gets this far, so the way back may name the admin page.
+    expect(res.text).toContain(`<a class="btn secondary" href="${adminPath('/accounts')}">Cancel</a>`);
   });
 
   it('redirects to Instagram with a signed state and a short-lived cookie that binds it to this browser', async () => {

@@ -68,7 +68,9 @@ describe('first-run password setup', () => {
     await browser.get(adminPath('/setup'));
     const res = await browser.submit(adminPath('/setup'), { password, confirm });
     expect(res.status).toBe(400);
-    expect(res.text).toContain(message);
+    expect(res.text).toContain(`<p class="err" role="alert">${message}</p>`);
+    // The form comes back with the message, so there is no Back button to find.
+    expect(res.text).toContain('<input id="password" name="password" type="password"');
     expect(await systemValue('admin_password_hash')).toBeNull();
   });
 

@@ -83,6 +83,7 @@ While you test, turn off Instagram's Hidden Words filter on the creator account.
 
 | Panel | What it tells you |
 |---|---|
+| **Get started** | Shown until your first DM goes out: connect an account, write a rule, test it. Each step says **Done** once it's happened. |
 | **Totals** | People reached, DMs sent, skipped and failed, for today, the last 7 and 30 days, and all time. Days start at midnight UTC, and the 7- and 30-day totals include today. People reached counts each person once, and only if a DM actually went out. With more than one account, each also gets its own. |
 | **Did Instagram reach us?** | Whether Meta is POSTing to your webhook at all. Empty means the problem is on Meta's side, usually an app still in Development. `Wrong secret` means `FACEBOOK_APP_SECRET` is missing or wrong. `Not signed` rows are scanners, not Meta, and are safe to ignore. |
 | **Last 20 sends** | Every DM, skip and failure, with the reason and the exact error from Meta. |
@@ -93,6 +94,8 @@ While you test, turn off Instagram's Hidden Words filter on the creator account.
 </Frame>
 
 **Check connections now** on Home runs the nightly job on demand: it refreshes tokens and re-registers the webhook subscription. It's harmless to run as often as you like.
+
+After you save, pause, resume or delete a rule, or pause an account, a green line at the top of the page confirms it.
 
 Tokens last 60 days and the nightly job refreshes them. If an account shows **Reconnect**, click it: it takes about 20 seconds and keeps your rules and history.
 

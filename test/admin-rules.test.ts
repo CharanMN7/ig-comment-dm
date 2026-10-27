@@ -4,7 +4,7 @@ import { MATCH_ALL_NEEDS_POST_MESSAGE } from '../src/routes/admin.ts';
 import { LINK_MARKER, TEMPLATES, findTemplate } from '../src/templates.ts';
 import { meta } from './support/meta.ts';
 import { ACCESS_TOKEN, IG_USER, NOW, accountRow, ruleRows, seedAccount, seedRule, sentRows } from './support/seed.ts';
-import { adminPath, commentPayload, postWebhook, signedInAdmin } from './support/worker.ts';
+import { Browser, adminPath, commentPayload, postWebhook, signedInAdmin } from './support/worker.ts';
 
 /** The escaping hono/html applies, so expectations can name what the page must contain. */
 function escaped(s: string): string {
@@ -41,7 +41,7 @@ describe('creating a rule from the admin form', () => {
     });
 
     expect(res.status).toBe(302);
-    expect(res.location).toBe(adminPath('/rules'));
+    expect(res.location).toBe(adminPath('/rules?done=rule-saved'));
     expect(await ruleRows()).toMatchObject([
       {
         id: 1,
@@ -261,6 +261,51 @@ describe('choosing how keywords match', () => {
     const res = await admin.submit(adminPath('/rules'), { ...validRule, label: '', match_mode: 'contains' });
     expect(res.status).toBe(400);
     expect(checked(res.text, 'contains')).toBe(true);
+  });
+});
+
+describe('messages after a rule changes', () => {
+  const note = (text: string) => `<div class="ok" role="status">${text}`;
+
+  it('says a new or edited rule was saved, with a link to try it, and only right after saving', async () => {
+    const admin = await adminWithAccount();
+    await admin.get(adminPath('/rules/new'));
+    const created = await admin.submit(adminPath('/rules'), validRule);
+    const list = (await admin.get(created.location!)).text;
+    expect(list).toContain(note(`Rule saved. <a href="${adminPath('/test')}">Try it with a sample comment</a>.`));
+    expect((await admin.get(adminPath('/rules'))).text).not.toContain('class="ok"');
+
+    await admin.get(adminPath('/rules/1/edit'));
+    const edited = await admin.submit(adminPath('/rules/1'), { ...validRule, label: 'Renamed' });
+    expect(edited.location).toBe(adminPath('/rules?done=rule-saved'));
+  });
+
+  it('says whether Pause or Resume just happened', async () => {
+    const admin = await adminWithAccount();
+    const id = await seedRule();
+    await admin.get(adminPath('/rules'));
+    const paused = await admin.submit(adminPath(`/rules/${id}/toggle`));
+    expect(paused.location).toBe(adminPath('/rules?done=rule-paused'));
+    expect((await admin.get(paused.location!)).text).toContain(note('Rule paused.'));
+    const resumed = await admin.submit(adminPath(`/rules/${id}/toggle`));
+    expect(resumed.location).toBe(adminPath('/rules?done=rule-resumed'));
+    expect((await admin.get(resumed.location!)).text).toContain(note('Rule resumed.'));
+  });
+
+  it('says a deleted rule is gone', async () => {
+    const admin = await adminWithAccount();
+    const id = await seedRule();
+    await admin.get(adminPath(`/rules/${id}/delete`));
+    const res = await admin.submit(adminPath(`/rules/${id}/delete`));
+    expect((await admin.get(res.location!)).text).toContain(note('Rule deleted.'));
+  });
+
+  it('shows nothing for a code it does not know, so a link cannot put words on the page', async () => {
+    const admin = await adminWithAccount();
+    const page = (await admin.get(adminPath('/rules?done=%3Cb%3Ehi%3C%2Fb%3E'))).text;
+    expect(page).not.toContain('class="ok"');
+    expect(page).not.toContain('<b>hi</b>');
+    expect((await admin.get(adminPath('/rules?done=constructor'))).text).not.toContain('class="ok"');
   });
 });
 
@@ -612,10 +657,23 @@ describe('editing, pausing and deleting rules', () => {
     expect(await ruleRows()).toEqual([expect.objectContaining({ label: 'Old' })]);
   });
 
-  it('answers 404 for a rule that does not exist', async () => {
+  it('answers 404 for a rule that does not exist, inside the panel with a way back', async () => {
     const admin = await adminWithAccount();
-    expect((await admin.get(adminPath('/rules/999/edit'))).status).toBe(404);
+    const page = await admin.get(adminPath('/rules/999/edit'));
+    expect(page.status).toBe(404);
+    expect(page.text).toContain('That rule doesn’t exist. It may have been deleted.');
+    expect(page.text).toContain(`<a class="btn secondary" href="${adminPath('/rules')}">Back to rules</a>`);
     expect((await admin.submit(adminPath('/rules/999'), validRule)).status).toBe(404);
+  });
+
+  it('answers an unknown admin page with the panel 404 once logged in, and the login page before', async () => {
+    const admin = await adminWithAccount();
+    const page = await admin.get(adminPath('/no-such-page'));
+    expect(page.status).toBe(404);
+    expect(page.text).toContain('There’s no page at this address.');
+    const stranger = await new Browser().get(adminPath('/no-such-page'));
+    expect(stranger.status).toBe(302);
+    expect(stranger.location).toBe(adminPath('/login'));
   });
 
   it('pauses and resumes a rule', async () => {
@@ -649,7 +707,7 @@ describe('editing, pausing and deleting rules', () => {
 
     const res = await admin.submit(adminPath(`/rules/${drop}/delete`));
     expect(res.status).toBe(302);
-    expect(res.location).toBe(adminPath('/rules'));
+    expect(res.location).toBe(adminPath('/rules?done=rule-deleted'));
     expect((await ruleRows()).map((r) => r.id)).toEqual([keep]);
   });
 
@@ -847,13 +905,24 @@ describe('the accounts page', () => {
     expect(page.text).toContain('@creator');
   });
 
-  it('pauses and resumes an account', async () => {
+  it('pauses and resumes an account, and says so after each', async () => {
     const admin = await adminWithAccount();
     await admin.get(adminPath('/accounts'));
-    await admin.submit(adminPath(`/accounts/${IG_USER}/deactivate`));
+    const paused = await admin.submit(adminPath(`/accounts/${IG_USER}/deactivate`));
     expect(await accountRow()).toMatchObject({ active: 0 });
-    await admin.get(adminPath('/accounts'));
-    await admin.submit(adminPath(`/accounts/${IG_USER}/activate`));
+    expect(paused.location).toBe(adminPath('/accounts?done=account-paused'));
+    expect((await admin.get(paused.location!)).text).toContain('Account paused. None of its rules reply until you resume it.');
+    const resumed = await admin.submit(adminPath(`/accounts/${IG_USER}/activate`));
     expect(await accountRow()).toMatchObject({ active: 1 });
+    expect((await admin.get(resumed.location!)).text).toContain('Account resumed.');
+  });
+
+  it('folds the Meta addresses away once an account is connected', async () => {
+    const admin = await signedInAdmin();
+    expect((await admin.get(adminPath('/accounts'))).text).toContain('<details open>');
+    await seedAccount();
+    const page = (await admin.get(adminPath('/accounts'))).text;
+    expect(page).toContain('<details >');
+    expect(page).toContain('<summary>Addresses to save in Meta first</summary>');
   });
 });
