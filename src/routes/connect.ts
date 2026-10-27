@@ -106,9 +106,30 @@ connectRoutes.get('/start', async (c) => {
   return c.redirect(url, 302);
 });
 
+// Anyone can open /connect/callback?error=access_denied, so the page it shows
+// can't name the admin address. It links here instead: the Strict session cookie
+// is left off Instagram's redirect, but a click from our own page carries it.
+connectRoutes.get('/accounts', requireAdmin, (c) => c.redirect(`/a/${c.env.ADMIN_URL_SECRET}/accounts`, 302));
+
 connectRoutes.get('/callback', async (c) => {
   c.header('Set-Cookie', serializeConnectCookie('', c.env.PUBLIC_BASE_URL, 0));
   const denied = c.req.query('error');
+  // Instagram's Cancel button. The operator chose it, so nothing went wrong.
+  if (denied === 'access_denied') {
+    return c.html(
+      layout({
+        title: 'Not connected',
+        body: html`
+          <h1>Not connected</h1>
+          <p>
+            You cancelled on Instagram’s screen, so no account was connected and nothing changed. You can
+            connect again from Accounts whenever you’re ready.
+          </p>
+          <p><a class="btn" href="/connect/accounts">Back to Accounts</a></p>
+        `,
+      }),
+    );
+  }
   if (denied) {
     return c.html(
       layout({

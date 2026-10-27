@@ -40,14 +40,18 @@ function tilesAfter(page: string, from: string): SendTotals[] {
   const text = page.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ');
   const start = text.indexOf(from);
   if (start < 0) throw new Error(`"${from}" is not on the page`);
-  const tile = /(Today \(UTC\)|Last 7 days|Last 30 days|All time) ([\d,]+) people reached ([\d,]+) DMs sent ([\d,]+) skipped ([\d,]+) failed/g;
+  const tile = /(Today \(UTC\)|Last 7 days|Last 30 days|All time) ([\d,]+) (person|people) reached ([\d,]+) (DMs?) sent ([\d,]+) skipped ([\d,]+) failed/g;
   tile.lastIndex = start;
   const out: SendTotals[] = [];
   for (const label of LABELS) {
     const m = tile.exec(text);
     if (!m || m[1] !== label) throw new Error(`expected the ${label} tile after "${from}"`);
     const n = (s: string) => Number(s.replace(/,/g, ''));
-    out.push({ reached: n(m[2]!), sent: n(m[3]!), skipped: n(m[4]!), failed: n(m[5]!) });
+    const totals = { reached: n(m[2]!), sent: n(m[4]!), skipped: n(m[6]!), failed: n(m[7]!) };
+    const words = `${m[2]} ${m[3]} reached, ${m[4]} ${m[5]} sent`;
+    const right = `${m[2]} ${totals.reached === 1 ? 'person' : 'people'} reached, ${m[4]} ${totals.sent === 1 ? 'DM' : 'DMs'} sent`;
+    if (words !== right) throw new Error(`the ${label} tile says "${words}", not "${right}"`);
+    out.push(totals);
   }
   return out;
 }
