@@ -29,7 +29,7 @@
     "@msw/cloudflare": "0.2.0",
     "msw": "3.0.3",
     "typescript": "^7.0.2",
-    "vitest": "5.0.5",
+    "vitest": "5.1.0",
     "wrangler": "^4.153.0"
   },
   "description": "Self-hosted Instagram comment-to-DM automation on a single Cloudflare Worker.",
