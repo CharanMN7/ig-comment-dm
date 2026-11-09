@@ -27,7 +27,7 @@
     "@cloudflare/vitest-plugin": "1.4.8",
     "@cloudflare/workers-types": "^5.20260905.1",
     "@msw/cloudflare": "0.2.0",
-    "msw": "3.0.3",
+    "msw": "3.0.4",
     "typescript": "^7.0.2",
     "vitest": "5.0.5",
     "wrangler": "^4.153.0"
